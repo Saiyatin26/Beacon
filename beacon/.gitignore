@@ -7,3 +7,4 @@ dist/
 legacy_sample/trace_log.json
 openspec/changes/
 .pytest_cache/
+data/*.sqlite3

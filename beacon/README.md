@@ -30,7 +30,53 @@ beacon/
 └── tests/                  pytest unit tests for the scoring/validation logic
 ```
 
-## Setup
+## Local prototype setup (recommended)
+
+The project now runs end to end without API keys. It uses SQLite at
+`data/beacon.sqlite3` for certification history, while retaining the original
+Atlas, Claude, and Voyage integrations as optional cloud mode.
+
+From the repository root in Windows PowerShell:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+
+# terminal 1: API
+cd backend
+..\.venv\Scripts\python.exe -m uvicorn api.main:app --reload --port 8000
+
+# terminal 2: dashboard
+cd frontend
+npm.cmd install
+npm.cmd run dev
+```
+
+Open http://localhost:5173 and choose a sample certification action. The API
+documentation is at http://localhost:8000/docs. Run checks and the command
+line workflow with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts\run_demo_pipeline.py
+```
+
+## Optional cloud mode
+
+Copy `.env.example` to `.env`, configure `ANTHROPIC_API_KEY`,
+`MONGODB_ATLAS_URI`, and `VOYAGE_API_KEY`, then install the vector embedding
+client and enable LLM mining:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install voyageai
+$env:MINE_WITH_LLM = "1"
+```
+
+Atlas Vector Search still requires an `invariant_vector_index` on the
+`invariants.embedding` field, as described in `backend/mining/dedup.py`.
+
+## Original setup reference
 
 ```bash
 # backend
