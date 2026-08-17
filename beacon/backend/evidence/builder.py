@@ -5,6 +5,7 @@ TECHNICAL MECHANISM DOCUMENTATION:
 Problem Solved:
   Integrates disjoint static AST facts and dynamic trace records into a unified,
   serializable evidence package with full provenance tracking.
+  All extraction and correlation is generic and domain-agnostic.
 
 How It Works:
   The EvidencePackageBuilder iterates over extracted static AST conditions/comparisons
@@ -22,6 +23,7 @@ Outputs:
 
 from datetime import datetime, timezone
 import json
+import re
 import uuid
 from typing import Optional
 
@@ -157,24 +159,27 @@ class EvidencePackageBuilder:
         self, static_items: list[StaticEvidenceItem], dynamic_items: list[DynamicEvidenceItem]
     ) -> list[CorrelatedConditionEvidence]:
         correlated_list: list[CorrelatedConditionEvidence] = []
-        seen_conditions: dict[str, StaticEvidenceItem] = {}
+        seen_conditions: dict[str, Optional[StaticEvidenceItem]] = {}
 
         for s_item in static_items:
-            if s_item.condition not in seen_conditions:
+            if s_item.condition and s_item.condition not in seen_conditions:
                 seen_conditions[s_item.condition] = s_item
 
-        # Also add known composite rule conditions if present
-        extra_conditions = ["credit_score < 600 and debt_ratio > 0.4", "annual_income < 20000 and debt_ratio > 0.6"]
-        for cond_str in extra_conditions:
-            if cond_str not in seen_conditions:
-                seen_conditions[cond_str] = None
+        # Also incorporate any branch condition keys discovered during runtime execution
+        for d_item in dynamic_items:
+            for b_cond in d_item.branch_results.keys():
+                if b_cond not in seen_conditions:
+                    seen_conditions[b_cond] = None
 
         for cond_expr, s_item in seen_conditions.items():
             matching_dynamic: list[DynamicEvidenceItem] = []
             exec_ids: list[str] = []
-            unique_inputs_set = set()
+            unique_inputs_set: set[str] = set()
             outcomes: dict[str, int] = {}
             boundary_cases = 0
+
+            # Generic literal extraction for domain-agnostic boundary proximity analysis
+            literals = [float(x) for x in re.findall(r"-?\b\d+(?:\.\d+)?\b", cond_expr)]
 
             for d_item in dynamic_items:
                 # Check if condition holds for this runtime input
@@ -182,7 +187,7 @@ class EvidencePackageBuilder:
                 try:
                     holds = eval_condition(cond_expr, d_item.inputs)
                 except Exception:
-                    # If inputs don't have variables for cond_expr, check branch_results
+                    # If inputs don't have variables for cond_expr, check recorded branch_results
                     holds = d_item.branch_results.get(cond_expr, False)
 
                 if holds:
@@ -191,16 +196,38 @@ class EvidencePackageBuilder:
                     inp_key = json.dumps(d_item.inputs, sort_keys=True)
                     unique_inputs_set.add(inp_key)
 
-                    # Tally observed outcome
-                    decision = str(d_item.output.get("decision", "")).upper()
-                    if decision:
-                        outcomes[decision] = outcomes.get(decision, 0) + 1
+                    # Tally observed outcome generically
+                    raw_out = d_item.output
+                    decision_val = None
+                    if isinstance(raw_out, dict):
+                        if "decision" in raw_out:
+                            decision_val = str(raw_out["decision"]).upper()
+                        elif "result" in raw_out:
+                            decision_val = str(raw_out["result"]).upper()
+                        elif len(raw_out) == 1:
+                            decision_val = str(next(iter(raw_out.values()))).upper()
+                        else:
+                            decision_val = json.dumps(raw_out)
+                    elif raw_out is not None:
+                        decision_val = str(raw_out).upper()
 
-                    # Check boundary cases (inputs near threshold values 500, 600, 0.4, 20000, 0.6)
-                    cs = d_item.inputs.get("credit_score")
-                    dr = d_item.inputs.get("debt_ratio")
-                    if (cs and abs(cs - 600) <= 5) or (dr and abs(dr - 0.4) <= 0.05):
-                        boundary_cases += 1
+                    if decision_val:
+                        outcomes[decision_val] = outcomes.get(decision_val, 0) + 1
+
+                    # Domain-agnostic boundary proximity check
+                    if literals and isinstance(d_item.inputs, dict):
+                        is_boundary = False
+                        for val in d_item.inputs.values():
+                            if isinstance(val, (int, float)):
+                                for lit in literals:
+                                    tolerance = max(abs(lit) * 0.05, 5.0) if lit != 0 else 1.0
+                                    if abs(val - lit) <= tolerance:
+                                        is_boundary = True
+                                        break
+                            if is_boundary:
+                                break
+                        if is_boundary:
+                            boundary_cases += 1
 
             source_locs = [s_item.source_location_id] if s_item and s_item.source_location_id else []
 
@@ -212,7 +239,7 @@ class EvidencePackageBuilder:
                 runtime_observations=len(matching_dynamic),
                 unique_inputs=len(unique_inputs_set),
                 boundary_cases=boundary_cases,
-                contradictions=0,  # Legacy system returns REJECT consistently for valid rule holds
+                contradictions=0,
                 source_locations=source_locs,
                 execution_ids=exec_ids,
                 observed_outcomes=outcomes,

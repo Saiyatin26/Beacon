@@ -30,17 +30,24 @@ class CandidateInvariant(BaseModel):
     invariant_id: str
     condition: str          # human/DSL-readable, e.g. "credit_score < 600 AND debt_ratio > 0.4"
     consequence: str        # e.g. "reject"
+    source_file: str = ""
     source_lines: list[int] = Field(default_factory=list)
     severity: Severity = "medium"
     evidence_ids: list[str] = Field(default_factory=list)
-    generation_method: str = "offline"
+    execution_ids: list[str] = Field(default_factory=list)
+    generation_method: str = "offline"  # "offline" or "llm"
     timestamp: str = ""
     rationale: Optional[str] = None
+    confidence_components: dict[str, float] = Field(default_factory=dict)
+    validation_result: Optional[dict] = None
+    status: str = "candidate"
 
 
 class UnconfirmedCandidate(CandidateInvariant):
     """Stage 2 output for candidates that failed the confidence gate."""
     confidence: float
+    graduated: bool = False
+    status: str = "unconfirmed"
 
 
 class EvidenceReport(BaseModel):
@@ -49,6 +56,9 @@ class EvidenceReport(BaseModel):
     evidence_count: int
     evidence_count_norm: float
     input_diversity: float
+    matching_execution_ids: list[str] = Field(default_factory=list)
+    static_evidence_ids: list[str] = Field(default_factory=list)
+    dynamic_evidence_ids: list[str] = Field(default_factory=list)
 
 
 class ValidationReport(BaseModel):
@@ -57,12 +67,17 @@ class ValidationReport(BaseModel):
     boundary_pass_rate: float
     contradiction_count: int
     counterexamples: list[dict] = Field(default_factory=list)
+    condition_true_count: int = 0
+    condition_false_count: int = 0
+    total_probes: int = 0
+    condition_coverage: float = 0.0
 
 
 class ValidatedInvariant(CandidateInvariant):
     """Stage 2d output — the unit that graduates (or doesn't) to Stage 3."""
     confidence: float
-    graduated: bool  # confidence >= settings.confidence_threshold
+    graduated: bool = True  # confidence >= settings.confidence_threshold
+    status: str = "graduated"
 
 
 class Oracle(BaseModel):

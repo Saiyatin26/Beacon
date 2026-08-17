@@ -3,16 +3,35 @@
 Provides a reusable interface (RuntimeTracer) and Python runtime tracer
 (PythonRuntimeTracer) using sys.settrace to capture execution IDs, timestamps,
 inputs, outputs, line/branch information, local variable snapshots, and exception handling.
+All condition extraction is generic and AST-driven — no hardcoded domain fields.
 """
 
 from abc import ABC, abstractmethod
+import ast
 from datetime import datetime, timezone
 import inspect
 import sys
 import uuid
 from typing import Any, Callable, Optional
 
+from common.dsl_eval import eval_condition
 from common.models import TraceEvent
+
+
+def _extract_function_conditions(func: Callable) -> list[str]:
+    """Extract boolean condition and comparison expressions from func's AST without hardcoding domain fields."""
+    try:
+        source = inspect.getsource(func)
+        tree = ast.parse(source)
+        conditions: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Compare, ast.BoolOp)):
+                expr = ast.unparse(node)
+                if expr and expr not in conditions:
+                    conditions.append(expr)
+        return conditions
+    except Exception:
+        return []
 
 
 class RuntimeTracer(ABC):
@@ -36,15 +55,16 @@ class RuntimeTracer(ABC):
 class PythonRuntimeTracer(RuntimeTracer):
     """Python dynamic tracer using `sys.settrace` to record execution events."""
 
-    def __init__(self, capture_variables: bool = True, capture_branches: bool = True):
+    def __init__(
+        self,
+        capture_variables: bool = True,
+        capture_branches: bool = True,
+        monitored_conditions: Optional[list[str]] = None,
+    ):
         self.capture_variables = capture_variables
         self.capture_branches = capture_branches
+        self.monitored_conditions = monitored_conditions
         self._execution_count = 0
-
-    def _next_execution_id() -> str:
-        # Incremental format EX-001, EX-002 for readable trace IDs
-        return f"EX-{uuid.uuid4().hex[:6]}"
-
 
     def trace_execution(
         self, func: Callable, inputs: dict, execution_id: Optional[str] = None
@@ -61,6 +81,11 @@ class PythonRuntimeTracer(RuntimeTracer):
         exception_str: Optional[str] = None
 
         target_code = getattr(func, "__code__", None)
+        target_conditions = (
+            self.monitored_conditions
+            if self.monitored_conditions is not None
+            else _extract_function_conditions(func)
+        )
 
         def trace_func(frame, event, arg):
             # Only trace code executing inside the target function body
@@ -82,26 +107,18 @@ class PythonRuntimeTracer(RuntimeTracer):
                     "variables": dict(local_vars),
                 })
 
-                # Evaluated branch condition checking if key fields present in locals
-                if self.capture_branches and "credit_score" in local_vars:
-                    cs = local_vars.get("credit_score")
-                    dr = local_vars.get("debt_ratio")
-                    inc = local_vars.get("annual_income")
+                # Evaluated branch condition checking based on discovered AST conditions
+                if self.capture_branches and target_conditions:
+                    branch_info: dict[str, Any] = {"line": line_no}
+                    for cond_expr in target_conditions:
+                        try:
+                            res = eval_condition(cond_expr, local_vars)
+                            branch_info[cond_expr] = res
+                        except Exception:
+                            pass
 
-                    if isinstance(cs, (int, float)):
-                        branch_info = {
-                            "line": line_no,
-                            "credit_score < 500": cs < 500,
-                            "credit_score < 600": cs < 600,
-                        }
-                        if isinstance(dr, (int, float)):
-                            branch_info["debt_ratio > 0.4"] = dr > 0.4
-                        if isinstance(inc, (int, float)):
-                            branch_info["annual_income < 20000"] = inc < 20000
-                        if isinstance(dr, (int, float)):
-                            branch_info["debt_ratio > 0.6"] = dr > 0.6
-
-                        # Store structural branch record if not redundant
+                    # Store structural branch record if non-empty evaluations exist
+                    if len(branch_info) > 1:
                         if not executed_branches or executed_branches[-1].get("line") != line_no:
                             executed_branches.append(branch_info)
 

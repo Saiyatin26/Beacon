@@ -2,6 +2,7 @@
 
 Genuinely uses Hypothesis for property-based adversarial input generation.
 Generates boundary-focused inputs to evaluate the legacy behavior against the candidate property.
+Records condition-true/condition-false coverage so rules are only validated when actively exercised.
 Also performs semantic contradiction checking against already-validated invariants.
 """
 
@@ -15,7 +16,6 @@ from common.models import CandidateInvariant, ValidatedInvariant, ValidationRepo
 def _extract_boundaries(condition: str, bounds: tuple[float, float]) -> list[float]:
     """Extract numeric literals from the condition to use as boundary focus points."""
     values = [float(x) for x in re.findall(r"-?\d+\.?\d*", condition)]
-    # Filter to bounds and add actual bounds
     valid = [v for v in values if bounds[0] <= v <= bounds[1]]
     return valid if valid else [bounds[0], bounds[1]]
 
@@ -25,13 +25,11 @@ def _build_strategy(field_bounds: dict[str, tuple[float, float]], condition: str
     strats = {}
     for field, (lo, hi) in field_bounds.items():
         boundaries = _extract_boundaries(condition, (lo, hi))
-        
-        # We mix standard floats with specific boundary values and small jitters around boundaries
         base_floats = st.floats(min_value=lo, max_value=hi, allow_nan=False, allow_infinity=False)
         
         jitter_strats = []
         for b in boundaries:
-            jitter = (hi - lo) * 0.01
+            jitter = (hi - lo) * 0.01 if hi > lo else 1.0
             j_lo, j_hi = max(lo, b - jitter), min(hi, b + jitter)
             if j_lo < j_hi:
                 jitter_strats.append(st.floats(min_value=j_lo, max_value=j_hi, allow_nan=False, allow_infinity=False))
@@ -48,52 +46,65 @@ def _boundary_probe(
     candidate: CandidateInvariant,
     legacy_fn: Callable[..., dict],
     field_bounds: dict[str, tuple[float, float]],
-) -> tuple[float, list[dict]]:
-    """Use Hypothesis to generate adversarial inputs and check the rule."""
+) -> tuple[float, list[dict], int, int, int, float]:
+    """Use Hypothesis to generate adversarial inputs, checking the rule and tracking condition coverage."""
     
-    passed = 0
-    total = 0
-    counterexamples = []
+    passed_when_true = 0
+    condition_true_count = 0
+    condition_false_count = 0
+    total_probes = 0
+    counterexamples: list[dict] = []
     
     strategy = _build_strategy(field_bounds, candidate.condition)
 
     @given(sample=strategy)
-    @hyp_settings(max_examples=200, phases=[Phase.generate], suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow])
+    @hyp_settings(max_examples=100, phases=[Phase.generate], suppress_health_check=[HealthCheck.filter_too_much, HealthCheck.too_slow])
     def run_property_test(sample: dict[str, Any]):
-        nonlocal passed, total, counterexamples
+        nonlocal passed_when_true, condition_true_count, condition_false_count, total_probes, counterexamples
         
         try:
             condition_true = eval_condition(candidate.condition, sample)
         except Exception:
-            return  # invalid sample or condition error
+            return  # invalid sample or unhandled variable
             
-        # Only evaluate legacy fn if we really need to check the property or record it
-        # Actually, let's always run it to gather full validation info
-        try:
-            actual = legacy_fn(**sample)
-            actual_decision = str(actual.get("decision", "")).upper()
-        except Exception:
-            return
-            
-        expected_decision = candidate.consequence.upper()
-        
-        total += 1
+        total_probes += 1
+
         if condition_true:
+            condition_true_count += 1
+            try:
+                actual = legacy_fn(**sample)
+                if isinstance(actual, dict):
+                    if "decision" in actual:
+                        actual_decision = str(actual["decision"]).upper()
+                    elif "result" in actual:
+                        actual_decision = str(actual["result"]).upper()
+                    elif len(actual) == 1:
+                        actual_decision = str(next(iter(actual.values()))).upper()
+                    else:
+                        actual_decision = str(actual).upper()
+                else:
+                    actual_decision = str(actual).upper()
+            except Exception:
+                return
+
+            expected_decision = candidate.consequence.upper()
             if actual_decision == expected_decision:
-                passed += 1
+                passed_when_true += 1
             else:
                 if len(counterexamples) < 5:
                     counterexamples.append({"inputs": sample, "actual": actual, "expected": candidate.consequence})
         else:
-            passed += 1  # condition false -> rule makes no claim, so it passes trivially
+            condition_false_count += 1
 
     try:
         run_property_test()
     except Exception:
-        pass # Hypothesis might raise MultipleFailures or similar depending on settings, but we track state in closures
+        pass
 
-    pass_rate = passed / total if total > 0 else 0.0
-    return pass_rate, counterexamples
+    condition_coverage = (condition_true_count / total_probes) if total_probes > 0 else 0.0
+    pass_rate = (passed_when_true / condition_true_count) if condition_true_count > 0 else 0.0
+
+    return pass_rate, counterexamples, condition_true_count, condition_false_count, total_probes, condition_coverage
 
 
 def _check_semantic_contradiction(
@@ -101,9 +112,7 @@ def _check_semantic_contradiction(
     already_validated: list[ValidatedInvariant],
     field_bounds: dict[str, tuple[float, float]]
 ) -> int:
-    """Check if the candidate condition semantically overlaps with any existing invariant with a different consequence.
-    We do this by generating sample inputs and seeing if both conditions can be true simultaneously.
-    """
+    """Check if the candidate condition semantically overlaps with any existing invariant with an opposing consequence."""
     if not already_validated:
         return 0
         
@@ -147,12 +156,19 @@ def validate_candidate(
     field_bounds: dict[str, tuple[float, float]],
     already_validated: list[ValidatedInvariant],
 ) -> ValidationReport:
-    pass_rate, counterexamples = _boundary_probe(candidate, legacy_fn, field_bounds)
+    pass_rate, counterexamples, true_cnt, false_cnt, total, coverage = _boundary_probe(candidate, legacy_fn, field_bounds)
     contradiction_count = _check_semantic_contradiction(candidate, already_validated, field_bounds)
 
-    return ValidationReport(
+    report = ValidationReport(
         invariant_id=candidate.invariant_id,
-        boundary_pass_rate=pass_rate,
+        boundary_pass_rate=round(pass_rate, 4),
         contradiction_count=contradiction_count,
         counterexamples=counterexamples,
+        condition_true_count=true_cnt,
+        condition_false_count=false_cnt,
+        total_probes=total,
+        condition_coverage=round(coverage, 4),
     )
+
+    candidate.validation_result = report.model_dump()
+    return report

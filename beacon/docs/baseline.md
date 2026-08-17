@@ -1,64 +1,89 @@
-# Phase 6 Baseline Demonstration Output
+# Phase 5 Final Baseline
 
-In Phase 6, we finalized the mining and validation architecture and introduced the `UnifiedEvidencePackage`. We integrated local hypothesis-based boundary validation, semantic contradiction checking, and confidence scoring. 
+## Overview
+This document records the baseline results and architectural verification of the BEACON system at the completion of Phase 5 (Unified Static + Dynamic Evidence Model and Verification Pipeline).
 
-The demonstration tests whether the system can:
-1. Extract static business logic variables from the legacy system AST
-2. Aggregate runtime observations and match inputs against static conditions
-3. Identify the undocumented loan rejection invariant and graduate it through the validation gate
-4. Detect behavioral violations (the "bug") in the modernized application
+The end-to-end flow established in Phase 5 is:
+```
+Legacy Source + Runtime Execution
+      ↓
+Static AST Analysis + Dynamic Runtime Traces
+      ↓
+UnifiedEvidencePackage (Authoritative Artifact)
+      ↓
+Candidate Generation (OfflineMiner / LLMCandidateGenerator)
+      ↓
+Evidence Collection (Corroboration, Diversity, Provenance Linkage)
+      ↓
+Adversarial & Property-Based Validation (Hypothesis with Condition Coverage)
+      ↓
+Contradiction Checking (Dynamic Accumulation Context)
+      ↓
+Confidence Scoring Formula & Provisional 0.8 Gate
+      ↓
+Validated Invariants (Graduated) / Unconfirmed Candidates (Retained)
+      ↓
+Executable Oracle Synthesis & Modernization Certification
+```
 
-## Environment
-- OS: Windows
-- Interpreter: Python 3.11+
-- Trace samples: 1000 generated synthetic `TraceEvent` records
+## System Environment & Parser Specification
+- **Operating System**: Windows (win32)
+- **Python Version**: Python 3.11.9
+- **Current Active Parser**: Python standard library AST parser (`backend/ingestion/legacy_parser.py`, `backend/ingestion/python_analyzer.py`), extracting structured facts (conditions, comparisons, assignments, function calls, return statements, source locations).
+- **Multi-Language Parser Roadmap**: Tree-sitter multi-language AST parsing (for Java, COBOL, C/C++, etc.) is planned for future phases.
+- **Test Suite Status**: **45 passed in 8.32s** (`pytest -v`).
 
-## Command Run
+## Deterministic Demonstration Execution
 
+Command:
 ```powershell
 python .\scripts\run_demo_pipeline.py
 ```
 
-## Results
-
+Console Output:
 ```text
 ==================================================================
-           BEACON DETERMINISTIC DEMONSTRATION RUNNER
+           BEACON DETERMINISTIC DEMONSTRATION RUNNER             
 ==================================================================
 
-Stage 1a: Generated synthetic trace log (legacy_sample/trace_log.json).
-Stage 1b: Loaded 1000 execution traces into TraceEvent objects.
-Stage 1c: Static AST extraction completed for legacy_sample\legacy_loan_approval.py.
-Stage 1d: Built UnifiedEvidencePackage containing 3 correlated facts.
+Stage 1b: Loaded 325 execution traces into TraceEvent objects.
+Stage 1c: Static AST extraction completed for C:\Users\Navaneeth Motamarry\Beacon\Beacon\beacon\legacy_sample\legacy_loan_approval.py.
+Stage 1d: Built UnifiedEvidencePackage containing 7 correlated facts.
 
 Running deterministic local invariant mining and validation.
 
 Stage 2: Mined & Validated Invariants:
-  - [GRADUATED] Invariant #local-1b27dc7b: IF credit_score < 600 and debt_ratio > 0.4 THEN REJECT (Confidence: 0.78, Severity: critical)
-  - [GRADUATED] Invariant #local-c7180ce5: IF credit_score < 500 THEN REJECT (Confidence: 0.75, Severity: critical)
+  - [GRADUATED] Invariant #local-c7180ce5: IF credit_score < 500 THEN REJECT (Confidence: 0.94, Severity: critical)
+  - [GRADUATED] Invariant #local-1b27dc7b: IF credit_score < 600 and debt_ratio > 0.4 THEN REJECT (Confidence: 0.93, Severity: critical)
+  - [UNCONFIRMED] Hypothesis #local-9aae83ec: IF annual_income < 20000 and debt_ratio > 0.6 THEN REJECT (Failed gate with Confidence: 0.63)
 
 Stage 3: Synthesized Executable Oracles:
-  - Oracle #local-1b27dc7b: Property -> "assert not (credit_score < 600 and debt_ratio > 0.4) or decision == 'REJECT'"
-  - Oracle #local-c7180ce5: Property -> "assert not (credit_score < 500) or decision == 'REJECT'"
+  - Oracle #local-c7180ce5: Property -> "(credit_score < 500) implies (decision == 'REJECT')"
+  - Oracle #local-1b27dc7b: Property -> "(credit_score < 600 and debt_ratio > 0.4) implies (decision == 'REJECT')"
 
 Stage 4: Certifying Modernized Application against Legacy System Oracles...
-================================================================================
-BEACON CERTIFICATION REPORT: FAILED
-================================================================================
-Timestamp: 2026-08-17T12:00:00Z
-Target: Loan approval
-Equivalence Score: 50.00%
 
-Violations Detected: 1
---------------------------------------------------------------------------------
-1. Expected: REJECT | Actual: APPROVE
-   Counterexample Inputs: {'annual_income': 43492.3, 'credit_score': 540, 'debt_ratio': 0.42}
-   Legacy Output: REJECT
-   Modern Output: APPROVE
-================================================================================
+BEHAVIORAL EQUIVALENCE REPORT — run f51721f2
+Overall Equivalence Score: 50.2%
+
+By domain:
+  Loan approval                50%
+
+Checked: 49   Violated: 11
+
+Invariant #local-1b27dc7b
+  Expected:       (credit_score < 600 and debt_ratio > 0.4) implies (decision == 'REJECT')
+  Legacy output:  REJECT
+  Modern output:  APPROVE
+  Counterexample: {'credit_score': 598, 'debt_ratio': 0.6469415316592227, 'annual_income': 133033.79203576746}
+  Confidence: 0.93   Severity: critical
+
+Saved this certification run to data/beacon.sqlite3 for the dashboard.
 ```
 
-## Interpretation
-The output demonstrates that the integrated architecture cleanly captures both components of the invariant without human involvement. The unconfirmed candidate list functions exactly as required: rules lacking sufficient boundary validation or evidence diversity are filtered out, while true invariant rules confidently generate execution oracles. 
-
-The demo successfully identified that the modernized `modern_loan_approval` script hallucinates an `APPROVE` decision for inputs satisfying `credit_score < 600 and debt_ratio > 0.4`.
+## Architectural Highlights Verified
+1. **Generic Infrastructure**: Zero hardcoded domain or business-rule conditions exist in generic infrastructure (`backend/evidence/builder.py`, `backend/ingestion/runtime_tracer.py`, `backend/mining/evidence_collector.py`). All conditions are discovered dynamically from source AST and runtime executions.
+2. **Authoritative Evidence Package**: `UnifiedEvidencePackage` is the authoritative source for candidate generation, evidence collection, and LLM context.
+3. **Equivalence of Generators**: Both `OfflineCandidateGenerator` and `LLMCandidateGenerator` produce the exact same `CandidateInvariant` structure with full provenance.
+4. **Principled Validation & Gating**: No shortcut confidence scores (0.95/1.0) exist; candidates undergo adversarial boundary testing via Hypothesis (recording condition-true coverage), semantic contradiction checking against dynamically accumulated validated invariants, and must pass the 0.8 confidence gate to graduate.
+5. **Candidate Retention**: Candidates failing the gate (e.g. `annual_income < 20000 and debt_ratio > 0.6` with confidence 0.63) are retained as `UnconfirmedCandidate` models with full provenance for transparency and auditability.

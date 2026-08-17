@@ -1,10 +1,10 @@
 """Stage 2 orchestrator — runs the full invariant mining sub-pipeline:
-candidate -> evidence -> validation -> contradiction check -> confidence -> (dedup+store, spec, or discard).
+UnifiedEvidencePackage -> Candidate Generator -> Evidence Collection -> Adversarial Validation -> Contradiction Check -> Confidence Score -> 0.8 Gate.
 
 This is the module backend/api/main.py and scripts/run_demo_pipeline.py call.
 """
 
-from typing import Callable, Union
+from typing import Callable
 from common.models import ValidatedInvariant, UnconfirmedCandidate
 from evidence.models import UnifiedEvidencePackage
 from .offline_miner import OfflineCandidateGenerator
@@ -23,9 +23,9 @@ def run_mining_pipeline(
     use_atlas: bool = True,
     use_llm: bool = False,
 ) -> tuple[list[ValidatedInvariant], list[UnconfirmedCandidate]]:
-    """Runs the full candidate generation and validation pipeline."""
+    """Runs the canonical candidate generation and validation pipeline."""
     
-    # 1. Candidate Generation
+    # 1. Candidate Generation (Offline or LLM)
     if use_llm:
         generator = LLMCandidateGenerator()
     else:
@@ -33,41 +33,23 @@ def run_mining_pipeline(
         
     candidates = generator.propose_candidates(evidence_package)
     
-    graduated_invariants = []
-    unconfirmed_candidates = []
+    graduated_invariants: list[ValidatedInvariant] = []
+    unconfirmed_candidates: list[UnconfirmedCandidate] = []
+    current_validation_context: list[ValidatedInvariant] = list(already_validated)
     
     for candidate in candidates:
-        if use_atlas:
-            similar = dedup.find_similar(candidate.condition)
-            if similar:
-                # Already mined under different wording — skip re-validation.
-                existing = similar[0]
-                graduated_invariants.append(ValidatedInvariant(
-                    invariant_id=existing["invariant_id"],
-                    condition=existing["condition"],
-                    consequence=existing["consequence"],
-                    severity=candidate.severity,
-                    evidence_ids=candidate.evidence_ids,
-                    generation_method=candidate.generation_method,
-                    timestamp=candidate.timestamp,
-                    rationale=candidate.rationale,
-                    source_lines=candidate.source_lines,
-                    confidence=1.0,
-                    graduated=True,
-                ))
-                continue
-
-        # 2. Evidence Collection
-        evidence = collect_evidence(candidate, evidence_package.runtime_traces, corpus_size=len(evidence_package.runtime_traces))
+        # 2. Evidence Collection directly from UnifiedEvidencePackage
+        evidence = collect_evidence(candidate, evidence_package)
         
-        # 3. Adversarial Validation & Contradiction Check
-        validation = validate_candidate(candidate, legacy_fn, field_bounds, already_validated)
+        # 3. Adversarial / Property-Based Validation & Contradiction Check against accumulated context
+        validation = validate_candidate(candidate, legacy_fn, field_bounds, current_validation_context)
         
-        # 4. Confidence Scoring & Gate
+        # 4. Confidence Scoring & 0.8 Confidence Gate
         result = score_confidence(candidate, evidence, validation)
 
         if isinstance(result, ValidatedInvariant) and result.graduated:
             graduated_invariants.append(result)
+            current_validation_context.append(result)  # Dynamically add to validation context for subsequent checks
             spec_provenance.write_proposal(result, evidence, validation)
             if use_atlas:
                 dedup.store_invariant(result.model_dump(), result.condition)

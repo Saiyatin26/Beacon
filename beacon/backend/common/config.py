@@ -16,7 +16,7 @@ class Settings:
     mongodb_db_name: str = os.getenv("MONGODB_DB_NAME", "beacon")
 
     # Architecture doc Section 7.1
-    confidence_threshold: float = 0.7
+    confidence_threshold: float = float(os.getenv("CONFIDENCE_THRESHOLD", "0.8"))
 
     # Architecture doc Section 7.2 / 7.3
     severity_weights: dict = {
