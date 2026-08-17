@@ -61,16 +61,41 @@ class EvidenceReport(BaseModel):
     dynamic_evidence_ids: list[str] = Field(default_factory=list)
 
 
+class Counterexample(BaseModel):
+    """Detailed counterexample representing a concrete input violating the invariant candidate."""
+    candidate_id: str = ""
+    validation_run_id: str = ""
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    condition_result: bool = True
+    expected_result: str = ""
+    actual_result: str = ""
+    failure_type: str = "VIOLATION"  # VIOLATION | EXECUTION_ERROR | CONTRADICTION
+    evidence_ids: list[str] = Field(default_factory=list)
+    execution_ids: list[str] = Field(default_factory=list)
+    timestamp: str = ""
+
+
 class ValidationReport(BaseModel):
-    """Stage 2c output."""
+    """Stage 2c output — comprehensive adversarial validation report."""
     invariant_id: str
+    validation_run_id: str = ""
     boundary_pass_rate: float
     contradiction_count: int
     counterexamples: list[dict] = Field(default_factory=list)
     condition_true_count: int = 0
     condition_false_count: int = 0
     total_probes: int = 0
+    passed_probes: int = 0
+    failed_probes: int = 0
+    execution_errors: int = 0
+    boundary_tests_count: int = 0
+    diverse_tests_count: int = 0
     condition_coverage: float = 0.0
+    contradiction_details: list[dict] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list)
+    execution_ids: list[str] = Field(default_factory=list)
+    timestamp: str = ""
+    status: str = "VALIDATED"  # VALIDATED | INVALIDATED | UNCONFIRMED
 
 
 class ValidatedInvariant(CandidateInvariant):

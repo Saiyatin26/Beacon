@@ -1,11 +1,12 @@
-"""Stage 2d — Confidence scoring.
+"""Stage 2d — Confidence Scoring (Phase 7).
 
 Implements the formula from the architecture doc, Section 7.1:
 
     confidence_i = w1*evidence_count_norm + w2*input_diversity
                  + w3*boundary_pass_rate - w4*contradiction_penalty
 
-Enforces the 0.8 confidence gate and records full provenance on all candidates.
+Enforces the 0.8 confidence gate and preserves full provenance, counterexamples,
+and explicit status (graduated vs unconfirmed vs INVALIDATED).
 """
 
 from typing import Union
@@ -37,8 +38,8 @@ def score_confidence(
     confidence = max(0.0, min(1.0, raw_confidence))
     confidence_rounded = round(confidence, 4)
 
-    # Attach confidence components for complete provenance
-    candidate.confidence_components = {
+    # Attach complete confidence components
+    confidence_components = {
         "evidence_count_norm": evidence.evidence_count_norm,
         "input_diversity": evidence.input_diversity,
         "boundary_pass_rate": validation.boundary_pass_rate,
@@ -46,8 +47,25 @@ def score_confidence(
         "condition_coverage": validation.condition_coverage,
         "raw_confidence": confidence_rounded,
     }
+    if candidate.confidence_components:
+        confidence_components.update(candidate.confidence_components)
 
-    if confidence_rounded >= settings.confidence_threshold:
+    candidate.confidence_components = confidence_components
+
+    # Determine final candidate graduation status
+    is_invalidated = validation.status == "INVALIDATED" or validation.failed_probes > 0
+
+    if is_invalidated:
+        status = "INVALIDATED"
+        graduated = False
+    elif confidence_rounded >= settings.confidence_threshold and validation.boundary_pass_rate >= 0.8:
+        status = "graduated"
+        graduated = True
+    else:
+        status = "unconfirmed"
+        graduated = False
+
+    if graduated:
         return ValidatedInvariant(
             invariant_id=candidate.invariant_id,
             condition=candidate.condition,
@@ -60,11 +78,11 @@ def score_confidence(
             generation_method=candidate.generation_method,
             timestamp=candidate.timestamp,
             rationale=candidate.rationale,
-            confidence_components=candidate.confidence_components,
-            validation_result=candidate.validation_result,
+            confidence_components=confidence_components,
+            validation_result=validation.model_dump(),
             confidence=confidence_rounded,
             graduated=True,
-            status="graduated",
+            status=status,
         )
     else:
         return UnconfirmedCandidate(
@@ -79,9 +97,9 @@ def score_confidence(
             generation_method=candidate.generation_method,
             timestamp=candidate.timestamp,
             rationale=candidate.rationale,
-            confidence_components=candidate.confidence_components,
-            validation_result=candidate.validation_result,
+            confidence_components=confidence_components,
+            validation_result=validation.model_dump(),
             confidence=confidence_rounded,
             graduated=False,
-            status="unconfirmed",
+            status=status,
         )
