@@ -38,7 +38,7 @@ class CandidateInvariant(BaseModel):
     generation_method: str = "offline"  # "offline" or "llm"
     timestamp: str = ""
     rationale: Optional[str] = None
-    confidence_components: dict[str, float] = Field(default_factory=dict)
+    confidence_components: dict[str, Any] = Field(default_factory=dict)
     validation_result: Optional[dict] = None
     status: str = "candidate"
 

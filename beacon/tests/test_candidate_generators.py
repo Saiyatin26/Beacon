@@ -30,7 +30,7 @@ def test_generator_equivalence_and_validation(mock_get_client, tmp_path):
     
     # Mock LLM
     mock_response = MagicMock()
-    mock_response.content = [MagicMock(type="text", text='[{"condition": "credit_score < 600", "consequence": "REJECT", "severity": "critical", "supporting_evidence_ids": ["EV-S-TEST"], "source_lines": [12]}]')]
+    mock_response.content = [MagicMock(type="text", text='[{"condition": "credit_score < 600 and debt_ratio > 0.4", "consequence": "REJECT", "severity": "critical", "supporting_evidence_ids": [], "source_lines": [14]}]')]
     mock_client = MagicMock()
     mock_client.messages.create.return_value = mock_response
     mock_get_client.return_value = mock_client
