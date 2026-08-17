@@ -1,12 +1,12 @@
-"""Stage 2d — Confidence Scoring (Phase 7).
+"""Stage 2d — Confidence Scoring (Phases 7 Hardening).
 
 Implements the formula from the architecture doc, Section 7.1:
 
     confidence_i = w1*evidence_count_norm + w2*input_diversity
                  + w3*boundary_pass_rate - w4*contradiction_penalty
 
-Enforces the 0.8 confidence gate and preserves full provenance, counterexamples,
-and explicit status (graduated vs unconfirmed vs INVALIDATED).
+Enforces the 0.8 confidence gate and preserves full audit provenance, counterexamples,
+reproducibility metadata, and explicit status (graduated vs unconfirmed vs INVALIDATED).
 """
 
 from typing import Union
@@ -43,6 +43,8 @@ def score_confidence(
         "evidence_count_norm": evidence.evidence_count_norm,
         "input_diversity": evidence.input_diversity,
         "boundary_pass_rate": validation.boundary_pass_rate,
+        "overall_property_pass_rate": validation.overall_property_pass_rate,
+        "diverse_input_pass_rate": validation.diverse_input_pass_rate,
         "contradiction_penalty": contradiction_penalty,
         "condition_coverage": validation.condition_coverage,
         "raw_confidence": confidence_rounded,
@@ -65,10 +67,14 @@ def score_confidence(
         status = "unconfirmed"
         graduated = False
 
+    repro_meta = dict(candidate.reproducibility)
+    repro_meta.update(validation.reproducibility)
+
     if graduated:
         return ValidatedInvariant(
             invariant_id=candidate.invariant_id,
             condition=candidate.condition,
+            raw_condition=candidate.raw_condition or candidate.condition,
             consequence=candidate.consequence,
             source_file=candidate.source_file,
             source_lines=candidate.source_lines,
@@ -79,7 +85,9 @@ def score_confidence(
             timestamp=candidate.timestamp,
             rationale=candidate.rationale,
             confidence_components=confidence_components,
+            grounding_result=candidate.grounding_result,
             validation_result=validation.model_dump(),
+            reproducibility=repro_meta,
             confidence=confidence_rounded,
             graduated=True,
             status=status,
@@ -88,6 +96,7 @@ def score_confidence(
         return UnconfirmedCandidate(
             invariant_id=candidate.invariant_id,
             condition=candidate.condition,
+            raw_condition=candidate.raw_condition or candidate.condition,
             consequence=candidate.consequence,
             source_file=candidate.source_file,
             source_lines=candidate.source_lines,
@@ -98,7 +107,9 @@ def score_confidence(
             timestamp=candidate.timestamp,
             rationale=candidate.rationale,
             confidence_components=confidence_components,
+            grounding_result=candidate.grounding_result,
             validation_result=validation.model_dump(),
+            reproducibility=repro_meta,
             confidence=confidence_rounded,
             graduated=False,
             status=status,

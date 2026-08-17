@@ -1,37 +1,101 @@
-# Phase 5 Final Baseline
+# Phases 1–7 Baseline & Architectural Verification
 
 ## Overview
-This document records the baseline results and architectural verification of the BEACON system at the completion of Phase 5 (Unified Static + Dynamic Evidence Model and Verification Pipeline).
+This document records the baseline results and architectural verification of the BEACON system at the completion of Phase 7 (Adversarial Behavioral Invariant Validation and Hardened Grounding Pipeline).
 
-The end-to-end flow established in Phase 5 is:
+The verified end-to-end flow is:
 ```
-Legacy Source + Runtime Execution
-      ↓
-Static AST Analysis + Dynamic Runtime Traces
-      ↓
-UnifiedEvidencePackage (Authoritative Artifact)
-      ↓
-Candidate Generation (OfflineMiner / LLMCandidateGenerator)
-      ↓
-Evidence Collection (Corroboration, Diversity, Provenance Linkage)
-      ↓
-Adversarial & Property-Based Validation (Hypothesis with Condition Coverage)
-      ↓
-Contradiction Checking (Dynamic Accumulation Context)
-      ↓
-Confidence Scoring Formula & Provisional 0.8 Gate
-      ↓
-Validated Invariants (Graduated) / Unconfirmed Candidates (Retained)
-      ↓
-Executable Oracle Synthesis & Modernization Certification
+                      LEGACY SOFTWARE
+                            │
+               ┌────────────┴────────────┐
+               ▼                         ▼
+        STATIC ANALYSIS            RUNTIME TRACING
+               │                         │
+               ▼                         ▼
+        STATIC EVIDENCE             DYNAMIC EVIDENCE
+               │                         │
+               └────────────┬────────────┘
+                            ▼
+                 UNIFIED EVIDENCE PACKAGE
+                            │
+                            ▼
+                ┌───────────────────────┐
+                │ PHASE 6               │
+                │ EVIDENCE SELECTION    │
+                └───────────┬───────────┘
+                            ▼
+                    STRUCTURED LLM CONTEXT
+                            │
+                            ▼
+                           LLM
+                            │
+                            ▼
+                   CANDIDATE INVARIANT
+                            │
+                            ▼
+                      NORMALIZATION
+                            │
+                            ▼
+                       DEDUPLICATION
+                            │
+                            ▼
+                   SEMANTIC GROUNDING
+                   ┌────────┴────────┐
+                   ▼                 ▼
+               GROUNDED         GROUNDING_FAILED
+                   │
+                   ▼
+                ┌────────────────────────┐
+                │ PHASE 7                │
+                │ ADVERSARIAL VALIDATOR  │
+                └───────────┬────────────┘
+                            │
+                ┌───────────┼────────────┐
+                ▼           ▼            ▼
+            BOUNDARY    NEAR-BOUNDARY  DIVERSE
+              TESTS        TESTS       TESTS
+                └───────────┼────────────┘
+                            ▼
+                    LEGACY EXECUTION
+                            │
+                            ▼
+                    PROPERTY EVALUATION
+                            │
+                   ┌────────┴────────┐
+                   ▼                 ▼
+                 PASS              FAIL
+                   │                 │
+                   │           COUNTEREXAMPLE
+                   │                 │
+                   │           MINIMIZE/SHRINK
+                   │                 │
+                   └────────┬────────┘
+                            ▼
+                   CONTRADICTION CHECK
+                            │
+                            ▼
+                   VALIDATION REPORT
+                            │
+                            ▼
+                   CENTRAL CONFIDENCE
+                        SCORER
+                            │
+                            ▼
+                       0.8 GATE
+                      /         \
+                     ▼           ▼
+              UNCONFIRMED    VALIDATED
+              / INVALIDATED     │
+                                ▼
+                           NEXT PHASES
 ```
 
 ## System Environment & Parser Specification
 - **Operating System**: Windows (win32)
 - **Python Version**: Python 3.11.9
-- **Current Active Parser**: Python standard library AST parser (`backend/ingestion/legacy_parser.py`, `backend/ingestion/python_analyzer.py`), extracting structured facts (conditions, comparisons, assignments, function calls, return statements, source locations).
-- **Multi-Language Parser Roadmap**: Tree-sitter multi-language AST parsing (for Java, COBOL, C/C++, etc.) is planned for future phases.
-- **Test Suite Status**: **45 passed in 8.32s** (`pytest -v`).
+- **Current Active Parser**: Python AST parser (`backend/ingestion/legacy_parser.py`, `backend/ingestion/static_analyzer.py`), extracting structured facts (conditions, comparisons, assignments, function calls, return statements, and source lines).
+- **Multi-Language Parser Roadmap**: Tree-sitter multi-language AST parsing (for Java, COBOL, C/C++, etc.) planned for future phases.
+- **Test Suite Status**: **78 passed in 19.24s** (`python -m pytest -q`).
 
 ## Deterministic Demonstration Execution
 
@@ -47,7 +111,7 @@ Console Output:
 ==================================================================
 
 Stage 1b: Loaded 325 execution traces into TraceEvent objects.
-Stage 1c: Static AST extraction completed for C:\Users\Navaneeth Motamarry\Beacon\Beacon\beacon\legacy_sample\legacy_loan_approval.py.
+Stage 1c: Static AST extraction completed for legacy_sample/legacy_loan_approval.py.
 Stage 1d: Built UnifiedEvidencePackage containing 7 correlated facts.
 
 Running deterministic local invariant mining and validation.
@@ -63,7 +127,7 @@ Stage 3: Synthesized Executable Oracles:
 
 Stage 4: Certifying Modernized Application against Legacy System Oracles...
 
-BEHAVIORAL EQUIVALENCE REPORT — run f51721f2
+BEHAVIORAL EQUIVALENCE REPORT — run bdf525ae
 Overall Equivalence Score: 50.2%
 
 By domain:
@@ -82,8 +146,10 @@ Saved this certification run to data/beacon.sqlite3 for the dashboard.
 ```
 
 ## Architectural Highlights Verified
-1. **Generic Infrastructure**: Zero hardcoded domain or business-rule conditions exist in generic infrastructure (`backend/evidence/builder.py`, `backend/ingestion/runtime_tracer.py`, `backend/mining/evidence_collector.py`). All conditions are discovered dynamically from source AST and runtime executions.
-2. **Authoritative Evidence Package**: `UnifiedEvidencePackage` is the authoritative source for candidate generation, evidence collection, and LLM context.
-3. **Equivalence of Generators**: Both `OfflineCandidateGenerator` and `LLMCandidateGenerator` produce the exact same `CandidateInvariant` structure with full provenance.
-4. **Principled Validation & Gating**: No shortcut confidence scores (0.95/1.0) exist; candidates undergo adversarial boundary testing via Hypothesis (recording condition-true coverage), semantic contradiction checking against dynamically accumulated validated invariants, and must pass the 0.8 confidence gate to graduate.
-5. **Candidate Retention**: Candidates failing the gate (e.g. `annual_income < 20000 and debt_ratio > 0.6` with confidence 0.63) are retained as `UnconfirmedCandidate` models with full provenance for transparency and auditability.
+1. **Generic Infrastructure**: Zero hardcoded domain or business-rule conditions exist in generic infrastructure (`backend/evidence/builder.py`, `backend/ingestion/runtime_tracer.py`, `backend/mining/evidence_collector.py`, `backend/mining/grounding_checker.py`, `backend/mining/adversarial.py`).
+2. **Authoritative Evidence Package & Normalization**: `UnifiedEvidencePackage` is the authoritative source. Expressions are normalized to allow commutative AST matching and recover matching execution IDs and static evidence.
+3. **Semantic Grounding**: Candidates citing invalid variables, unsupported thresholds, nonexistent evidence IDs, mismatched source lines, or unsupported consequences are rejected immediately with `GROUNDING_FAILED`.
+4. **Adversarial Validation & Separated Metrics**: Multi-strategy testing generates exact boundaries ($T-\epsilon, T, T+\epsilon$), near-boundary jitters, combinatorial truth tables, and diverse property inputs, tracking `boundary_pass_rate` and `diverse_input_pass_rate` separately.
+5. **Counterexample Minimization & Refutation**: Deliberately incorrect candidates (e.g. `credit_score < 600 -> APPROVE`) are actively refuted, minimized to clean counterexamples, marked `INVALIDATED`, and strictly refused graduation.
+6. **Centralized Confidence Gating**: Confidence is scored centrally in `confidence_scorer.py` using weighted evidence, diversity, boundary pass rate, and contradiction penalties with an authoritative 0.8 gate.
+7. **Complete Audit Provenance & Reproducibility**: Full trace is preserved from Source Location $\to$ Static/Dynamic Evidence IDs $\to$ Unified Evidence $\to$ Candidate $\to$ Grounding Result $\to$ Validation Run ID $\to$ Counterexamples $\to$ Confidence Components $\to$ Final Status.

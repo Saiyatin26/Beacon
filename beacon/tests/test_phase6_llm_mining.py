@@ -269,7 +269,8 @@ def test_llm_generator_handles_api_errors_gracefully(mock_get_client):
 @patch("mining.candidate_generator._get_client")
 def test_llm_generator_proposes_multiple_grounded_candidates(mock_get_client):
     pkg = _get_sample_evidence_package()
-    static_id = pkg.static_evidence_items[0].evidence_id if pkg.static_evidence_items else "EV-S-001"
+    static_id_12 = next((s.evidence_id for s in pkg.static_evidence_items if getattr(s, "line", None) == 12), "EV-S-001")
+    static_id_14 = next((s.evidence_id for s in pkg.static_evidence_items if getattr(s, "line", None) == 14), "EV-S-002")
 
     llm_payload = json.dumps([
         {
@@ -277,7 +278,7 @@ def test_llm_generator_proposes_multiple_grounded_candidates(mock_get_client):
             "consequence": "REJECT",
             "severity": "critical",
             "rationale": "Direct static reject branch.",
-            "supporting_evidence_ids": [static_id],
+            "supporting_evidence_ids": [static_id_12],
             "source_lines": [12],
         },
         {
@@ -285,7 +286,7 @@ def test_llm_generator_proposes_multiple_grounded_candidates(mock_get_client):
             "consequence": "REJECT",
             "severity": "critical",
             "rationale": "Correlated branch rejection.",
-            "supporting_evidence_ids": [static_id],
+            "supporting_evidence_ids": [static_id_14],
             "source_lines": [14],
         },
     ])
@@ -314,7 +315,7 @@ def test_llm_generator_proposes_multiple_grounded_candidates(mock_get_client):
 @patch("mining.candidate_generator._get_client")
 def test_end_to_end_pipeline_swappability(mock_get_client):
     pkg = _get_sample_evidence_package()
-    static_id = pkg.static_evidence_items[0].evidence_id if pkg.static_evidence_items else "EV-S-001"
+    static_id_14 = next((s.evidence_id for s in pkg.static_evidence_items if getattr(s, "line", None) == 14), "EV-S-002")
 
     # Setup mocked LLM returning valid candidates
     llm_payload = json.dumps([
@@ -323,7 +324,7 @@ def test_end_to_end_pipeline_swappability(mock_get_client):
             "consequence": "REJECT",
             "severity": "critical",
             "rationale": "Undocumented rejection rule.",
-            "supporting_evidence_ids": [static_id],
+            "supporting_evidence_ids": [static_id_14],
             "source_lines": [14],
         }
     ])

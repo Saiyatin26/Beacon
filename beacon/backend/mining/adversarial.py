@@ -1,16 +1,17 @@
-"""Stage 2c — Adversarial Behavioral Invariant Validation (Phase 7).
+"""Stage 2c — Adversarial Behavioral Invariant Validation (Phases 7 Hardening).
 
 Implements an independent adversarial validation mechanism that actively attempts to
 disprove candidate invariants. Generates boundary, near-boundary, combinatorial truth-table,
 and diverse property-based inputs, executes reference behavior, classifies outcomes, detects
 and minimizes counterexamples, performs contradiction analysis, and generates structured
-ValidationReport models.
+ValidationReport models with separated boundary vs diverse metrics and reproducibility metadata.
 """
 
 import ast
 from datetime import datetime, timezone
 import json
 import re
+import sys
 import uuid
 from typing import Any, Callable, Optional
 
@@ -54,7 +55,6 @@ def analyze_condition(condition_str: str) -> ConditionAnalysis:
     try:
         tree = ast.parse(condition_str, mode="eval")
     except Exception:
-        # Fallback regex parsing
         var_names = set(re.findall(r"\b[a-zA-Z_][a-zA-Z0-9_]*\b", condition_str)) - {
             "and", "or", "not", "in", "True", "False", "None"
         }
@@ -98,11 +98,9 @@ def analyze_condition(condition_str: str) -> ConditionAnalysis:
                     if isinstance(right.value, (int, float)):
                         thresh_val = float(right.value)
                 elif isinstance(right, ast.Name) and isinstance(left, ast.Constant):
-                    # Inverted comparison e.g. 600 > credit_score
                     var_name = right.id
                     if isinstance(left.value, (int, float)):
                         thresh_val = float(left.value)
-                    # Flip operator
                     flip_map = {"<": ">", "<=": ">=", ">": "<", ">=": "<=", "==": "==", "!=": "!="}
                     if op_symbol:
                         op_symbol = flip_map.get(op_symbol, op_symbol)
@@ -134,12 +132,10 @@ def generate_adversarial_inputs(
     seen_hashes: set[str] = set()
 
     def _add_input(inp_dict: dict[str, Any]):
-        # Fill missing fields with midpoint values from field_bounds
         complete = {}
         for f, (lo, hi) in field_bounds.items():
             if f in inp_dict:
                 val = inp_dict[f]
-                # Clamp within bounds
                 clamped = max(lo, min(hi, val))
                 complete[f] = int(round(clamped)) if isinstance(val, int) or (lo == int(lo) and hi == int(hi) and clamped == int(clamped)) else float(clamped)
             else:
@@ -159,7 +155,6 @@ def generate_adversarial_inputs(
         T = pred.threshold
         span = hi - lo if hi > lo else 1.0
 
-        # Determine step size
         eps = 1 if (isinstance(T, int) or T.is_integer()) and span > 10 else max(0.01, span * 0.005)
         jitters = [
             -span * 0.05, -2 * eps, -eps, 0.0, eps, 2 * eps, span * 0.05
@@ -181,7 +176,6 @@ def generate_adversarial_inputs(
             span = hi - lo if hi > lo else 1.0
             eps = 1 if (isinstance(T, int) or T.is_integer()) and span > 10 else max(0.01, span * 0.01)
 
-            # Generate satisfying (True) and non-satisfying (False) values for this predicate
             if pred.operator in ("<", "<="):
                 val_true = max(lo, T - eps)
                 val_false = min(hi, T + eps)
@@ -197,7 +191,6 @@ def generate_adversarial_inputs(
 
             pred_samples.append([(v, val_true), (v, val_false)])
 
-        # Generate Cartesian product for truth combinations: (T, T), (T, F), (F, T), (F, F)
         if len(pred_samples) == 2:
             for p1 in pred_samples[0]:
                 for p2 in pred_samples[1]:
@@ -262,7 +255,6 @@ def minimize_counterexample(
         lo, hi = field_bounds[field]
         baseline = lo
 
-        # Binary search shrinking towards baseline
         current_val = val
         best_val = current_val
 
@@ -275,19 +267,16 @@ def minimize_counterexample(
             candidate_input[field] = test_val
 
             try:
-                # Check condition still holds
                 if eval_condition(candidate.condition, candidate_input):
                     actual = legacy_fn(**candidate_input)
                     act_dec = str(actual.get("decision", actual.get("result", actual))).upper()
                     if act_dec != expected_decision:
-                        # Violation still reproduced!
                         best_val = test_val
                         current_val = test_val
                         continue
             except Exception:
                 pass
 
-            # If moving towards baseline failed, try moving baseline closer to current
             baseline = test_val
 
         minimized[field] = best_val
@@ -375,8 +364,17 @@ def run_adversarial_validation(
     passed_probes = 0
     failed_probes = 0
     execution_errors = 0
-    boundary_tests_count = len(boundary_inputs)
-    diverse_tests_count = len(diverse_inputs)
+
+    # Separated boundary and diverse metric counters
+    boundary_probes_total = len(boundary_inputs)
+    boundary_probes_true = 0
+    boundary_probes_passed = 0
+    boundary_probes_failed = 0
+
+    diverse_probes_total = len(diverse_inputs)
+    diverse_probes_true = 0
+    diverse_probes_passed = 0
+    diverse_probes_failed = 0
 
     counterexamples: list[Counterexample] = []
     expected_decision = candidate.consequence.strip().upper()
@@ -391,6 +389,11 @@ def run_adversarial_validation(
 
         if cond_holds:
             condition_true_count += 1
+            if is_boundary:
+                boundary_probes_true += 1
+            else:
+                diverse_probes_true += 1
+
             try:
                 actual_raw = legacy_fn(**sample)
                 if isinstance(actual_raw, dict):
@@ -406,6 +409,10 @@ def run_adversarial_validation(
                     actual_dec = str(actual_raw).upper()
             except Exception as exc:
                 execution_errors += 1
+                if is_boundary:
+                    boundary_probes_failed += 1
+                else:
+                    diverse_probes_failed += 1
                 if len(counterexamples) < 5:
                     counterexamples.append(Counterexample(
                         candidate_id=candidate.invariant_id,
@@ -423,8 +430,17 @@ def run_adversarial_validation(
 
             if actual_dec == expected_decision:
                 passed_probes += 1
+                if is_boundary:
+                    boundary_probes_passed += 1
+                else:
+                    diverse_probes_passed += 1
             else:
                 failed_probes += 1
+                if is_boundary:
+                    boundary_probes_failed += 1
+                else:
+                    diverse_probes_failed += 1
+
                 # 3. Minimize / shrink counterexample
                 minimized_sample = minimize_counterexample(sample, candidate, legacy_fn, field_bounds)
                 if len(counterexamples) < 10:
@@ -443,12 +459,26 @@ def run_adversarial_validation(
         else:
             condition_false_count += 1
 
-    # 4. Compute Coverage and Boundary Pass Rate
+    # 4. Compute Separated Metrics & Coverage
     condition_coverage = (condition_true_count / total_probes) if total_probes > 0 else 0.0
-    if condition_true_count > 0:
-        boundary_pass_rate = passed_probes / condition_true_count
+    
+    # Boundary pass rate strictly from boundary probes
+    if boundary_probes_true > 0:
+        boundary_pass_rate = boundary_probes_passed / boundary_probes_true
     else:
-        boundary_pass_rate = 0.0  # Zero pass rate if condition was never activated!
+        boundary_pass_rate = 0.0
+
+    # Diverse input pass rate strictly from diverse probes
+    if diverse_probes_true > 0:
+        diverse_input_pass_rate = diverse_probes_passed / diverse_probes_true
+    else:
+        diverse_input_pass_rate = 0.0
+
+    # Overall property pass rate
+    if condition_true_count > 0:
+        overall_property_pass_rate = passed_probes / condition_true_count
+    else:
+        overall_property_pass_rate = 0.0
 
     # 5. Semantic Contradiction Analysis
     all_sample_dicts = [p[0] for p in all_probes]
@@ -464,7 +494,7 @@ def run_adversarial_validation(
         status = "INVALIDATED"
     elif condition_true_count == 0:
         status = "UNCONFIRMED"
-    elif boundary_pass_rate < 1.0:
+    elif boundary_pass_rate < 1.0 or overall_property_pass_rate < 1.0:
         status = "INVALIDATED"
     else:
         status = "VALIDATED"
@@ -472,10 +502,24 @@ def run_adversarial_validation(
     # Convert counterexamples to dict for JSON serializability
     ce_dicts = [ce.model_dump() for ce in counterexamples]
 
+    # Reproducibility Metadata
+    reproducibility = {
+        "validation_run_id": run_id,
+        "candidate_id": candidate.invariant_id,
+        "generation_method": candidate.generation_method,
+        "hypothesis_max_examples": 100,
+        "boundary_probes_generated": boundary_probes_total,
+        "diverse_probes_generated": diverse_probes_total,
+        "python_version": sys.version.split()[0],
+        "timestamp": now_ts,
+    }
+
     report = ValidationReport(
         invariant_id=candidate.invariant_id,
         validation_run_id=run_id,
+        overall_property_pass_rate=round(overall_property_pass_rate, 4),
         boundary_pass_rate=round(boundary_pass_rate, 4),
+        diverse_input_pass_rate=round(diverse_input_pass_rate, 4),
         contradiction_count=contra_count,
         counterexamples=ce_dicts,
         condition_true_count=condition_true_count,
@@ -484,12 +528,21 @@ def run_adversarial_validation(
         passed_probes=passed_probes,
         failed_probes=failed_probes,
         execution_errors=execution_errors,
-        boundary_tests_count=boundary_tests_count,
-        diverse_tests_count=diverse_tests_count,
+        boundary_tests_count=boundary_probes_total,
+        boundary_probes_total=boundary_probes_total,
+        boundary_probes_true=boundary_probes_true,
+        boundary_probes_passed=boundary_probes_passed,
+        boundary_probes_failed=boundary_probes_failed,
+        diverse_tests_count=diverse_probes_total,
+        diverse_probes_total=diverse_probes_total,
+        diverse_probes_true=diverse_probes_true,
+        diverse_probes_passed=diverse_probes_passed,
+        diverse_probes_failed=diverse_probes_failed,
         condition_coverage=round(condition_coverage, 4),
         contradiction_details=contra_details,
         evidence_ids=candidate.evidence_ids,
         execution_ids=candidate.execution_ids,
+        reproducibility=reproducibility,
         timestamp=now_ts,
         status=status,
     )

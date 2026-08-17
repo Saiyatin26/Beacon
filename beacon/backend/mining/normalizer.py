@@ -60,6 +60,7 @@ def normalize_candidate(candidate: CandidateInvariant) -> CandidateInvariant:
     return CandidateInvariant(
         invariant_id=candidate.invariant_id,
         condition=norm_cond,
+        raw_condition=candidate.raw_condition or candidate.condition,
         consequence=norm_consequence,
         source_file=candidate.source_file,
         source_lines=sorted(list(set(candidate.source_lines))),
@@ -70,6 +71,8 @@ def normalize_candidate(candidate: CandidateInvariant) -> CandidateInvariant:
         timestamp=candidate.timestamp,
         rationale=candidate.rationale,
         confidence_components=candidate.confidence_components,
+        grounding_result=candidate.grounding_result,
         validation_result=candidate.validation_result,
+        reproducibility=candidate.reproducibility,
         status=candidate.status,
     )

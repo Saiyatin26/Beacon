@@ -1,6 +1,6 @@
-"""Stage 2a — AI-Assisted Candidate Invariant Generator (Phase 6).
+"""Stage 2a — AI-Assisted Candidate Invariant Generator (Phases 6 & 7 Hardening).
 
-Full Phase-6 Pipeline:
+Full Pipeline:
 UnifiedEvidencePackage
       ↓
 Evidence Relevance Selection (evidence_selector)
@@ -13,11 +13,11 @@ Structured JSON Candidate Parsing
       ↓
 Candidate Normalization (normalizer)
       ↓
-Candidate Deduplication & Provenance Merging
+Normalization-Aware Provenance Matching & Deduplication
       ↓
-Evidence Grounding Check (grounding_checker)
+Semantic Evidence Grounding Check (grounding_checker)
       ↓
-Provenance Attachment
+Provenance & Reproducibility Attachment
       ↓
 Returns CandidateInvariant list for Existing Validation Pipeline.
 """
@@ -34,7 +34,7 @@ from evidence.models import UnifiedEvidencePackage
 from .base_generator import CandidateGenerator
 from .evidence_selector import select_relevant_evidence
 from .grounding_checker import filter_grounded_candidates
-from .normalizer import normalize_candidate
+from .normalizer import normalize_candidate, normalize_condition
 from .prompt_builder import PROMPT_VERSION, build_mining_prompt
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ def _get_client() -> Anthropic:
 
 def deduplicate_candidates(candidates: list[CandidateInvariant]) -> list[CandidateInvariant]:
     """Deduplicates candidates sharing the same canonical (condition, consequence) pair,
-    merging evidence IDs and execution IDs without assigning artificial confidence.
+    merging evidence IDs, execution IDs, and source lines without assigning artificial confidence.
     """
     dedup_map: dict[tuple[str, str], CandidateInvariant] = {}
 
@@ -74,7 +74,7 @@ def deduplicate_candidates(candidates: list[CandidateInvariant]) -> list[Candida
 
 
 class LLMCandidateGenerator(CandidateGenerator):
-    """Phase 6 AI-Assisted Candidate Invariant Generator."""
+    """Phase 6/7 AI-Assisted Candidate Invariant Generator."""
 
     def __init__(self, model_name: str = DEFAULT_MODEL, prompt_version: str = PROMPT_VERSION):
         self.model_name = model_name
@@ -82,7 +82,7 @@ class LLMCandidateGenerator(CandidateGenerator):
 
     def propose_candidates(self, evidence_package: UnifiedEvidencePackage) -> list[CandidateInvariant]:
         """Orchestrates evidence selection, prompt generation, LLM querying, normalization,
-        deduplication, grounding checks, and provenance attachment.
+        normalization-aware provenance matching, deduplication, grounding checks, and provenance attachment.
         """
         # 1. Evidence Relevance Selection
         selected_context = select_relevant_evidence(evidence_package)
@@ -100,29 +100,49 @@ class LLMCandidateGenerator(CandidateGenerator):
         for c in raw_candidates_data:
             if not isinstance(c, dict):
                 continue
-            cond = str(c.get("condition", "")).strip()
+            raw_cond = str(c.get("condition", "")).strip()
             consequence = str(c.get("consequence", "")).strip().upper()
-            if not cond or not consequence:
+            if not raw_cond or not consequence:
                 continue
 
             inv_id = "llm-" + uuid.uuid4().hex[:8]
             supporting_ev = c.get("supporting_evidence_ids", [])
             lines = c.get("source_lines", [])
 
-            # Extract execution IDs from correlated package evidence if present
+            # Normalization-aware recovery of execution IDs & correlated evidence
+            norm_cond = normalize_condition(raw_cond)
             exec_ids: list[str] = []
+            ev_ids: list[str] = list(supporting_ev) if isinstance(supporting_ev, list) else []
+
             for corr in evidence_package.correlated_conditions:
-                if corr.condition_expr == cond:
+                if normalize_condition(corr.condition_expr) == norm_cond:
                     exec_ids.extend(corr.execution_ids[:20])
+                    for d in corr.dynamic_items:
+                        ev_ids.append(d.evidence_id)
+
+            for s in evidence_package.static_evidence_items:
+                if s.condition and normalize_condition(s.condition) == norm_cond:
+                    ev_ids.append(s.evidence_id)
+                    s_line = getattr(s, "line", None) or getattr(s, "source_line", None)
+                    if s_line and isinstance(lines, list) and s_line not in lines:
+                        lines.append(s_line)
+
+            reproducibility = {
+                "model": self.model_name,
+                "prompt_version": self.prompt_version,
+                "package_id": evidence_package.package_id,
+                "generator_type": "llm",
+            }
 
             unnormalized_candidates.append(CandidateInvariant(
                 invariant_id=inv_id,
-                condition=cond,
+                condition=raw_cond,
+                raw_condition=raw_cond,
                 consequence=consequence,
                 source_file=evidence_package.source_file,
                 source_lines=lines if isinstance(lines, list) else [],
                 severity=c.get("severity", "medium"),
-                evidence_ids=supporting_ev if isinstance(supporting_ev, list) else [],
+                evidence_ids=list(dict.fromkeys(ev_ids)),
                 execution_ids=list(dict.fromkeys(exec_ids)),
                 generation_method="llm",
                 timestamp=evidence_package.timestamp,
@@ -131,6 +151,7 @@ class LLMCandidateGenerator(CandidateGenerator):
                     "model": self.model_name,
                     "prompt_version": self.prompt_version,
                 },
+                reproducibility=reproducibility,
             ))
 
         # 5. Candidate Normalization (commutative AST sorting)
@@ -139,7 +160,7 @@ class LLMCandidateGenerator(CandidateGenerator):
         # 6. Candidate Deduplication & Provenance Merging
         deduped_candidates = deduplicate_candidates(normalized_candidates)
 
-        # 7. Evidence Grounding Check (Rejects Hallucinations)
+        # 7. Semantic Evidence Grounding Check (Rejects Hallucinations & Mismatches)
         grounded_candidates, rejected_candidates = filter_grounded_candidates(
             deduped_candidates, evidence_package
         )
