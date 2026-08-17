@@ -3,7 +3,7 @@ makes the six stages independently swappable — Stage 3 only needs to know the
 shape of an Invariant, not how Stage 2 produced it."""
 
 from __future__ import annotations
-from typing import Literal, Optional
+from typing import Literal, Optional, Any
 from pydantic import BaseModel, Field
 
 Severity = Literal["critical", "high", "medium", "low"]
@@ -12,10 +12,17 @@ Severity = Literal["critical", "high", "medium", "low"]
 class TraceEvent(BaseModel):
     """One row of Stage 1 output: a single observed execution."""
     inputs: dict
-    output: dict
+    output: dict = Field(default_factory=dict)
     branch_path: list[str] = Field(default_factory=list)
     db_reads: list[dict] = Field(default_factory=list)
     db_writes: list[dict] = Field(default_factory=list)
+    execution_id: Optional[str] = None
+    timestamp: Optional[str] = None
+    function: Optional[str] = None
+    executed_branches: list[dict] = Field(default_factory=list)
+    variable_states: list[dict] = Field(default_factory=list)
+    exception: Optional[str] = None
+
 
 
 class CandidateInvariant(BaseModel):
@@ -92,3 +99,63 @@ class DriftSample(BaseModel):
     baseline_score: float
     delta_pct: float
     alert: bool
+
+
+# Stage 1 — Static Analysis Evidence Models (Phase 3)
+
+class SourceLocation(BaseModel):
+    file: str = ""
+    line: int = 0
+    column: Optional[int] = None
+    function: Optional[str] = None
+
+
+class ComparisonFact(BaseModel):
+    left: str
+    operator: str
+    right: Any
+    location: SourceLocation
+
+
+class ConditionFact(BaseModel):
+    expression: str
+    logical_operator: Optional[str] = None  # "AND", "OR", "NOT", or None
+    comparisons: list[ComparisonFact] = Field(default_factory=list)
+    sub_conditions: list[ConditionFact] = Field(default_factory=list)
+    location: SourceLocation
+    outcome: Optional[str] = None
+
+
+class AssignmentFact(BaseModel):
+    target: str
+    value: Any
+    location: SourceLocation
+
+
+class ReturnFact(BaseModel):
+    value: str
+    location: SourceLocation
+
+
+class FunctionCallFact(BaseModel):
+    function_name: str
+    arguments: list[str] = Field(default_factory=list)
+    location: SourceLocation
+
+
+class FunctionFact(BaseModel):
+    name: str
+    parameters: list[str] = Field(default_factory=list)
+    location: SourceLocation
+
+
+class StaticAnalysisResult(BaseModel):
+    file: str
+    language: str
+    functions: list[FunctionFact] = Field(default_factory=list)
+    conditions: list[ConditionFact] = Field(default_factory=list)
+    comparisons: list[ComparisonFact] = Field(default_factory=list)
+    assignments: list[AssignmentFact] = Field(default_factory=list)
+    returns: list[ReturnFact] = Field(default_factory=list)
+    calls: list[FunctionCallFact] = Field(default_factory=list)
+

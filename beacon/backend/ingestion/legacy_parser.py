@@ -12,6 +12,7 @@ scope for the demo (architecture doc Section 5, 'Legacy parsing' row).
 """
 
 from pathlib import Path
+from ingestion.static_analyzer import get_analyzer
 
 
 def load_source(path: str | Path) -> str:
@@ -19,7 +20,14 @@ def load_source(path: str | Path) -> str:
 
 
 def extract_ast_structure(path: str | Path) -> dict:
-    """TODO: real implementation would use tree-sitter to extract conditionals,
-    control flow, and call graph. Returns a placeholder for now — Stage 2a
-    works fine on raw source text alone for the demo's scope."""
-    return {"note": "AST structure extraction not implemented for demo scope; see docstring."}
+    """Perform real static analysis on source file using static_analyzer module.
+
+    Extracts functions, conditions, comparisons, boolean logic, assignments,
+    returns, function calls, and precise source line/column locations.
+    """
+    file_path = Path(path)
+    source_code = file_path.read_text()
+    analyzer = get_analyzer("python")
+    result = analyzer.analyze(source_code, file_name=file_path.name)
+    return result.model_dump(mode="json")
+

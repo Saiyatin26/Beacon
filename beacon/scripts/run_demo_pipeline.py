@@ -56,18 +56,34 @@ def get_validated_invariants(traces):
 
 
 def main():
+    print("==================================================================")
+    print("           BEACON DETERMINISTIC DEMONSTRATION RUNNER             ")
+    print("==================================================================\n")
+
     trace_path = ROOT / "legacy_sample" / "trace_log.json"
     if not trace_path.exists():
         trace_path.write_text(json.dumps(generate_traces(), indent=2))
-        print("Generated sample traces.\n")
+        print("Stage 1: Generated synthetic trace log (legacy_sample/trace_log.json).")
     traces = load_traces(trace_path)
+    print(f"Stage 1: Loaded {len(traces)} execution traces into TraceEvent objects.\n")
 
     invariants = get_validated_invariants(traces)
+    print("Stage 2: Mined & Validated Invariants:")
+    for inv in invariants:
+        status = "GRADUATED" if inv.graduated else "DISCARDED"
+        print(f"  - [{status}] Invariant #{inv.invariant_id}: IF {inv.condition} THEN {inv.consequence} (Confidence: {inv.confidence:.2f}, Severity: {inv.severity})")
+    print()
+
     oracles = [synthesize_oracle(invariant) for invariant in invariants if invariant.graduated]
-    print(f"Graduated invariants: {[oracle.invariant_id for oracle in oracles]}\n")
+    print("Stage 3: Synthesized Executable Oracles:")
+    for oracle in oracles:
+        print(f"  - Oracle #{oracle.invariant_id}: Property -> \"{oracle.property}\"")
+    print()
+
     if not oracles:
         raise RuntimeError("No invariants graduated; certification cannot run.")
 
+    print("Stage 4: Certifying Modernized Application against Legacy System Oracles...")
     run = certify(
         oracles=oracles,
         modern_fn=modern_loan_approval.evaluate_loan,
@@ -82,3 +98,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
