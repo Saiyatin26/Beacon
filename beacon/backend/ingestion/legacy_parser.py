@@ -19,7 +19,9 @@ def load_source(path: str | Path) -> str:
     return Path(path).read_text()
 
 
-def extract_ast_structure(path: str | Path) -> dict:
+from common.models import StaticAnalysisResult
+
+def extract_ast_structure(path: str | Path) -> StaticAnalysisResult:
     """Perform real static analysis on source file using static_analyzer module.
 
     Extracts functions, conditions, comparisons, boolean logic, assignments,
@@ -29,5 +31,4 @@ def extract_ast_structure(path: str | Path) -> dict:
     source_code = file_path.read_text()
     analyzer = get_analyzer("python")
     result = analyzer.analyze(source_code, file_name=file_path.name)
-    return result.model_dump(mode="json")
-
+    return result

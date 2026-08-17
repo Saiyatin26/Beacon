@@ -1,60 +1,64 @@
-# BEACON Repository Baseline
+# Phase 6 Baseline Demonstration Output
 
-**Date:** 2026-08-16  
-**Environment:** Windows (PowerShell)  
+In Phase 6, we finalized the mining and validation architecture and introduced the `UnifiedEvidencePackage`. We integrated local hypothesis-based boundary validation, semantic contradiction checking, and confidence scoring. 
 
----
+The demonstration tests whether the system can:
+1. Extract static business logic variables from the legacy system AST
+2. Aggregate runtime observations and match inputs against static conditions
+3. Identify the undocumented loan rejection invariant and graduate it through the validation gate
+4. Detect behavioral violations (the "bug") in the modernized application
 
-## 1. System & Environment Specifications
+## Environment
+- OS: Windows
+- Interpreter: Python 3.11+
+- Trace samples: 1000 generated synthetic `TraceEvent` records
 
-- **Python Version:** `Python 3.11.9` (64-bit) (compatible environment for `numpy==1.26.4` and full dependency set)
-- **Node.js Version:** `v24.14.1`
-- **Virtual Environment:** Active at `.venv` (`c:\Users\Navaneeth Motamarry\Beacon\Beacon\beacon\.venv`)
+## Command Run
 
----
+```powershell
+python .\scripts\run_demo_pipeline.py
+```
 
-## 2. Component & Service Status
+## Results
 
-### Backend Service (FastAPI)
-- **Status:** Working / Running
-- **Server:** Uvicorn on `http://127.0.0.1:8000`
-- **Health Check:** `http://127.0.0.1:8000/` $\rightarrow$ `{"name":"BEACON API","status":"ok","storage":"local SQLite","docs":"/docs","health":"/health"}`
-- **Swagger Documentation:** Available and functional at `http://127.0.0.1:8000/docs`
+```text
+==================================================================
+           BEACON DETERMINISTIC DEMONSTRATION RUNNER
+==================================================================
 
-### Frontend Application (React + Vite)
-- **Status:** Working / Running
-- **Server:** Vite Dev Server on `http://localhost:5173`
-- **Title:** `BEACON Dashboard`
+Stage 1a: Generated synthetic trace log (legacy_sample/trace_log.json).
+Stage 1b: Loaded 1000 execution traces into TraceEvent objects.
+Stage 1c: Static AST extraction completed for legacy_sample\legacy_loan_approval.py.
+Stage 1d: Built UnifiedEvidencePackage containing 3 correlated facts.
 
----
+Running deterministic local invariant mining and validation.
 
-## 3. Verification & Demo Results
+Stage 2: Mined & Validated Invariants:
+  - [GRADUATED] Invariant #local-1b27dc7b: IF credit_score < 600 and debt_ratio > 0.4 THEN REJECT (Confidence: 0.78, Severity: critical)
+  - [GRADUATED] Invariant #local-c7180ce5: IF credit_score < 500 THEN REJECT (Confidence: 0.75, Severity: critical)
 
-### Automated Tests (`pytest -v`)
-- **Total Tests:** 10
-- **Passed:** 10
-- **Failed:** 0
-- **Execution Time:** ~1.70 seconds
-- **Test Modules Verified:**
-  - `tests/test_api.py` (1 passed)
-  - `tests/test_local_demo_api.py` (3 passed)
-  - `tests/test_scoring.py` (6 passed)
+Stage 3: Synthesized Executable Oracles:
+  - Oracle #local-1b27dc7b: Property -> "assert not (credit_score < 600 and debt_ratio > 0.4) or decision == 'REJECT'"
+  - Oracle #local-c7180ce5: Property -> "assert not (credit_score < 500) or decision == 'REJECT'"
 
-### Pipeline Demo Runner (`scripts/run_demo_pipeline.py`)
-- **Status:** Runnable & Fully Passing
-- **Extracted Invariants:** 3 graduated invariants (`local-c7180ce5`, `local-1b27dc7b`, `local-9aae83ec`)
-- **Equivalence Score (Buggy Modernization):** `66.7%` (11 violations detected over 52 checks)
-- **Persistence:** Certification run saved to SQLite at `data/beacon.sqlite3`
+Stage 4: Certifying Modernized Application against Legacy System Oracles...
+================================================================================
+BEACON CERTIFICATION REPORT: FAILED
+================================================================================
+Timestamp: 2026-08-17T12:00:00Z
+Target: Loan approval
+Equivalence Score: 50.00%
 
----
+Violations Detected: 1
+--------------------------------------------------------------------------------
+1. Expected: REJECT | Actual: APPROVE
+   Counterexample Inputs: {'annual_income': 43492.3, 'credit_score': 540, 'debt_ratio': 0.42}
+   Legacy Output: REJECT
+   Modern Output: APPROVE
+================================================================================
+```
 
-## 4. Acceptance Criteria Checklist
+## Interpretation
+The output demonstrates that the integrated architecture cleanly captures both components of the invariant without human involvement. The unconfirmed candidate list functions exactly as required: rules lacking sufficient boundary validation or evidence diversity are filtered out, while true invariant rules confidently generate execution oracles. 
 
-- [x] Python environment works
-- [x] `requirements.txt` installs cleanly into `.venv`
-- [x] FastAPI starts on port 8000
-- [x] `/docs` Swagger UI works
-- [x] React/Vite dev server starts on port 5173
-- [x] Frontend loads successfully
-- [x] `pytest -v` passes (10 passing tests recorded)
-- [x] Repository baseline documented in `docs/baseline.md`
+The demo successfully identified that the modernized `modern_loan_approval` script hallucinates an `APPROVE` decision for inputs satisfying `credit_score < 600 and debt_ratio > 0.4`.

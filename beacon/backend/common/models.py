@@ -32,6 +32,15 @@ class CandidateInvariant(BaseModel):
     consequence: str        # e.g. "reject"
     source_lines: list[int] = Field(default_factory=list)
     severity: Severity = "medium"
+    evidence_ids: list[str] = Field(default_factory=list)
+    generation_method: str = "offline"
+    timestamp: str = ""
+    rationale: Optional[str] = None
+
+
+class UnconfirmedCandidate(CandidateInvariant):
+    """Stage 2 output for candidates that failed the confidence gate."""
+    confidence: float
 
 
 class EvidenceReport(BaseModel):
@@ -50,12 +59,8 @@ class ValidationReport(BaseModel):
     counterexamples: list[dict] = Field(default_factory=list)
 
 
-class ValidatedInvariant(BaseModel):
+class ValidatedInvariant(CandidateInvariant):
     """Stage 2d output — the unit that graduates (or doesn't) to Stage 3."""
-    invariant_id: str
-    condition: str
-    consequence: str
-    severity: Severity
     confidence: float
     graduated: bool  # confidence >= settings.confidence_threshold
 

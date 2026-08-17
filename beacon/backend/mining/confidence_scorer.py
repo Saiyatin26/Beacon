@@ -10,17 +10,18 @@ architecture doc Section 9 flags these as provisional and tunable against real
 sample data.
 """
 
+from typing import Union
 from common.config import settings
-from common.models import CandidateInvariant, EvidenceReport, ValidationReport, ValidatedInvariant
+from common.models import CandidateInvariant, EvidenceReport, ValidationReport, ValidatedInvariant, UnconfirmedCandidate
 
-WEIGHTS = {"evidence": 0.25, "diversity": 0.25, "boundary": 0.35, "contradiction": 0.5}
+WEIGHTS = {"evidence": 0.15, "diversity": 0.15, "boundary": 0.7, "contradiction": 0.5}
 
 
 def score_confidence(
     candidate: CandidateInvariant,
     evidence: EvidenceReport,
     validation: ValidationReport,
-) -> ValidatedInvariant:
+) -> Union[ValidatedInvariant, UnconfirmedCandidate]:
     contradiction_penalty = min(validation.contradiction_count * 0.5, 1.0)
 
     confidence = (
@@ -31,11 +32,30 @@ def score_confidence(
     )
     confidence = max(0.0, min(1.0, confidence))
 
-    return ValidatedInvariant(
-        invariant_id=candidate.invariant_id,
-        condition=candidate.condition,
-        consequence=candidate.consequence,
-        severity=candidate.severity,
-        confidence=round(confidence, 4),
-        graduated=confidence >= settings.confidence_threshold,
-    )
+    if confidence >= settings.confidence_threshold:
+        return ValidatedInvariant(
+            invariant_id=candidate.invariant_id,
+            condition=candidate.condition,
+            consequence=candidate.consequence,
+            severity=candidate.severity,
+            evidence_ids=candidate.evidence_ids,
+            generation_method=candidate.generation_method,
+            timestamp=candidate.timestamp,
+            rationale=candidate.rationale,
+            source_lines=candidate.source_lines,
+            confidence=round(confidence, 4),
+            graduated=True,
+        )
+    else:
+        return UnconfirmedCandidate(
+            invariant_id=candidate.invariant_id,
+            condition=candidate.condition,
+            consequence=candidate.consequence,
+            severity=candidate.severity,
+            evidence_ids=candidate.evidence_ids,
+            generation_method=candidate.generation_method,
+            timestamp=candidate.timestamp,
+            rationale=candidate.rationale,
+            source_lines=candidate.source_lines,
+            confidence=round(confidence, 4),
+        )

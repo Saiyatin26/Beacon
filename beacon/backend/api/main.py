@@ -19,7 +19,7 @@ from common.local_store import local_store
 from common.models import DriftSample
 from ingestion.legacy_parser import load_source
 from ingestion.trace_loader import load_traces
-from mining.offline_miner import mine_python_decision_rules
+
 from oracle.interpreter import run_oracle
 from oracle.synthesizer import synthesize_oracle
 
@@ -62,15 +62,25 @@ def _sample_traces():
     return load_traces(trace_path)
 
 
-def _sample_oracles():
-    invariants = mine_python_decision_rules(
-        load_source(SAMPLE_DIR / "legacy_loan_approval.py"),
-        _sample_traces(),
-        legacy_loan_approval.evaluate_loan,
-        FIELD_BOUNDS,
-    )
-    return [synthesize_oracle(invariant) for invariant in invariants if invariant.graduated], invariants
+from ingestion.legacy_parser import extract_ast_structure
+from evidence.builder import build_evidence_package
+from mining.pipeline import run_mining_pipeline
 
+def _sample_oracles():
+    traces = _sample_traces()
+    legacy_file = str(SAMPLE_DIR / "legacy_loan_approval.py")
+    static_result = extract_ast_structure(legacy_file)
+    evidence_pkg = build_evidence_package(static_result, traces)
+    
+    graduated, unconfirmed = run_mining_pipeline(
+        evidence_package=evidence_pkg,
+        legacy_fn=legacy_loan_approval.evaluate_loan,
+        field_bounds=FIELD_BOUNDS,
+        already_validated=[],
+        use_atlas=False,
+        use_llm=False
+    )
+    return [synthesize_oracle(invariant) for invariant in graduated], graduated
 
 def _implementation(name: str):
     return modern_loan_approval.evaluate_loan if name == "buggy" else legacy_loan_approval.evaluate_loan

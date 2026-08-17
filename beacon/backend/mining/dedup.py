@@ -13,7 +13,11 @@ Requires an Atlas Search vector index named 'invariant_vector_index' on the
 pymongo cannot create vector indexes itself, see common/db.py).
 """
 
-import voyageai
+try:
+    import voyageai
+except ImportError:
+    voyageai = None
+
 from common.config import settings
 from common.db import invariants_col
 
@@ -21,9 +25,13 @@ _voyage_client = None
 SIMILARITY_THRESHOLD = 0.92
 
 
-def _get_voyage() -> voyageai.Client:
+from typing import Any
+
+def _get_voyage() -> Any:
     global _voyage_client
     if _voyage_client is None:
+        if voyageai is None:
+            raise ImportError("voyageai is not installed")
         _voyage_client = voyageai.Client(api_key=settings.voyage_api_key)
     return _voyage_client
 

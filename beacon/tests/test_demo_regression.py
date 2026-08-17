@@ -14,9 +14,10 @@ sys.path.append(str(ROOT / "legacy_sample"))
 import legacy_loan_approval
 import modern_loan_approval
 from generate_traces import generate_traces
-from ingestion.legacy_parser import load_source
+from ingestion.legacy_parser import extract_ast_structure
 from ingestion.trace_loader import load_traces
-from mining.offline_miner import mine_python_decision_rules
+from evidence.builder import build_evidence_package
+from mining.pipeline import run_mining_pipeline
 from oracle.synthesizer import synthesize_oracle
 from certification.runner import certify
 from common.models import TraceEvent, ValidatedInvariant, Oracle, CertificationRun
@@ -31,7 +32,7 @@ FIELD_BOUNDS = {
 
 def test_trace_generation_and_loading(tmp_path):
     """Test that trace generation produces valid dictionaries and load_traces creates TraceEvent objects."""
-    trace_dicts = generate_traces(n_random=50)
+    trace_dicts = generate_traces(n_random=500)
     assert len(trace_dicts) > 50
 
     trace_file = tmp_path / "test_traces.json"
@@ -46,19 +47,26 @@ def test_trace_generation_and_loading(tmp_path):
 
 
 def test_offline_mining_produces_validated_invariants(tmp_path):
-    """Test that offline miner extracts the known business rule invariants deterministically."""
-    source = load_source(ROOT / "legacy_sample" / "legacy_loan_approval.py")
-    trace_dicts = generate_traces(n_random=50)
+    """Test that offline miner extracts the known business rule invariants deterministically via the unified evidence package."""
+    legacy_file = str(ROOT / "legacy_sample" / "legacy_loan_approval.py")
+    static_result = extract_ast_structure(legacy_file)
+    
+    trace_dicts = generate_traces(n_random=500)
     trace_file = tmp_path / "traces.json"
     import json
     trace_file.write_text(json.dumps(trace_dicts))
     traces = load_traces(trace_file)
 
-    invariants = mine_python_decision_rules(
-        source, traces, legacy_loan_approval.evaluate_loan, FIELD_BOUNDS
+    evidence_pkg = build_evidence_package(static_result, traces)
+    graduated, unconfirmed = run_mining_pipeline(
+        evidence_package=evidence_pkg,
+        legacy_fn=legacy_loan_approval.evaluate_loan,
+        field_bounds=FIELD_BOUNDS,
+        already_validated=[],
+        use_atlas=False,
+        use_llm=False
     )
-    assert len(invariants) > 0
-    graduated = [inv for inv in invariants if inv.graduated]
+    
     assert len(graduated) > 0
 
     # Ensure the key hidden invariant (credit_score < 600 and debt_ratio > 0.4) was mined
@@ -68,17 +76,27 @@ def test_offline_mining_produces_validated_invariants(tmp_path):
 
 def test_buggy_modernization_fails_certification():
     """Regression test: broken modernized app causes BEACON to detect behavioral violations."""
-    source = load_source(ROOT / "legacy_sample" / "legacy_loan_approval.py")
+    legacy_file = str(ROOT / "legacy_sample" / "legacy_loan_approval.py")
+    static_result = extract_ast_structure(legacy_file)
+    
     trace_file = ROOT / "legacy_sample" / "trace_log.json"
     if not trace_file.exists():
         import json
-        trace_file.write_text(json.dumps(generate_traces(), indent=2))
+        trace_file.write_text(json.dumps(generate_traces(n_random=1000), indent=2))
 
     traces = load_traces(trace_file)
-    invariants = mine_python_decision_rules(
-        source, traces, legacy_loan_approval.evaluate_loan, FIELD_BOUNDS
+    evidence_pkg = build_evidence_package(static_result, traces)
+    
+    graduated, unconfirmed = run_mining_pipeline(
+        evidence_package=evidence_pkg,
+        legacy_fn=legacy_loan_approval.evaluate_loan,
+        field_bounds=FIELD_BOUNDS,
+        already_validated=[],
+        use_atlas=False,
+        use_llm=False
     )
-    oracles = [synthesize_oracle(inv) for inv in invariants if inv.graduated]
+    
+    oracles = [synthesize_oracle(inv) for inv in graduated]
     assert len(oracles) > 0
 
     # Run certification against intentionally buggy modernization
@@ -105,17 +123,27 @@ def test_buggy_modernization_fails_certification():
 
 def test_equivalent_modernization_passes_certification():
     """Regression test: correct modernized app achieves 100% equivalence score."""
-    source = load_source(ROOT / "legacy_sample" / "legacy_loan_approval.py")
+    legacy_file = str(ROOT / "legacy_sample" / "legacy_loan_approval.py")
+    static_result = extract_ast_structure(legacy_file)
+    
     trace_file = ROOT / "legacy_sample" / "trace_log.json"
     if not trace_file.exists():
         import json
-        trace_file.write_text(json.dumps(generate_traces(), indent=2))
+        trace_file.write_text(json.dumps(generate_traces(n_random=1000), indent=2))
 
     traces = load_traces(trace_file)
-    invariants = mine_python_decision_rules(
-        source, traces, legacy_loan_approval.evaluate_loan, FIELD_BOUNDS
+    evidence_pkg = build_evidence_package(static_result, traces)
+    
+    graduated, unconfirmed = run_mining_pipeline(
+        evidence_package=evidence_pkg,
+        legacy_fn=legacy_loan_approval.evaluate_loan,
+        field_bounds=FIELD_BOUNDS,
+        already_validated=[],
+        use_atlas=False,
+        use_llm=False
     )
-    oracles = [synthesize_oracle(inv) for inv in invariants if inv.graduated]
+    
+    oracles = [synthesize_oracle(inv) for inv in graduated]
 
     run: CertificationRun = certify(
         oracles=oracles,
