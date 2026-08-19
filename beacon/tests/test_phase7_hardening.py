@@ -130,19 +130,21 @@ def test_grounding_rejects_source_line_mismatch():
 # 5. Normalization-Aware Provenance Matching
 # ==============================================================================
 
-@patch("mining.candidate_generator._get_client")
-def test_normalization_aware_provenance_recovers_evidence(mock_get_client):
+@patch("llm.manager.ProviderManager.generate")
+def test_normalization_aware_provenance_recovers_evidence(mock_generate):
     pkg = _get_sample_evidence_package()
 
     # Raw condition with inverted operand order: debt_ratio > 0.4 and credit_score < 600
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(
-        type="text",
-        text='[{"condition": "debt_ratio > 0.4 and credit_score < 600", "consequence": "REJECT", "severity": "critical"}]'
-    )]
-    mock_client = MagicMock()
-    mock_client.messages.create.return_value = mock_response
-    mock_get_client.return_value = mock_client
+    mock_generate.return_value = MagicMock(
+        success=True,
+        provider_name="openrouter",
+        model_name="anthropic/claude-3.5-sonnet",
+        latency_ms=100.0,
+        fallback_occurred=False,
+        fallback_chain=["openrouter"],
+        parsed_json=[{"condition": "debt_ratio > 0.4 and credit_score < 600", "consequence": "REJECT", "severity": "critical"}],
+        error=None,
+    )
 
     generator = LLMCandidateGenerator()
     candidates = generator.propose_candidates(pkg)

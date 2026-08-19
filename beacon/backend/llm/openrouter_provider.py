@@ -1,0 +1,133 @@
+"""OpenRouter LLM Provider — Primary Cloud Provider for BEACON."""
+
+import json
+import logging
+import time
+import urllib.error
+import urllib.request
+from typing import Any, Optional
+
+from common.config import settings
+from .base import LLMProvider, LLMResponse, extract_json_payload
+
+logger = logging.getLogger(__name__)
+
+
+class OpenRouterProvider(LLMProvider):
+    """OpenRouter Cloud Provider (Primary Cloud Provider)."""
+
+    name: str = "openrouter"
+
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: float = 30.0,
+    ):
+        self.api_key = (api_key or settings.openrouter_api_key or "").strip()
+        self.model = model or settings.openrouter_model or "anthropic/claude-3.5-sonnet"
+        self.base_url = (base_url or settings.openrouter_base_url or "https://openrouter.ai/api/v1").rstrip("/")
+        self.timeout = timeout
+
+    def is_available(self) -> bool:
+        """Returns True if the OpenRouter API key is configured."""
+        return bool(self.api_key)
+
+    def generate(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        json_mode: bool = True,
+    ) -> LLMResponse:
+        if not self.is_available():
+            return LLMResponse(
+                raw_text="",
+                provider_name=self.name,
+                model_name=self.model,
+                success=False,
+                error="OpenRouter API key not configured.",
+            )
+
+        endpoint = f"{self.base_url}/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/Saiyatin26/Beacon",
+            "X-Title": "BEACON Invariant Miner",
+        }
+
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.0,
+        }
+
+        start_time = time.perf_counter()
+        try:
+            req_data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(endpoint, data=req_data, headers=headers, method="POST")
+
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                status_code = resp.getcode()
+                resp_bytes = resp.read()
+                resp_json = json.loads(resp_bytes.decode("utf-8"))
+
+            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+            choices = resp_json.get("choices", [])
+            if not choices:
+                return LLMResponse(
+                    raw_text="",
+                    provider_name=self.name,
+                    model_name=self.model,
+                    latency_ms=latency_ms,
+                    success=False,
+                    error="OpenRouter response contained no choices.",
+                )
+
+            raw_text = choices[0].get("message", {}).get("content", "")
+            parsed_json = extract_json_payload(raw_text) if json_mode else None
+
+            return LLMResponse(
+                raw_text=raw_text,
+                parsed_json=parsed_json,
+                provider_name=self.name,
+                model_name=self.model,
+                latency_ms=latency_ms,
+                success=True,
+                metadata={
+                    "usage": resp_json.get("usage", {}),
+                    "model_id": resp_json.get("model", self.model),
+                },
+            )
+
+        except urllib.error.HTTPError as exc:
+            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            err_msg = f"OpenRouter HTTP {exc.code}: {exc.reason}"
+            logger.error(err_msg)
+            return LLMResponse(
+                raw_text="",
+                provider_name=self.name,
+                model_name=self.model,
+                latency_ms=latency_ms,
+                success=False,
+                error=err_msg,
+            )
+        except Exception as exc:
+            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            err_msg = f"OpenRouter request error: {exc}"
+            logger.error(err_msg)
+            return LLMResponse(
+                raw_text="",
+                provider_name=self.name,
+                model_name=self.model,
+                latency_ms=latency_ms,
+                success=False,
+                error=err_msg,
+            )

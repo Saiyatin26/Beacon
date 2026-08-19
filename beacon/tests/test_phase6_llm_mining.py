@@ -237,28 +237,21 @@ def test_filter_grounded_candidates():
 # 6. LLM Failure & Exception Handling
 # ==============================================================================
 
-@patch("mining.candidate_generator._get_client")
-def test_llm_generator_handles_api_errors_gracefully(mock_get_client):
+@patch("llm.manager.ProviderManager.generate")
+def test_llm_generator_handles_api_errors_gracefully(mock_generate):
     pkg = _get_sample_evidence_package()
     generator = LLMCandidateGenerator()
 
-    # 1. Rate Limit Error
-    mock_client = MagicMock()
-    mock_client.messages.create.side_effect = RateLimitError(
-        message="Rate limited", response=MagicMock(status_code=429), body=None
-    )
-    mock_get_client.return_value = mock_client
+    # 1. API Error
+    mock_generate.return_value = MagicMock(success=False, error="Rate limited", parsed_json=None)
     assert generator.propose_candidates(pkg) == []
 
     # 2. Connection Error
-    mock_client.messages.create.side_effect = APIConnectionError(request=MagicMock())
+    mock_generate.return_value = MagicMock(success=False, error="Connection timeout", parsed_json=None)
     assert generator.propose_candidates(pkg) == []
 
     # 3. Invalid JSON Output
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(type="text", text="Sorry, I cannot format this as JSON.")]
-    mock_client.messages.create.side_effect = None
-    mock_client.messages.create.return_value = mock_response
+    mock_generate.return_value = MagicMock(success=True, parsed_json=None, raw_text="Sorry, not JSON")
     assert generator.propose_candidates(pkg) == []
 
 
@@ -266,36 +259,39 @@ def test_llm_generator_handles_api_errors_gracefully(mock_get_client):
 # 7. LLM Multiple Candidates Generation & Swappability
 # ==============================================================================
 
-@patch("mining.candidate_generator._get_client")
-def test_llm_generator_proposes_multiple_grounded_candidates(mock_get_client):
+@patch("llm.manager.ProviderManager.generate")
+def test_llm_generator_proposes_multiple_grounded_candidates(mock_generate):
     pkg = _get_sample_evidence_package()
     static_id_12 = next((s.evidence_id for s in pkg.static_evidence_items if getattr(s, "line", None) == 12), "EV-S-001")
     static_id_14 = next((s.evidence_id for s in pkg.static_evidence_items if getattr(s, "line", None) == 14), "EV-S-002")
 
-    llm_payload = json.dumps([
-        {
-            "condition": "credit_score < 500",
-            "consequence": "REJECT",
-            "severity": "critical",
-            "rationale": "Direct static reject branch.",
-            "supporting_evidence_ids": [static_id_12],
-            "source_lines": [12],
-        },
-        {
-            "condition": "credit_score < 600 and debt_ratio > 0.4",
-            "consequence": "REJECT",
-            "severity": "critical",
-            "rationale": "Correlated branch rejection.",
-            "supporting_evidence_ids": [static_id_14],
-            "source_lines": [14],
-        },
-    ])
-
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(type="text", text=llm_payload)]
-    mock_client = MagicMock()
-    mock_client.messages.create.return_value = mock_response
-    mock_get_client.return_value = mock_client
+    mock_generate.return_value = MagicMock(
+        success=True,
+        provider_name="openrouter",
+        model_name="anthropic/claude-3.5-sonnet",
+        latency_ms=120.0,
+        fallback_occurred=False,
+        fallback_chain=["openrouter"],
+        parsed_json=[
+            {
+                "condition": "credit_score < 500",
+                "consequence": "REJECT",
+                "severity": "critical",
+                "rationale": "Direct static reject branch.",
+                "supporting_evidence_ids": [static_id_12],
+                "source_lines": [12],
+            },
+            {
+                "condition": "credit_score < 600 and debt_ratio > 0.4",
+                "consequence": "REJECT",
+                "severity": "critical",
+                "rationale": "Correlated branch rejection.",
+                "supporting_evidence_ids": [static_id_14],
+                "source_lines": [14],
+            },
+        ],
+        error=None,
+    )
 
     generator = LLMCandidateGenerator()
     candidates = generator.propose_candidates(pkg)
@@ -312,27 +308,29 @@ def test_llm_generator_proposes_multiple_grounded_candidates(mock_get_client):
 # 8. End-to-End Pipeline Swappability (Offline vs LLM)
 # ==============================================================================
 
-@patch("mining.candidate_generator._get_client")
-def test_end_to_end_pipeline_swappability(mock_get_client):
+@patch("llm.manager.ProviderManager.generate")
+def test_end_to_end_pipeline_swappability(mock_generate):
     pkg = _get_sample_evidence_package()
     static_id_14 = next((s.evidence_id for s in pkg.static_evidence_items if getattr(s, "line", None) == 14), "EV-S-002")
 
     # Setup mocked LLM returning valid candidates
-    llm_payload = json.dumps([
-        {
+    mock_generate.return_value = MagicMock(
+        success=True,
+        provider_name="openrouter",
+        model_name="anthropic/claude-3.5-sonnet",
+        latency_ms=110.0,
+        fallback_occurred=False,
+        fallback_chain=["openrouter"],
+        parsed_json=[{
             "condition": "debt_ratio > 0.4 and credit_score < 600",  # Tests normalization
             "consequence": "REJECT",
             "severity": "critical",
             "rationale": "Undocumented rejection rule.",
             "supporting_evidence_ids": [static_id_14],
             "source_lines": [14],
-        }
-    ])
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(type="text", text=llm_payload)]
-    mock_client = MagicMock()
-    mock_client.messages.create.return_value = mock_response
-    mock_get_client.return_value = mock_client
+        }],
+        error=None,
+    )
 
     # Run Offline
     offline_grad, offline_unconf = run_mining_pipeline(

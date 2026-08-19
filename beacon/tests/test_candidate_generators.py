@@ -24,16 +24,21 @@ FIELD_BOUNDS = {
 }
 
 
-@patch("mining.candidate_generator._get_client")
-def test_generator_equivalence_and_validation(mock_get_client, tmp_path):
+@patch("llm.manager.ProviderManager.generate")
+def test_generator_equivalence_and_validation(mock_generate, tmp_path):
     """Prove that both generators produce the same structures processed by the same validation components."""
     
-    # Mock LLM
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(type="text", text='[{"condition": "credit_score < 600 and debt_ratio > 0.4", "consequence": "REJECT", "severity": "critical", "supporting_evidence_ids": [], "source_lines": [14]}]')]
-    mock_client = MagicMock()
-    mock_client.messages.create.return_value = mock_response
-    mock_get_client.return_value = mock_client
+    # Mock LLM response from provider
+    mock_generate.return_value = MagicMock(
+        success=True,
+        provider_name="openrouter",
+        model_name="anthropic/claude-3.5-sonnet",
+        latency_ms=100.0,
+        fallback_occurred=False,
+        fallback_chain=["openrouter"],
+        parsed_json=[{"condition": "credit_score < 600 and debt_ratio > 0.4", "consequence": "REJECT", "severity": "critical", "supporting_evidence_ids": [], "source_lines": [14]}],
+        error=None,
+    )
 
     # Build Evidence Package
     legacy_file = str(ROOT / "legacy_sample" / "legacy_loan_approval.py")
@@ -62,7 +67,7 @@ def test_generator_equivalence_and_validation(mock_get_client, tmp_path):
         use_llm=True
     )
     
-    assert mock_get_client.called
+    assert mock_generate.called
     
     assert len(llm_graduated) + len(llm_unconfirmed) > 0
     all_llm = llm_graduated + llm_unconfirmed

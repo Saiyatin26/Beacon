@@ -97,9 +97,19 @@ def root():
     }
 
 
+from llm.manager import get_provider_manager
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "storage": "local SQLite"}
+
+
+@app.get("/api/llm/status")
+def get_llm_status():
+    """Returns sanitized multi-provider LLM status and availability."""
+    manager = get_provider_manager()
+    return manager.get_status()
 
 
 @app.get("/runs")

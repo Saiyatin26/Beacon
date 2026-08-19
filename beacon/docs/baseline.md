@@ -1,7 +1,7 @@
 # Phases 1–7 Baseline & Architectural Verification
 
 ## Overview
-This document records the baseline results and architectural verification of the BEACON system at the completion of Phase 7 (Adversarial Behavioral Invariant Validation and Hardened Grounding Pipeline).
+This document records the baseline results and architectural verification of the BEACON system at the completion of Phase 7 and the Decoupled Multi-Provider Infrastructure Layer (OpenRouter, Anthropic, Ollama, Offline).
 
 The verified end-to-end flow is:
 ```
@@ -24,13 +24,20 @@ The verified end-to-end flow is:
                 │ EVIDENCE SELECTION    │
                 └───────────┬───────────┘
                             ▼
-                    STRUCTURED LLM CONTEXT
+                    STRUCTURED PROMPT
                             │
                             ▼
-                           LLM
+                ┌───────────────────────┐
+                │   PROVIDER MANAGER    │
+                │  (OpenRouter Primary, │
+                │   Anthropic Supported,│
+                │   Ollama Local,       │
+                │   Offline Fallback)   │
+                └───────────┬───────────┘
                             │
                             ▼
                    CANDIDATE INVARIANT
+               (with full LLM provenance)
                             │
                             ▼
                       NORMALIZATION
@@ -87,15 +94,15 @@ The verified end-to-end flow is:
               UNCONFIRMED    VALIDATED
               / INVALIDATED     │
                                 ▼
-                           NEXT PHASES
+                           PHASE 8 ORACLES
 ```
 
-## System Environment & Parser Specification
+## System Environment & Specification
 - **Operating System**: Windows (win32)
 - **Python Version**: Python 3.11.9
 - **Current Active Parser**: Python AST parser (`backend/ingestion/legacy_parser.py`, `backend/ingestion/static_analyzer.py`), extracting structured facts (conditions, comparisons, assignments, function calls, return statements, and source lines).
-- **Multi-Language Parser Roadmap**: Tree-sitter multi-language AST parsing (for Java, COBOL, C/C++, etc.) planned for future phases.
-- **Test Suite Status**: **78 passed in 19.24s** (`python -m pytest -q`).
+- **Multi-Provider LLM Hierarchy**: OpenRouter (Primary), Anthropic (Supported), Ollama Qwen/Mistral (Local), Offline Rule Synthesizer (Deterministic fallback).
+- **Test Suite Status**: **87 passed in 12.39s** (`python -m pytest -q`).
 
 ## Deterministic Demonstration Execution
 
@@ -127,7 +134,7 @@ Stage 3: Synthesized Executable Oracles:
 
 Stage 4: Certifying Modernized Application against Legacy System Oracles...
 
-BEHAVIORAL EQUIVALENCE REPORT — run bdf525ae
+BEHAVIORAL EQUIVALENCE REPORT — run b00cca61
 Overall Equivalence Score: 50.2%
 
 By domain:
@@ -146,10 +153,11 @@ Saved this certification run to data/beacon.sqlite3 for the dashboard.
 ```
 
 ## Architectural Highlights Verified
-1. **Generic Infrastructure**: Zero hardcoded domain or business-rule conditions exist in generic infrastructure (`backend/evidence/builder.py`, `backend/ingestion/runtime_tracer.py`, `backend/mining/evidence_collector.py`, `backend/mining/grounding_checker.py`, `backend/mining/adversarial.py`).
-2. **Authoritative Evidence Package & Normalization**: `UnifiedEvidencePackage` is the authoritative source. Expressions are normalized to allow commutative AST matching and recover matching execution IDs and static evidence.
-3. **Semantic Grounding**: Candidates citing invalid variables, unsupported thresholds, nonexistent evidence IDs, mismatched source lines, or unsupported consequences are rejected immediately with `GROUNDING_FAILED`.
-4. **Adversarial Validation & Separated Metrics**: Multi-strategy testing generates exact boundaries ($T-\epsilon, T, T+\epsilon$), near-boundary jitters, combinatorial truth tables, and diverse property inputs, tracking `boundary_pass_rate` and `diverse_input_pass_rate` separately.
-5. **Counterexample Minimization & Refutation**: Deliberately incorrect candidates (e.g. `credit_score < 600 -> APPROVE`) are actively refuted, minimized to clean counterexamples, marked `INVALIDATED`, and strictly refused graduation.
-6. **Centralized Confidence Gating**: Confidence is scored centrally in `confidence_scorer.py` using weighted evidence, diversity, boundary pass rate, and contradiction penalties with an authoritative 0.8 gate.
-7. **Complete Audit Provenance & Reproducibility**: Full trace is preserved from Source Location $\to$ Static/Dynamic Evidence IDs $\to$ Unified Evidence $\to$ Candidate $\to$ Grounding Result $\to$ Validation Run ID $\to$ Counterexamples $\to$ Confidence Components $\to$ Final Status.
+1. **Decoupled Multi-Provider Layer**: `LLMCandidateGenerator` communicates strictly with `ProviderManager`. Supports OpenRouter (primary), Anthropic (supported), Ollama (local), and offline fallback.
+2. **Generic Infrastructure**: Zero hardcoded domain or business-rule conditions exist in generic infrastructure (`backend/evidence/builder.py`, `backend/ingestion/runtime_tracer.py`, `backend/mining/evidence_collector.py`, `backend/mining/grounding_checker.py`, `backend/mining/adversarial.py`).
+3. **Authoritative Evidence Package & Normalization**: `UnifiedEvidencePackage` is the authoritative source. Expressions are normalized to allow commutative AST matching and recover matching execution IDs and static evidence.
+4. **Semantic Grounding**: Candidates citing invalid variables, unsupported thresholds, nonexistent evidence IDs, mismatched source lines, or unsupported consequences are rejected immediately with `GROUNDING_FAILED`.
+5. **Adversarial Validation & Separated Metrics**: Multi-strategy testing generates exact boundaries ($T-\epsilon, T, T+\epsilon$), near-boundary jitters, combinatorial truth tables, and diverse property inputs, tracking `boundary_pass_rate` and `diverse_input_pass_rate` separately.
+6. **Counterexample Minimization & Refutation**: Deliberately incorrect candidates (e.g. `credit_score < 600 -> APPROVE`) are actively refuted, minimized to clean counterexamples, marked `INVALIDATED`, and strictly refused graduation.
+7. **Centralized Confidence Gating**: Confidence is scored centrally in `confidence_scorer.py` using weighted evidence, diversity, boundary pass rate, and contradiction penalties with an authoritative 0.8 gate.
+8. **Independent Certification**: Certification (Phases 9–10) executes against compiled executable oracles without calling any LLM.
