@@ -1,54 +1,76 @@
-"""Stage 4 — Certification run orchestrator.
+"""Stage 4 / Phase 9 — Cross-Version Certification Runner.
 
-Runs the full oracle set against a candidate ('modernized') implementation,
-scores it, and builds the CertificationRun report matching the format in the
-architecture doc Section 7.4 (overall score, domain breakdown, severity
-breakdown, per-violation detail with counterexamples).
+Wraps legacy and modernized implementations in adapters, runs the Phase-9
+CrossVersionCertificationEngine, and produces both the new CrossVersionCertificationReport
+and backward-compatible CertificationRun contracts.
 """
 
-import uuid
 from datetime import datetime, timezone
-from typing import Callable
-from common.models import Oracle, CertificationRun, Violation
-from oracle.interpreter import run_oracle
-from .scorer import equivalence_score, domain_scores
+from typing import Callable, Optional, Union
+import uuid
+
+from common.models import CertificationRun, Oracle, Violation
+from oracle.models import OracleDefinition
+from .adapters import LegacyAdapter, ModernizedAdapter
+from .engine import certification_engine
+from .models import CrossVersionCertificationReport
 
 
 def certify(
-    oracles: list[Oracle],
+    oracles: list[Union[Oracle, OracleDefinition]],
     modern_fn: Callable[..., dict],
     legacy_fn: Callable[..., dict],
     field_bounds: dict[str, tuple[float, float]],
-    domain_of: dict[str, str] | None = None,
+    domain_of: Optional[dict[str, str]] = None,
+    n_samples: int = 100,
+    seed: int = 42,
 ) -> CertificationRun:
-    oracles_by_id = {o.invariant_id: o for o in oracles}
-    results = [run_oracle(o, modern_fn, field_bounds) for o in oracles]
+    """Certifies a candidate modernized implementation against legacy reference
+    using the language-independent Phase-9 certification engine.
+    """
+    legacy_adapter = LegacyAdapter(target_fn=legacy_fn, name="legacy_reference", version="1.0.0")
+    modern_adapter = ModernizedAdapter(target_fn=modern_fn, name="modernized_candidate", version="2.0.0")
 
-    violations = []
-    for result in results:
-        if result["violated"] > 0 and result["counterexample"]:
-            oracle = oracles_by_id[result["invariant_id"]]
-            ce = result["counterexample"]
-            legacy_actual = legacy_fn(**ce["inputs"])
-            violations.append(Violation(
-                invariant_id=oracle.invariant_id,
-                expected=oracle.property,
-                legacy_output=str(legacy_actual.get("decision", "")).upper(),
-                modern_output=ce["actual"],
-                counterexample=ce["inputs"],
-                confidence=oracle.confidence,
-                severity=oracle.severity,
-            ))
+    report: CrossVersionCertificationReport = certification_engine.certify_equivalence(
+        oracles=oracles,
+        legacy_adapter=legacy_adapter,
+        modern_adapter=modern_adapter,
+        field_bounds=field_bounds,
+        domain_of=domain_of,
+        n_samples=n_samples,
+        seed=seed,
+    )
 
-    score = equivalence_score(results, oracles_by_id)
-    domains = domain_scores(results, oracles_by_id, domain_of or {})
+    # Convert regressions into backward-compatible Violation objects
+    oracles_by_id = {getattr(o, "oracle_id", getattr(o, "invariant_id", "")): o for o in oracles}
+    oracles_by_inv_id = {getattr(o, "invariant_id", getattr(o, "oracle_id", "")): o for o in oracles}
+
+    violations: list[Violation] = []
+    for reg in report.regressions:
+        orc = oracles_by_id.get(reg.oracle_id) or oracles_by_inv_id.get(reg.oracle_id)
+        inv_id = getattr(orc, "invariant_id", reg.oracle_id) if orc else reg.oracle_id
+        prop = getattr(orc, "property", "") if orc else ""
+        if not prop and orc:
+            prop = f"({getattr(orc, 'canonical_condition', '')}) implies (decision == '{getattr(orc, 'consequence', '')}')"
+        if not prop:
+            prop = str(reg.expected_behavior)
+
+        violations.append(Violation(
+            invariant_id=inv_id,
+            expected=prop,
+            legacy_output=str(reg.legacy_output),
+            modern_output=str(reg.modern_output),
+            counterexample=reg.input_values,
+            confidence=reg.confidence,
+            severity=reg.severity,
+        ))
 
     return CertificationRun(
-        run_id=str(uuid.uuid4())[:8],
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        equivalence_score=score,
-        domain_scores=domains,
+        run_id=report.certification_id.replace("RUN-", ""),
+        timestamp=report.timestamp,
+        equivalence_score=report.overall_equivalence_score,
+        domain_scores=report.domain_scores,
         violations=violations,
-        total_checked=sum(r["checked"] for r in results),
-        total_violated=sum(r["violated"] for r in results),
+        total_checked=report.total_applicable_probes,
+        total_violated=report.total_regressions,
     )

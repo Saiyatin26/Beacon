@@ -3,7 +3,7 @@ makes the six stages independently swappable — Stage 3 only needs to know the
 shape of an Invariant, not how Stage 2 produced it."""
 
 from __future__ import annotations
-from typing import Literal, Optional, Any
+from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 Severity = Literal["critical", "high", "medium", "low"]
@@ -39,9 +39,11 @@ class CandidateInvariant(BaseModel):
     generation_method: str = "offline"  # "offline" or "llm"
     timestamp: str = ""
     rationale: Optional[str] = None
+    domain: str = "business_logic"
+    confidence: float = 0.0
     confidence_components: dict[str, Any] = Field(default_factory=dict)
     grounding_result: Optional[dict] = None
-    validation_result: Optional[dict] = None
+    validation_result: Optional[Union[dict, Any]] = None
     reproducibility: dict[str, Any] = Field(default_factory=dict)
     status: str = "candidate"
 

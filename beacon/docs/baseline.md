@@ -1,7 +1,7 @@
-# Phases 1–7 Baseline & Architectural Verification
+# Phases 1–9 Baseline & Architectural Verification
 
 ## Overview
-This document records the baseline results and architectural verification of the BEACON system at the completion of Phase 7 and the Decoupled Multi-Provider Infrastructure Layer (OpenRouter, Anthropic, Ollama, Offline).
+This document records the baseline results and architectural verification of the BEACON system at the completion of **Phase 9 (Oracle Execution and Cross-Version Behavioral Equivalence Certification Engine)**.
 
 The verified end-to-end flow is:
 ```
@@ -94,7 +94,57 @@ The verified end-to-end flow is:
               UNCONFIRMED    VALIDATED
               / INVALIDATED     │
                                 ▼
-                           PHASE 8 ORACLES
+                ┌────────────────────────┐
+                │ PHASE 8                │
+                │ ORACLE COMPILER        │
+                └───────────┬────────────┘
+                            │
+                            ▼
+                     CANONICAL AST
+                   (Comparisons, AND, OR,
+                    NOT, Schemas, Prov)
+                            │
+                            ▼
+                  CANONICAL SERIALIZATION
+                     & SHA-256 HASHING
+                            │
+                            ▼
+                     FROZEN ORACLE SET
+                            │
+                            ▼
+                ┌────────────────────────┐
+                │ PHASE 9                │
+                │ CROSS-VERSION ENGINE   │
+                └───────────┬────────────┘
+                            │
+                            ▼
+                    SHARED TEST INPUTS
+               (Boundaries, Jitters, Diverse,
+                Runtime Traces, Explicit Cases)
+                            │
+             ┌──────────────┴──────────────┐
+             ▼                             ▼
+      LEGACY ADAPTER               MODERN ADAPTER
+             │                             │
+             ▼                             ▼
+     Legacy Observation            Modern Observation
+             │                             │
+             └──────────────┬──────────────┘
+                            ▼
+                 SAME ORACLE EVALUATOR
+                            │
+             ┌──────────────┼──────────────┐
+             ▼              ▼              ▼
+         BOTH PASS     MODERN FAIL    LEGACY FAIL
+             │              │              │
+             ▼              ▼              ▼
+         MATCH_PASS    REGRESSION      REFERENCE
+                            │        INCONSISTENT
+                            ▼
+                     COUNTEREXAMPLE
+                            │
+                            ▼
+                   EQUIVALENCE REPORT
 ```
 
 ## System Environment & Specification
@@ -102,7 +152,9 @@ The verified end-to-end flow is:
 - **Python Version**: Python 3.11.9
 - **Current Active Parser**: Python AST parser (`backend/ingestion/legacy_parser.py`, `backend/ingestion/static_analyzer.py`), extracting structured facts (conditions, comparisons, assignments, function calls, return statements, and source lines).
 - **Multi-Provider LLM Hierarchy**: OpenRouter (Primary), Anthropic (Supported), Ollama Qwen/Mistral (Local), Offline Rule Synthesizer (Deterministic fallback).
-- **Test Suite Status**: **87 passed in 12.39s** (`python -m pytest -q`).
+- **Oracle DSL Subsystem**: Canonical AST, Deterministic Serializer, SHA-256 Hasher, Language-Independent Evaluator, Versioned Registry, Frozen Oracle Sets.
+- **Cross-Version Certification Engine**: Generic Implementation Adapters (`LegacyAdapter`, `ModernizedAdapter`), Shared Test Suite Generator, 4-Way Behavioral Classifier, Behavioral Regression Counterexamples, Oracle-Relative Metrics.
+- **Test Suite Status**: **110 passed in 11.55s** (`python -m pytest -q`).
 
 ## Deterministic Demonstration Execution
 
@@ -134,30 +186,32 @@ Stage 3: Synthesized Executable Oracles:
 
 Stage 4: Certifying Modernized Application against Legacy System Oracles...
 
-BEHAVIORAL EQUIVALENCE REPORT — run b00cca61
-Overall Equivalence Score: 50.2%
+BEHAVIORAL EQUIVALENCE REPORT — run d9069458
+Overall Equivalence Score: 68.9%
 
 By domain:
-  Loan approval                50%
+  business_logic               69%
 
-Checked: 49   Violated: 11
+Checked: 57   Violated: 20
 
 Invariant #local-1b27dc7b
   Expected:       (credit_score < 600 and debt_ratio > 0.4) implies (decision == 'REJECT')
   Legacy output:  REJECT
   Modern output:  APPROVE
-  Counterexample: {'credit_score': 598, 'debt_ratio': 0.6469415316592227, 'annual_income': 133033.79203576746}
+  Counterexample: {'credit_score': 500, 'debt_ratio': 0.45, 'annual_income': 80000.0}
   Confidence: 0.93   Severity: critical
 
 Saved this certification run to data/beacon.sqlite3 for the dashboard.
 ```
 
 ## Architectural Highlights Verified
-1. **Decoupled Multi-Provider Layer**: `LLMCandidateGenerator` communicates strictly with `ProviderManager`. Supports OpenRouter (primary), Anthropic (supported), Ollama (local), and offline fallback.
-2. **Generic Infrastructure**: Zero hardcoded domain or business-rule conditions exist in generic infrastructure (`backend/evidence/builder.py`, `backend/ingestion/runtime_tracer.py`, `backend/mining/evidence_collector.py`, `backend/mining/grounding_checker.py`, `backend/mining/adversarial.py`).
-3. **Authoritative Evidence Package & Normalization**: `UnifiedEvidencePackage` is the authoritative source. Expressions are normalized to allow commutative AST matching and recover matching execution IDs and static evidence.
-4. **Semantic Grounding**: Candidates citing invalid variables, unsupported thresholds, nonexistent evidence IDs, mismatched source lines, or unsupported consequences are rejected immediately with `GROUNDING_FAILED`.
-5. **Adversarial Validation & Separated Metrics**: Multi-strategy testing generates exact boundaries ($T-\epsilon, T, T+\epsilon$), near-boundary jitters, combinatorial truth tables, and diverse property inputs, tracking `boundary_pass_rate` and `diverse_input_pass_rate` separately.
-6. **Counterexample Minimization & Refutation**: Deliberately incorrect candidates (e.g. `credit_score < 600 -> APPROVE`) are actively refuted, minimized to clean counterexamples, marked `INVALIDATED`, and strictly refused graduation.
-7. **Centralized Confidence Gating**: Confidence is scored centrally in `confidence_scorer.py` using weighted evidence, diversity, boundary pass rate, and contradiction penalties with an authoritative 0.8 gate.
-8. **Independent Certification**: Certification (Phases 9–10) executes against compiled executable oracles without calling any LLM.
+1. **Generic Implementation Adapters**: Decoupled target execution from the core engine via `ImplementationAdapter`, `FunctionAdapter`, `LegacyAdapter`, and `ModernizedAdapter`.
+2. **Four-Way Behavioral Classification**:
+   - `MATCH_PASS`: Both legacy and modernized implementations pass the oracle.
+   - `MODERN_REGRESSION`: Legacy passes, modernized fails $\to$ generates concrete `BehavioralRegression` counterexample.
+   - `REFERENCE_INCONSISTENT`: Legacy violates the frozen validated oracle, modernized passes $\to$ flagged as reference failure, NOT blamed on modernization.
+   - `MUTUAL_VIOLATION`: Both implementations fail the oracle.
+3. **Controlled Shared Test Suite**: Evaluates identical boundary probes, near-boundary jitters, combinatorial grid points, diverse property-based samples, and trace replays with deterministic input IDs.
+4. **Deterministic Input Replay**: Bit-exact replaying of certification suites.
+5. **Output Normalization with Audit Integrity**: Standardizes casing/whitespace without destroying raw output strings in observation logs.
+6. **Zero LLM Dependency**: Certification runs purely through deterministic execution and Phase-8 AST evaluation.

@@ -1,36 +1,26 @@
-"""Stage 3 — Generic oracle interpreter.
+"""Stage 3 / Phase 8 — Generic Oracle Interpreter.
 
-Executes an Oracle's 'condition implies decision == X' property directly
-against a given implementation function, for a batch of generated inputs.
-This is what makes the oracle language-agnostic in the demo: the same
-interpreter checks the legacy Python stub and the modernized Python stub here;
-in a full build, this would dispatch to per-language runners (Java/Rust via
-Docker, per architecture doc Section 5) behind the same interface.
+Executes an Oracle's behavioral specification directly against a given implementation
+function for a batch of generated inputs using the language-independent evaluator.
 """
 
 import random
-from typing import Callable
-from common.dsl_eval import eval_condition
-from common.models import Oracle
+from typing import Any, Callable, Union
 
-
-def _condition_and_expected(oracle: Oracle) -> tuple[str, str]:
-    condition, rest = oracle.property.split(") implies (decision == '")
-    condition = condition.lstrip("(")
-    expected = rest.rstrip("')")
-    return condition, expected
+from .evaluator import evaluate_oracle
+from .models import OracleDefinition
 
 
 def run_oracle(
-    oracle: Oracle,
+    oracle: Union[OracleDefinition, Any],
     impl_fn: Callable[..., dict],
     field_bounds: dict[str, tuple[float, float]],
     n_samples: int = 100,
     seed: int = 3,
 ) -> dict:
-    """Runs one oracle against one implementation. Returns pass/fail summary
-    plus the first counterexample found, if any."""
-    condition, expected = _condition_and_expected(oracle)
+    """Runs one oracle against an implementation function using generic I/O evaluation.
+    Returns pass/fail summary and counterexample if violated.
+    """
     rng = random.Random(seed)
 
     checked, violated = 0, 0
@@ -41,25 +31,35 @@ def run_oracle(
         if "credit_score" in sample:
             sample["credit_score"] = int(sample["credit_score"])
 
+        # Execute target implementation
         try:
-            condition_true = eval_condition(condition, sample)
-        except Exception:
-            continue
-        if not condition_true:
+            actual_output = impl_fn(**sample)
+        except Exception as exc:
+            actual_output = {"decision": "ERROR", "error": str(exc)}
+
+        # Evaluate language-independent oracle
+        report = evaluate_oracle(oracle, inputs=sample, outputs=actual_output)
+
+        if report.status == "NOT_APPLICABLE":
             continue
 
         checked += 1
-        actual = impl_fn(**sample)
-        actual_decision = str(actual.get("decision", "")).upper()
 
-        if actual_decision != expected:
+        if report.status in ("FAIL", "EVALUATION_ERROR", "INVALID_INPUT"):
             violated += 1
             if first_counterexample is None:
-                first_counterexample = {"inputs": sample, "actual": actual_decision, "expected": expected}
+                first_counterexample = {
+                    "inputs": sample,
+                    "actual": actual_output.get("decision", "ERROR") if isinstance(actual_output, dict) else str(actual_output),
+                    "expected": oracle.consequence.value if hasattr(oracle, "consequence") else "UNKNOWN",
+                }
 
     passed = checked - violated
+    inv_id = getattr(oracle, "invariant_id", getattr(oracle, "oracle_id", "UNKNOWN"))
+
     return {
-        "invariant_id": oracle.invariant_id,
+        "invariant_id": inv_id,
+        "oracle_id": getattr(oracle, "oracle_id", inv_id),
         "checked": checked,
         "violated": violated,
         "passed": passed,

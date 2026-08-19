@@ -3,7 +3,7 @@
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, Optional
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 sys.path.append(str(Path(__file__).resolve().parents[2] / "legacy_sample"))
@@ -110,6 +110,58 @@ def get_llm_status():
     """Returns sanitized multi-provider LLM status and availability."""
     manager = get_provider_manager()
     return manager.get_status()
+
+
+from oracle.registry import registry
+from oracle.compiler import compile_candidate_to_oracle, OracleCompilationError
+from common.models import CandidateInvariant
+
+
+@app.get("/api/oracles")
+def list_oracles(domain: Optional[str] = None):
+    """Lists registered canonical language-independent oracles."""
+    oracles = registry.list_oracles(domain=domain)
+    return {"oracles": [o.model_dump(mode="json") for o in oracles]}
+
+
+@app.get("/api/oracles/{oracle_id}")
+def get_oracle_endpoint(oracle_id: str, version: Optional[int] = None):
+    """Retrieves a specific versioned oracle definition."""
+    oracle = registry.get_oracle(oracle_id, version=version)
+    if oracle is None:
+        raise HTTPException(status_code=404, detail=f"Oracle '{oracle_id}' not found")
+    return oracle.model_dump(mode="json")
+
+
+@app.get("/api/oracle-sets")
+def list_oracle_sets_endpoint(domain: Optional[str] = None):
+    """Lists frozen Oracle Sets."""
+    sets = registry.list_oracle_sets(domain=domain)
+    return {"oracle_sets": [s.model_dump(mode="json") for s in sets]}
+
+
+@app.get("/api/oracle-sets/{set_id}")
+def get_oracle_set_endpoint(set_id: str):
+    """Retrieves a frozen Oracle Set by ID."""
+    oracle_set = registry.get_oracle_set(set_id)
+    if oracle_set is None:
+        raise HTTPException(status_code=404, detail=f"OracleSet '{set_id}' not found")
+    return oracle_set.model_dump(mode="json")
+
+
+@app.post("/api/oracles/compile")
+def compile_oracle_endpoint(candidate: CandidateInvariant):
+    """Compiles a validated CandidateInvariant into a canonical Oracle.
+    Rejects unvalidated, invalidated, grounding-failed, or low-confidence (<0.8) candidates.
+    """
+    try:
+        oracle = compile_candidate_to_oracle(candidate)
+        registered = registry.register_oracle(oracle)
+        return registered.model_dump(mode="json")
+    except OracleCompilationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Oracle compilation error: {exc}")
 
 
 @app.get("/runs")
