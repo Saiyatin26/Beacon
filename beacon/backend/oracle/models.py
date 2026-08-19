@@ -145,6 +145,8 @@ Oracle = OracleDefinition
 
 class OracleSet(BaseModel):
     """Frozen, immutable collection of executable oracles for certification runs."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
+
     oracle_set_id: str
     name: str
     version: int = 1

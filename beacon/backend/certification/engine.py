@@ -2,7 +2,8 @@
 
 Executes shared test inputs across Legacy and Modernized adapters, evaluates
 both against Phase-8 Language-Independent Oracles, classifies 4-way behavioral
-outcomes, produces regression counterexamples, and aggregates equivalence metrics.
+outcomes (MATCH, MODERN_REGRESSION, REFERENCE_INCONSISTENT, MUTUAL_VIOLATION),
+produces regression counterexamples, and aggregates equivalence metrics.
 """
 
 from datetime import datetime, timezone
@@ -82,6 +83,11 @@ class CrossVersionCertificationEngine:
 
         total_probes_count = 0
         total_applicable_count = 0
+        total_matching_count = 0
+        total_mutual_violations_count = 0
+        total_invalid_inputs_count = 0
+        total_execution_errors_count = 0
+        total_not_applicable_count = 0
 
         for oracle in resolved_oracles:
             m = metrics_by_oracle[oracle.oracle_id]
@@ -112,31 +118,45 @@ class CrossVersionCertificationEngine:
                 if legacy_eval.status == "NOT_APPLICABLE" and modern_eval.status == "NOT_APPLICABLE":
                     outcome = "NOT_APPLICABLE"
                     m.not_applicable += 1
+                    total_not_applicable_count += 1
 
                 elif (
-                    legacy_eval.status in ("EVALUATION_ERROR", "INVALID_INPUT")
-                    or modern_eval.status in ("EVALUATION_ERROR", "INVALID_INPUT")
+                    legacy_eval.status == "INVALID_INPUT"
+                    or modern_eval.status == "INVALID_INPUT"
+                ):
+                    outcome = "INVALID_INPUT"
+                    m.invalid_inputs += 1
+                    m.applicable_probes += 1
+                    total_applicable_count += 1
+                    total_invalid_inputs_count += 1
+
+                elif (
+                    legacy_eval.status == "EVALUATION_ERROR"
+                    or modern_eval.status == "EVALUATION_ERROR"
                     or legacy_obs.execution_status == "EXCEPTION"
                     or modern_obs.execution_status == "EXCEPTION"
                 ):
                     outcome = "EXECUTION_ERROR"
                     m.execution_errors += 1
-                    total_applicable_count += 1
                     m.applicable_probes += 1
+                    total_applicable_count += 1
+                    total_execution_errors_count += 1
 
                 elif legacy_eval.status == "PASS" and modern_eval.status == "PASS":
-                    outcome = "MATCH_PASS"
+                    outcome = "MATCH"
                     m.applicable_probes += 1
-                    total_applicable_count += 1
+                    m.matching_probes += 1
                     m.legacy_passes += 1
                     m.modern_passes += 1
+                    total_applicable_count += 1
+                    total_matching_count += 1
 
                 elif legacy_eval.status == "PASS" and modern_eval.status == "FAIL":
                     outcome = "MODERN_REGRESSION"
                     m.applicable_probes += 1
-                    total_applicable_count += 1
                     m.legacy_passes += 1
                     m.modern_regressions += 1
+                    total_applicable_count += 1
 
                     # Generate concrete BehavioralRegression counterexample
                     reg_id = f"REG-{uuid.uuid4().hex[:8]}"
@@ -162,24 +182,27 @@ class CrossVersionCertificationEngine:
                 elif legacy_eval.status == "FAIL" and modern_eval.status == "PASS":
                     outcome = "REFERENCE_INCONSISTENT"
                     m.applicable_probes += 1
-                    total_applicable_count += 1
                     m.modern_passes += 1
                     m.reference_inconsistencies += 1
+                    total_applicable_count += 1
 
                     reference_inconsistencies.append({
                         "oracle_id": oracle.oracle_id,
+                        "oracle_version": oracle.version,
                         "input_id": test_inp.input_id,
                         "input_values": test_inp.values,
                         "legacy_output": legacy_obs.raw_outputs,
+                        "modern_output": modern_obs.raw_outputs,
                         "expected": oracle.consequence.value,
-                        "notice": "Legacy reference violated the frozen validated oracle.",
+                        "notice": "REFERENCE_INCONSISTENT: Legacy reference implementation contradicts the frozen validated oracle.",
                     })
 
                 elif legacy_eval.status == "FAIL" and modern_eval.status == "FAIL":
                     outcome = "MUTUAL_VIOLATION"
                     m.applicable_probes += 1
-                    total_applicable_count += 1
                     m.mutual_violations += 1
+                    total_applicable_count += 1
+                    total_mutual_violations_count += 1
 
                 # Record granular comparison record for audit trail
                 comp_rec = ComparisonRecord(
@@ -199,10 +222,9 @@ class CrossVersionCertificationEngine:
                 comparison_records.append(comp_rec)
 
             # Compute individual oracle equivalence rate
+            # matching_probes / applicable_probes
             if m.applicable_probes > 0:
-                m.oracle_equivalence_rate = round(
-                    max(0.0, (m.applicable_probes - m.modern_regressions - m.execution_errors) / m.applicable_probes), 4
-                )
+                m.oracle_equivalence_rate = round(m.matching_probes / m.applicable_probes, 4)
             else:
                 m.oracle_equivalence_rate = 1.0
 
@@ -215,10 +237,7 @@ class CrossVersionCertificationEngine:
             sev_weight = settings.severity_weights.get(oracle.severity, 2.0)
             weight = sev_weight * oracle.confidence
 
-            # Pass indicator is 1.0 if zero regressions and at least one pass, else ratio
-            pass_i = 1.0 if (m.applicable_probes > 0 and m.modern_regressions == 0 and m.execution_errors == 0) else m.oracle_equivalence_rate
-
-            numerator += weight * pass_i
+            numerator += weight * m.oracle_equivalence_rate
             denominator += weight
 
         overall_score = round(numerator / denominator, 4) if denominator > 0 else 1.0
@@ -232,10 +251,9 @@ class CrossVersionCertificationEngine:
             m = metrics_by_oracle[oracle.oracle_id]
             sev_weight = settings.severity_weights.get(oracle.severity, 2.0)
             weight = sev_weight * oracle.confidence
-            pass_i = 1.0 if (m.applicable_probes > 0 and m.modern_regressions == 0 and m.execution_errors == 0) else m.oracle_equivalence_rate
 
             curr_num, curr_den = domain_accum.get(dom, (0.0, 0.0))
-            domain_accum[dom] = (curr_num + weight * pass_i, curr_den + weight)
+            domain_accum[dom] = (curr_num + weight * m.oracle_equivalence_rate, curr_den + weight)
 
         domain_scores = {
             dom: round(num / den, 4) if den > 0 else 1.0
@@ -243,8 +261,19 @@ class CrossVersionCertificationEngine:
         }
 
         # 6. Build Final Certification Report
+        # Blocking certification gate:
+        # Must meet threshold AND have zero regressions, zero reference inconsistencies,
+        # zero mutual violations, and zero execution/invalid errors.
+        is_certified = (
+            (overall_score >= settings.confidence_threshold)
+            and (len(regressions) == 0)
+            and (len(reference_inconsistencies) == 0)
+            and (total_mutual_violations_count == 0)
+            and (total_execution_errors_count == 0)
+            and (total_invalid_inputs_count == 0)
+        )
+
         cert_id = f"RUN-{uuid.uuid4().hex[:8]}"
-        is_certified = (overall_score >= settings.confidence_threshold) and (len(regressions) == 0)
 
         return CrossVersionCertificationReport(
             certification_id=cert_id,
@@ -261,8 +290,13 @@ class CrossVersionCertificationEngine:
             comparison_records=comparison_records,
             total_probes=total_probes_count,
             total_applicable_probes=total_applicable_count,
+            total_matching_probes=total_matching_count,
             total_regressions=len(regressions),
             total_reference_inconsistencies=len(reference_inconsistencies),
+            total_mutual_violations=total_mutual_violations_count,
+            total_invalid_inputs=total_invalid_inputs_count,
+            total_execution_errors=total_execution_errors_count,
+            total_not_applicable=total_not_applicable_count,
             certified=is_certified,
         )
 

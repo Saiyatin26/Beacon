@@ -14,6 +14,25 @@ from pydantic import BaseModel
 
 from certification.runner import certify
 from certification.scorer import equivalence_score
+from certification import (
+    CertificationArtifact,
+    CertificationEngine,
+    CertificationPolicy,
+    CertificationStatus,
+    LegacyAdapter,
+    ModernizedAdapter,
+    certification_engine,
+    certification_repository,
+    generate_html_report,
+    generate_markdown_report,
+)
+from drift import (
+    DriftEvent,
+    DriftObservation,
+    DriftPolicy,
+    DriftStatus,
+    evaluate_drift_observation,
+)
 from common.config import settings
 from common.local_store import local_store
 from common.models import DriftSample
@@ -22,6 +41,7 @@ from ingestion.trace_loader import load_traces
 
 from oracle.interpreter import run_oracle
 from oracle.synthesizer import synthesize_oracle
+from oracle import registry, compile_candidate_to_oracle, OracleCompilationError
 
 import legacy_loan_approval
 import modern_loan_approval
@@ -227,3 +247,137 @@ def check_demo_drift(request: DriftRequest):
 @app.get("/drift")
 def list_drift_samples(limit: int = 100):
     return {"samples": local_store.list_drift_samples(max(1, min(limit, 500)))}
+
+
+# ==============================================================================
+# Phase 10 — Production-Grade Certification & Drift Endpoints
+# ==============================================================================
+
+class CertificationRunRequest(BaseModel):
+    project_id: str = "default_project"
+    legacy_version: str = "1.0.0"
+    modernized_version: str = "2.0.0"
+    oracle_set_id: str
+    policy: Optional[CertificationPolicy] = None
+    implementation: Literal["equivalent", "buggy"] = "equivalent"
+    n_samples: int = 100
+    seed: int = 42
+
+
+class DriftEvaluateRequest(BaseModel):
+    observation_id: str
+    oracle_set_id: str
+    inputs: dict[str, Any]
+    outputs: dict[str, Any]
+    environment: str = "production"
+    application_version: str = "2.0.0"
+    certification_id: Optional[str] = None
+
+
+@app.post("/api/v1/certification/run")
+def run_certification_v1(request: CertificationRunRequest):
+    """Executes a policy-driven behavioral certification run and produces an immutable certificate."""
+    oracle_set = registry.get_oracle_set(request.oracle_set_id)
+    if oracle_set is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frozen OracleSet '{request.oracle_set_id}' not found in registry.",
+        )
+
+    legacy_fn = legacy_loan_approval.evaluate_loan
+    modern_fn = _implementation(request.implementation)
+
+    legacy_adp = LegacyAdapter(target_fn=legacy_fn, name="legacy_reference", version=request.legacy_version)
+    modern_adp = ModernizedAdapter(target_fn=modern_fn, name="modernized_candidate", version=request.modernized_version)
+
+    artifact = certification_engine.certify(
+        project_id=request.project_id,
+        legacy_adapter=legacy_adp,
+        modern_adapter=modern_adp,
+        oracle_set=oracle_set,
+        policy=request.policy,
+        n_samples=request.n_samples,
+        seed=request.seed,
+    )
+
+    return artifact.model_dump(mode="json")
+
+
+@app.get("/api/v1/certification/artifacts")
+def list_certification_artifacts(project_id: Optional[str] = None, limit: int = 50):
+    """Lists historical immutable CertificationArtifacts."""
+    artifacts = certification_repository.list_artifacts(project_id=project_id, limit=limit)
+    return {"artifacts": [a.model_dump(mode="json") for a in artifacts]}
+
+
+@app.get("/api/v1/certification/{certification_id}")
+def get_certification_artifact(certification_id: str):
+    """Retrieves a single CertificationArtifact by ID."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Certificate '{certification_id}' not found.")
+    return artifact.model_dump(mode="json")
+
+
+@app.get("/api/v1/certification/{certification_id}/report")
+def get_certification_report(certification_id: str, format: Literal["html", "markdown", "json"] = "html"):
+    """Retrieves a human-readable HTML or Markdown audit report."""
+    from fastapi.responses import HTMLResponse, PlainTextResponse
+
+    artifact = certification_repository.get_artifact(certification_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Certificate '{certification_id}' not found.")
+
+    if format == "html":
+        html_content = generate_html_report(artifact)
+        return HTMLResponse(content=html_content)
+    elif format == "markdown":
+        md_content = generate_markdown_report(artifact)
+        return PlainTextResponse(content=md_content)
+    return artifact.model_dump(mode="json")
+
+
+@app.get("/api/v1/certification/{certification_id}/oracles")
+def get_certification_oracles(certification_id: str):
+    """Retrieves per-oracle verification summaries for drill-down."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Certificate '{certification_id}' not found.")
+    return {"oracle_summaries": [s.model_dump(mode="json") for s in artifact.oracle_summaries]}
+
+
+@app.get("/api/v1/certification/{certification_id}/counterexamples")
+def get_certification_counterexamples(certification_id: str):
+    """Retrieves exact counterexamples / regressions produced by certification."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Certificate '{certification_id}' not found.")
+    return {"counterexamples": [r.model_dump(mode="json") for r in artifact.regressions]}
+
+
+@app.post("/api/v1/drift/evaluate")
+def evaluate_drift_endpoint(request: DriftEvaluateRequest):
+    """Evaluates a post-migration runtime observation against a frozen OracleSet."""
+    oracle_set = registry.get_oracle_set(request.oracle_set_id)
+    if oracle_set is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Frozen OracleSet '{request.oracle_set_id}' not found in registry.",
+        )
+
+    obs = DriftObservation(
+        observation_id=request.observation_id,
+        environment=request.environment,
+        application_version=request.application_version,
+        inputs=request.inputs,
+        outputs=request.outputs,
+    )
+
+    event = evaluate_drift_observation(
+        observation=obs,
+        oracle_set=oracle_set,
+        certification_id=request.certification_id,
+    )
+
+    return event.model_dump(mode="json")
+

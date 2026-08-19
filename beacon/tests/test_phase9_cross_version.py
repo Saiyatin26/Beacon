@@ -1,19 +1,23 @@
 """Comprehensive Test Suite for Phase 9 — Oracle Execution and Cross-Version Behavioral Equivalence.
 
 Tests:
-1. Equivalent Modernization achieves 100% equivalence and certified=True
+1. Equivalent Modernization achieves 100% equivalence, MATCH outcomes, and certified=True
 2. Deliberate Modernization Regression pinpointed to exact oracle, input, and counterexample
-3. Reference Inconsistency (Legacy violates Oracle) distinguished from modernization regression
-4. Mutual Violation (Both violate Oracle) classified correctly
+3. Reference Inconsistency (Legacy violates Oracle) blocks certification (certified=False) and prevents 100% score
+4. Mutual Violation (Both violate Oracle) blocks certification (certified=False) and prevents 100% score
 5. Output Normalization handling (casing/whitespace) without losing raw outputs
 6. Execution Exception handling and error reporting
 7. Deterministic Input Replay and identical hash reproducibility
 8. Multi-Oracle Frozen OracleSet certification and domain breakdown
-9. Zero LLM dependency during certification
+9. OracleSet immutability and historical version reproducibility
+10. Generic Non-Loan domain execution with pure generic adapters
+11. Zero LLM dependency during certification
 """
 
 import sys
 from pathlib import Path
+import pytest
+from pydantic import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "backend"))
@@ -37,7 +41,13 @@ from oracle import (
 )
 
 
-def _make_oracle(condition: str, consequence: str, invariant_id: str, severity: str = "critical", domain: str = "loan_approval") -> OracleDefinition:
+def _make_oracle(
+    condition: str,
+    consequence: str,
+    invariant_id: str,
+    severity: str = "critical",
+    domain: str = "loan_approval",
+) -> OracleDefinition:
     cand = CandidateInvariant(
         invariant_id=invariant_id,
         condition=condition,
@@ -61,7 +71,7 @@ FIELD_BOUNDS = {
 
 
 # ==============================================================================
-# 1. Equivalent Implementation Certification (100% Pass)
+# 1. Equivalent Implementation Certification (100% Pass, MATCH Outcomes)
 # ==============================================================================
 
 def test_equivalent_modernization_certification():
@@ -89,10 +99,13 @@ def test_equivalent_modernization_certification():
 
     assert report.overall_equivalence_score == 1.0
     assert report.total_regressions == 0
+    assert report.total_reference_inconsistencies == 0
+    assert report.total_mutual_violations == 0
+    assert report.total_matching_probes > 0
     assert len(report.regressions) == 0
     assert report.certified is True
-    assert report.oracle_metrics[oracle.oracle_id].modern_regressions == 0
-    assert report.oracle_metrics[oracle.oracle_id].applicable_probes > 0
+    assert report.oracle_metrics[oracle.oracle_id].matching_probes > 0
+    assert report.oracle_metrics[oracle.oracle_id].oracle_equivalence_rate == 1.0
 
 
 # ==============================================================================
@@ -138,10 +151,10 @@ def test_modernization_regression_pinpointed():
 
 
 # ==============================================================================
-# 3. Reference Inconsistency (Legacy Violating Frozen Oracle)
+# 3. Reference Inconsistency Blocks Certification and Lowers Score
 # ==============================================================================
 
-def test_reference_inconsistency_not_blamed_on_modern():
+def test_reference_inconsistency_blocks_certification():
     # Legacy has a bug violating the oracle: returns APPROVE when credit_score < 500
     def buggy_legacy_fn(credit_score=0, debt_ratio=0.0, annual_income=0):
         return {"decision": "APPROVE"}
@@ -163,18 +176,20 @@ def test_reference_inconsistency_not_blamed_on_modern():
         n_samples=40,
     )
 
-    # Modern did NOT regress! Reference was inconsistent
+    # Reference inconsistency must prevent certified=True and lower equivalence rate
     assert report.total_regressions == 0
     assert report.total_reference_inconsistencies > 0
+    assert report.certified is False
+    assert report.overall_equivalence_score < 1.0
     assert len(report.reference_inconsistencies) > 0
     assert report.reference_inconsistencies[0]["oracle_id"] == oracle.oracle_id
 
 
 # ==============================================================================
-# 4. Mutual Violation (Both Implementations Violate Oracle)
+# 4. Mutual Violation Blocks Certification and Prevents Perfect Score
 # ==============================================================================
 
-def test_mutual_violation_classification():
+def test_mutual_violation_blocks_certification():
     # Both legacy and modern return APPROVE on low credit score
     def legacy_fn(credit_score=0, debt_ratio=0.0, annual_income=0):
         return {"decision": "APPROVE"}
@@ -195,6 +210,9 @@ def test_mutual_violation_classification():
 
     m = report.oracle_metrics[oracle.oracle_id]
     assert m.mutual_violations > 0
+    assert report.total_mutual_violations > 0
+    assert report.certified is False
+    assert report.overall_equivalence_score < 1.0
 
 
 # ==============================================================================
@@ -253,9 +271,10 @@ def test_adapter_exception_isolation():
         n_samples=20,
     )
 
-    # Exception should be caught safely
+    # Exception should be caught safely and block certification
     m = report.oracle_metrics[oracle.oracle_id]
     assert m.execution_errors > 0
+    assert report.certified is False
 
 
 # ==============================================================================
@@ -288,37 +307,82 @@ def test_deterministic_input_replay():
 
 
 # ==============================================================================
-# 8. Frozen OracleSet Certification
+# 8. Frozen OracleSet Immutability & Historical Reproducibility
 # ==============================================================================
 
-def test_frozen_oracle_set_certification():
+def test_oracle_set_immutability_and_versioning():
     reg = OracleRegistry()
     orc1 = reg.register_oracle(_make_oracle("credit_score < 500", "REJECT", "INV-A", severity="critical", domain="loan_approval"))
     orc2 = reg.register_oracle(_make_oracle("credit_score < 600 and debt_ratio > 0.4", "REJECT", "INV-B", severity="high", domain="loan_approval"))
 
     oracle_set = reg.create_oracle_set(name="CoreSuite", oracle_ids=[orc1.oracle_id, orc2.oracle_id], domain="loan_approval")
 
-    def legacy_fn(credit_score=0, debt_ratio=0.0, annual_income=0):
-        if credit_score < 500:
-            return {"decision": "REJECT"}
-        if credit_score < 600 and debt_ratio > 0.4:
-            return {"decision": "REJECT"}
-        return {"decision": "APPROVE"}
+    # 1. Mutating attributes directly must be rejected by frozen Pydantic model
+    with pytest.raises((ValidationError, TypeError)):
+        oracle_set.name = "MutatedName"
 
-    def modern_fn(credit_score=0, debt_ratio=0.0, annual_income=0):
-        return legacy_fn(credit_score, debt_ratio, annual_income)
+    # 2. Registering an updated oracle with same ID creates a new version and new oracle-set hash
+    orc1_mod = compile_candidate_to_oracle(CandidateInvariant(
+        invariant_id="INV-A",
+        condition="credit_score < 480",  # Changed threshold
+        raw_condition="credit_score < 480",
+        consequence="REJECT",
+        source_file="legacy_loan_approval.py",
+        confidence=0.95,
+        status="graduated",
+    ))
+    orc1_mod = orc1_mod.model_copy(update={"oracle_id": orc1.oracle_id})
+    orc1_v2 = reg.register_oracle(orc1_mod)
+    assert orc1_v2.version == 2
+
+    # Historical oracle v1 is preserved
+    hist_orc1 = reg.get_oracle(orc1.oracle_id, version=1)
+    assert hist_orc1 is not None
+    assert hist_orc1.version == 1
+
+    # Historical oracle set is preserved
+    hist_set = reg.get_oracle_set(oracle_set.oracle_set_id)
+    assert hist_set is not None
+    assert hist_set.oracle_set_hash == oracle_set.oracle_set_hash
+
+
+# ==============================================================================
+# 9. Generic Non-Loan Domain Certification
+# ==============================================================================
+
+def test_generic_non_loan_domain_certification():
+    """Verifies that Phase 9 operates generically on any business domain (e.g. medical triage)."""
+    cand = CandidateInvariant(
+        invariant_id="INV-TRIAGE-01",
+        condition="heart_rate > 140 and blood_pressure < 90",
+        raw_condition="heart_rate > 140 and blood_pressure < 90",
+        consequence="RED",
+        source_file="triage.py",
+        source_lines=[10],
+        severity="critical",
+        domain="medical_triage",
+        confidence=0.98,
+        status="graduated",
+    )
+    triage_oracle = compile_candidate_to_oracle(cand)
+
+    def legacy_triage(heart_rate=0, blood_pressure=0):
+        if heart_rate > 140 and blood_pressure < 90:
+            return {"decision": "RED"}
+        return {"decision": "GREEN"}
+
+    def modern_triage(heart_rate=0, blood_pressure=0):
+        return legacy_triage(heart_rate, blood_pressure)
 
     engine = CrossVersionCertificationEngine()
     report = engine.certify_equivalence(
-        oracles=oracle_set,
-        legacy_adapter=LegacyAdapter(legacy_fn),
-        modern_adapter=ModernizedAdapter(modern_fn),
-        field_bounds=FIELD_BOUNDS,
+        oracles=[triage_oracle],
+        legacy_adapter=FunctionAdapter(legacy_triage, name="legacy_c_code", version="1.0.0", role="legacy"),
+        modern_adapter=FunctionAdapter(modern_triage, name="modern_rust_service", version="2.0.0", role="modernized"),
+        field_bounds={"heart_rate": (50, 200), "blood_pressure": (60, 180)},
         n_samples=30,
     )
 
     assert report.overall_equivalence_score == 1.0
-    assert report.oracle_set_id == oracle_set.oracle_set_id
-    assert report.oracle_set_hash == oracle_set.oracle_set_hash
-    assert "loan_approval" in report.domain_scores
-    assert report.domain_scores["loan_approval"] == 1.0
+    assert report.certified is True
+    assert report.domain_scores.get("medical_triage") == 1.0

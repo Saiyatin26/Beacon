@@ -6,9 +6,88 @@ BEACON is a verification layer that certifies whether AI-modernized code preserv
 behavior of the legacy system it replaces. It does not translate code — it mines implicit
 business-rule invariants from a legacy system, compiles them into language-agnostic
 executable oracles, certifies modernized code against those oracles with a quantified
-score, and keeps monitoring production traffic for behavioral drift after deployment.
+score under a deterministic certification policy, and monitors post-migration observations
+for continuous behavioral drift.
 
-## Repo Layout
+---
+
+## Full End-to-End Lifecycle
+
+```
+Legacy Source
+     │
+     ▼
+Static / Dynamic Evidence (AST + Traces)
+     │
+     ▼
+Unified Evidence Package (Correlated Facts)
+     │
+     ▼
+LLM-Assisted Invariant Mining (OpenRouter -> Anthropic -> Ollama -> Offline)
+     │
+     ▼
+Semantic Grounding & Anti-Hallucination Gate
+     │
+     ▼
+Adversarial Validation & Property-Based Probing (Boundaries, Jitters, Combinatorial)
+     │
+     ▼
+Confidence Scorer (0.80 Certification Gate)
+     │
+     ▼
+Language-Independent Oracle Compiler (Pure AST, Canonical Serializer, SHA-256 Hasher)
+     │
+     ▼
+Frozen Oracle Set (Immutable, Content-Addressed)
+     │
+     ▼
+Same Shared Test Inputs Applied to Legacy and Modernized Adapters
+     │
+     ▼
+Deterministic Oracle Evaluation & 4-Way Classification
+(MATCH, MODERN_REGRESSION, REFERENCE_INCONSISTENT, MUTUAL_VIOLATION)
+     │
+     ▼
+Quantified Certification Policy Engine
+(CERTIFIED, CERTIFIED_WITH_WARNINGS, NOT_CERTIFIED, REFERENCE_INCONSISTENT, INSUFFICIENT_COVERAGE)
+     │
+     ▼
+Immutable Cryptographic Certification Artifact (JSON + SHA-256 Hash + HTML/Markdown Report)
+     │
+     ▼
+Interactive UI Dashboard with Per-Oracle Failure & Counterexample Drill-Down
+     │
+     ▼
+Post-Migration Drift Monitoring (Runtime Observations -> evaluate_oracle)
+```
+
+---
+
+## The Core Separation Principle: Zero LLM in Certification
+
+BEACON preserves a strict separation of concerns:
+- **Discovery (Phase 6)**: LLMs (OpenRouter primary, Anthropic supported, Ollama local, or Offline fallback) act strictly as un-trusted candidate hypothesis generators.
+- **Validation (Phase 7)**: Independent property-based adversarial testing attempts to disprove candidate invariants against legacy execution.
+- **Compilation (Phase 8)**: Validated invariants are compiled into language-independent canonical AST oracles with SHA-256 content hashes.
+- **Certification (Phases 9–10)**: **Strictly deterministic and LLM-independent.** Certification authority is derived solely from the frozen validated oracle set, target implementation execution results, coverage metrics, and configured certification policy.
+
+---
+
+## Formal Certification Outcomes & Policy Semantics
+
+- **`MATCH`**: Both legacy and modern implementations satisfy the oracle on the applicable input.
+- **`MODERN_REGRESSION`**: Reference satisfies the oracle, but the modernized implementation violates it. Captures exact counterexamples and blocks certification (`NOT_CERTIFIED`).
+- **`REFERENCE_INCONSISTENT`**: Reference implementation contradicts a validated oracle. Directly reduces equivalence score and strictly blocks certification (`REFERENCE_INCONSISTENT`).
+- **`MUTUAL_VIOLATION`**: Both reference and modern implementations contradict the same oracle for an applicable input. Reduces equivalence score and blocks certification (`NOT_CERTIFIED`).
+- **`INSUFFICIENT_COVERAGE`**: The tested input domain or exercised oracle count is insufficient to support the configured certification policy (`INSUFFICIENT_COVERAGE`).
+- **`CERTIFIED_WITH_WARNINGS`**: Permitted only when policy explicitly allows non-critical warnings and zero critical blocking failures exist.
+- **`CERTIFIED`**: High equivalence score ($\ge 80\%$), 100% oracle coverage, 0 regressions, 0 reference inconsistencies, 0 mutual violations, and 0 execution errors.
+
+> **Methodological Limitation Notice**: BEACON does not mathematically prove universal program equivalence; it certifies oracle-relative behavioral equivalence over the validated oracle set and tested input domain under a versioned certification policy.
+
+---
+
+## Repository Layout
 
 ```
 beacon/
@@ -36,61 +115,61 @@ beacon/
 │   │   ├── validator.py           Invariant validation routing
 │   │   ├── confidence_scorer.py   Weighted confidence formula & 0.8 gate
 │   │   └── pipeline.py            Canonical mining & validation orchestrator
-│   ├── oracle/            Stage 3 — oracle DSL + synthesis + interpreter
-│   ├── certification/     Stage 4 — equivalence scoring engine
-│   ├── drift/             Stage 5 — production drift monitor
-│   └── api/               FastAPI app wiring all stages together
-├── frontend/              React + Recharts dashboard
-├── docs/                  Baseline documentation & architectural reports
+│   ├── oracle/            Phase 8 — Language-Independent Oracle DSL Subsystem
+│   │   ├── models.py              Canonical AST models, Schemas, OracleSet
+│   │   ├── serializer.py          Canonical JSON serializer & SHA-256 hasher
+│   │   ├── compiler.py            Validation-gated oracle compiler
+│   │   ├── evaluator.py           Pure AST evaluator & 5-way status reporter
+│   │   └── registry.py            Versioned immutable oracle & oracle set registry
+│   ├── certification/     Phase 9 & 10 — Cross-Version Equivalence & Certification
+│   │   ├── models.py              Observation, CertificationPolicy, CertificationArtifact
+│   │   ├── adapters.py            Generic ImplementationAdapter, LegacyAdapter, ModernizedAdapter
+│   │   ├── input_generator.py     Shared test suite generator & deterministic replay
+│   │   ├── engine.py              Cross-version 4-way comparison engine
+│   │   ├── certification_engine.py Policy-driven certification & certificate synthesis
+│   │   ├── repository.py          Thread-safe immutable certificate storage
+│   │   ├── report_generator.py    Human-readable HTML & Markdown audit reports
+│   │   └── runner.py              Backward-compatible certification runner
+│   ├── drift/             Phase 10 — Post-Migration Drift Foundation
+│   │   ├── models.py              DriftObservation, DriftEvent, DriftPolicy
+│   │   └── evaluator.py           Runtime observation evaluation against frozen OracleSet
+│   ├── cli.py             BEACON Command Line Interface
+│   └── api/               FastAPI REST API wiring all stages together
+├── frontend/              React + Vite + Recharts interactive governance dashboard
+├── docs/                  Baseline documentation & architectural verification
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (87 tests)
+└── tests/                 Comprehensive pytest test suite (123 passed tests)
 ```
 
-## LLM Provider Hierarchy & Configuration
+---
 
-BEACON decouples LLM candidate hypothesis generation from the verification engine through a multi-provider abstraction:
+## Running Locally
 
-1. **OpenRouter (Primary Cloud Provider)**: High-speed cloud reasoning via models such as `anthropic/claude-3.5-sonnet`.
-2. **Anthropic (Supported Cloud Provider)**: Direct Anthropic API access via `claude-sonnet-4-6`.
-3. **Ollama (Local Fallback Provider)**: Local offline execution using models like `qwen2.5-coder:7b` or `mistral:7b`.
-4. **Offline Rule Synthesizer (Deterministic Fallback)**: Zero-dependency rule synthesizer for continuous testing without external APIs.
-
-### Automatic Fallback (`LLM_PROVIDER=auto`)
-In `auto` mode (the default), BEACON automatically navigates the fallback chain:
-$$\text{OpenRouter} \longrightarrow \text{Anthropic} \longrightarrow \text{Ollama} \longrightarrow \text{Offline}$$
-
-If a provider is unconfigured, times out, or encounters rate limits, BEACON gracefully falls back to the next tier while attaching full provenance (`provider`, `model`, `fallback_chain`) to every candidate invariant.
-
-### Strict Verification Independence
-The LLM is strictly a candidate hypothesis generator in Phase 6. All proposed invariants must independently pass:
-1. **Semantic Grounding**: Variable, operator, and threshold verification against the `UnifiedEvidencePackage`.
-2. **Adversarial Validation**: Property-based boundary probing, combinatorial truth tables, and counterexample minimization.
-3. **Confidence Gate**: Strict 0.8 threshold gating in `confidence_scorer.py`.
-
-Once compiled into executable oracles (Phase 8), **modernization certification (Phases 9–10) executes deterministically without calling any LLM**.
-
-## Local Prototype Setup (Recommended)
-
-From the repository root in Windows PowerShell:
-
+### 1. Python Environment Setup
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
 
-# Terminal 1: API
-cd backend
-..\.venv\Scripts\python.exe -m uvicorn api.main:app --reload --port 8000
+### 2. Backend & Dashboard
+```powershell
+# Terminal 1: Backend API
+.\.venv\Scripts\python.exe -m uvicorn backend.api.main:app --reload --port 8000
 
-# Terminal 2: Dashboard
+# Terminal 2: Frontend Dashboard
 cd frontend
 npm.cmd install
 npm.cmd run dev
 ```
 
-Run test suite and deterministic demo pipeline:
-
+### 3. CLI Command
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
-.\.venv\Scripts\python.exe scripts\run_demo_pipeline.py
+.\.venv\Scripts\python.exe -m backend.cli certify --implementation buggy --format text
+```
+
+### 4. Run Test Suite & Demo Pipeline
+```powershell
+.\.venv\Scripts\python.exe -m pytest -v
+.\.venv\Scripts\python.exe scripts/run_demo_pipeline.py
 ```

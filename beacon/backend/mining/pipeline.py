@@ -4,7 +4,7 @@ UnifiedEvidencePackage -> Candidate Generator -> Evidence Collection -> Adversar
 This is the module backend/api/main.py and scripts/run_demo_pipeline.py call.
 """
 
-from typing import Callable
+from typing import Callable, Optional
 from common.models import ValidatedInvariant, UnconfirmedCandidate
 from evidence.models import UnifiedEvidencePackage
 from .offline_miner import OfflineCandidateGenerator
@@ -19,7 +19,7 @@ def run_mining_pipeline(
     evidence_package: UnifiedEvidencePackage,
     legacy_fn: Callable[..., dict],
     field_bounds: dict[str, tuple[float, float]],
-    already_validated: list[ValidatedInvariant],
+    already_validated: Optional[list[ValidatedInvariant]] = None,
     use_atlas: bool = True,
     use_llm: bool = False,
 ) -> tuple[list[ValidatedInvariant], list[UnconfirmedCandidate]]:
@@ -35,7 +35,7 @@ def run_mining_pipeline(
     
     graduated_invariants: list[ValidatedInvariant] = []
     unconfirmed_candidates: list[UnconfirmedCandidate] = []
-    current_validation_context: list[ValidatedInvariant] = list(already_validated)
+    current_validation_context: list[ValidatedInvariant] = list(already_validated or [])
     
     for candidate in candidates:
         # 2. Evidence Collection directly from UnifiedEvidencePackage

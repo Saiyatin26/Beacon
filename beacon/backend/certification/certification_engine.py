@@ -1,0 +1,344 @@
+"""Phase 10 — Quantified Behavioral Equivalence Certification Engine.
+
+Consumes Phase-8 frozen Oracle Sets and Phase-9 comparison evidence, verifies
+integrity hashes, evaluates versioned Certification Policies, and generates
+immutable cryptographic CertificationArtifact certificates.
+"""
+
+from datetime import datetime, timezone
+import hashlib
+import json
+import logging
+from typing import Any, Optional, Union
+import uuid
+
+from oracle.models import OracleDefinition, OracleSet
+from oracle.serializer import compute_oracle_set_hash
+from .adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter
+from .engine import CrossVersionCertificationEngine
+from .input_generator import generate_certification_test_suite
+from .models import (
+    BehavioralRegression,
+    CertificationArtifact,
+    CertificationMetrics,
+    CertificationPolicy,
+    CertificationStatus,
+    CertificationTestInput,
+    CrossVersionCertificationReport,
+    PerOracleCertificationSummary,
+)
+from .repository import certification_repository
+
+logger = logging.getLogger(__name__)
+
+
+class CertificationEngine:
+    """Core Phase 10 Certification Engine."""
+
+    def __init__(self, cross_version_engine: Optional[CrossVersionCertificationEngine] = None):
+        self.cross_version_engine = cross_version_engine or CrossVersionCertificationEngine()
+
+    def certify(
+        self,
+        project_id: str,
+        legacy_adapter: ImplementationAdapter,
+        modern_adapter: ImplementationAdapter,
+        oracle_set: OracleSet,
+        policy: Optional[CertificationPolicy] = None,
+        test_inputs: Optional[list[CertificationTestInput]] = None,
+        field_bounds: Optional[dict[str, tuple[float, float]]] = None,
+        domain_of: Optional[dict[str, str]] = None,
+        n_samples: int = 100,
+        seed: int = 42,
+    ) -> CertificationArtifact:
+        """Executes full policy-driven behavioral certification and produces an immutable CertificationArtifact."""
+        cert_policy = policy or CertificationPolicy()
+        pol_hash = cert_policy.compute_hash()
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        # 1. OracleSet Integrity and Content Hash Verification
+        if not oracle_set.oracles:
+            raise ValueError(f"OracleSet #{oracle_set.oracle_set_id} contains no oracles.")
+
+        content_hashes = [o.content_hash for o in oracle_set.oracles]
+        expected_set_hash = compute_oracle_set_hash(content_hashes)
+
+        if expected_set_hash != oracle_set.oracle_set_hash:
+            logger.error(
+                f"OracleSet integrity failure: stored hash '{oracle_set.oracle_set_hash}' "
+                f"does not match calculated hash '{expected_set_hash}'"
+            )
+            invalid_cert_id = f"CERT-ERR-{uuid.uuid4().hex[:8]}"
+            err_artifact = CertificationArtifact(
+                certification_id=invalid_cert_id,
+                project_id=project_id,
+                legacy_version=legacy_adapter.version,
+                modernized_version=modern_adapter.version,
+                oracle_set_id=oracle_set.oracle_set_id,
+                oracle_set_version=oracle_set.version,
+                oracle_set_hash=oracle_set.oracle_set_hash,
+                input_set_id="",
+                input_set_hash="",
+                certification_policy_id=cert_policy.policy_id,
+                certification_policy_version=cert_policy.version,
+                certification_policy_hash=pol_hash,
+                certification_engine_version="1.0.0",
+                timestamp=timestamp,
+                status=CertificationStatus.ORACLE_SET_INVALID,
+                certified=False,
+                score=0.0,
+                metrics=CertificationMetrics(),
+                domain_scores={},
+                oracle_summaries=[],
+                regressions=[],
+                reference_inconsistencies=[],
+                warnings=[],
+                blocking_reasons=["OracleSet integrity verification failed: hash mismatch"],
+                content_hash="",
+            )
+            return certification_repository.save_artifact(err_artifact)
+
+        # 2. Input Suite Resolution and Input Set Hashing
+        bounds = field_bounds or {
+            "credit_score": (400, 820),
+            "debt_ratio": (0.0, 0.9),
+            "annual_income": (10_000, 150_000),
+        }
+
+        inputs = test_inputs
+        if inputs is None:
+            inputs = generate_certification_test_suite(
+                oracles=oracle_set.oracles,
+                field_bounds=bounds,
+                n_diverse_samples=n_samples,
+                seed=seed,
+            )
+
+        sorted_inp_ids = sorted([inp.input_id for inp in inputs])
+        input_set_hash = hashlib.sha256(json.dumps(sorted_inp_ids).encode("utf-8")).hexdigest()
+        input_set_id = f"INPSET-{input_set_hash[:8]}"
+
+        # 3. Cross-Version Execution via Phase 9 Engine
+        phase9_report: CrossVersionCertificationReport = self.cross_version_engine.certify_equivalence(
+            oracles=oracle_set,
+            legacy_adapter=legacy_adapter,
+            modern_adapter=modern_adapter,
+            test_inputs=inputs,
+            field_bounds=bounds,
+            domain_of=domain_of,
+            n_samples=n_samples,
+            seed=seed,
+        )
+
+        # 4. Compile Per-Oracle Summaries
+        oracle_summaries: list[PerOracleCertificationSummary] = []
+        critical_failures_count = 0
+        non_critical_failures_count = 0
+        oracles_exercised_count = 0
+
+        # Group regressions by oracle_id
+        regs_by_oracle: dict[str, list[BehavioralRegression]] = {}
+        for reg in phase9_report.regressions:
+            regs_by_oracle.setdefault(reg.oracle_id, []).append(reg)
+
+        for oracle in oracle_set.oracles:
+            m = phase9_report.oracle_metrics.get(oracle.oracle_id)
+            if not m:
+                continue
+
+            # Determine oracle status
+            if m.modern_regressions > 0:
+                orc_status = "REGRESSION"
+                if oracle.severity in ("critical", "high"):
+                    critical_failures_count += m.modern_regressions
+                else:
+                    non_critical_failures_count += m.modern_regressions
+            elif m.reference_inconsistencies > 0:
+                orc_status = "REFERENCE_INCONSISTENT"
+            elif m.mutual_violations > 0:
+                orc_status = "MUTUAL_VIOLATION"
+            elif m.execution_errors > 0 or m.invalid_inputs > 0:
+                orc_status = "ERROR"
+            elif m.applicable_probes < cert_policy.min_applicable_probes_per_oracle:
+                orc_status = "INSUFFICIENT_COVERAGE"
+            else:
+                orc_status = "PASS"
+
+            exercised_probes = m.matching_probes + m.modern_regressions + m.reference_inconsistencies + m.mutual_violations
+            if exercised_probes >= cert_policy.min_applicable_probes_per_oracle:
+                oracles_exercised_count += 1
+
+            oracle_summaries.append(PerOracleCertificationSummary(
+                oracle_id=oracle.oracle_id,
+                oracle_version=oracle.version,
+                oracle_hash=oracle.content_hash,
+                severity=oracle.severity,
+                confidence=oracle.confidence,
+                domain=oracle.domain,
+                condition_str=oracle.canonical_condition,
+                consequence_str=f"{oracle.consequence.variable} == '{oracle.consequence.value}'",
+                total_probes=m.total_probes,
+                applicable_probes=m.applicable_probes,
+                matching_probes=m.matching_probes,
+                legacy_passes=m.legacy_passes,
+                modern_passes=m.modern_passes,
+                modern_regressions=m.modern_regressions,
+                reference_inconsistencies=m.reference_inconsistencies,
+                mutual_violations=m.mutual_violations,
+                invalid_inputs=m.invalid_inputs,
+                execution_errors=m.execution_errors,
+                not_applicable=m.not_applicable,
+                oracle_equivalence_rate=m.oracle_equivalence_rate,
+                oracle_status=orc_status,
+                counterexamples=regs_by_oracle.get(oracle.oracle_id, []),
+            ))
+
+        # 5. Compile Quantitative Certification Metrics
+        oracle_count = len(oracle_set.oracles)
+        coverage_pct = round(oracles_exercised_count / oracle_count, 4) if oracle_count > 0 else 0.0
+
+        metrics = CertificationMetrics(
+            total_inputs=phase9_report.total_probes,
+            applicable_inputs=phase9_report.total_applicable_probes,
+            not_applicable=phase9_report.total_not_applicable,
+            matching_probes=phase9_report.total_matching_probes,
+            modern_regressions=phase9_report.total_regressions,
+            reference_inconsistencies=phase9_report.total_reference_inconsistencies,
+            mutual_violations=phase9_report.total_mutual_violations,
+            invalid_inputs=phase9_report.total_invalid_inputs,
+            execution_errors=phase9_report.total_execution_errors,
+            critical_failures=critical_failures_count,
+            non_critical_failures=non_critical_failures_count,
+            oracle_count=oracle_count,
+            oracles_exercised=oracles_exercised_count,
+            oracle_coverage_pct=coverage_pct,
+            overall_equivalence_score=phase9_report.overall_equivalence_score,
+        )
+
+        # 6. Apply Certification Policy Decision Flow
+        blocking_reasons: list[str] = []
+        warnings: list[str] = []
+        final_status: CertificationStatus = CertificationStatus.CERTIFIED
+
+        # Flow Step 1: Coverage Check
+        if coverage_pct < cert_policy.min_oracle_coverage:
+            blocking_reasons.append(
+                f"Insufficient oracle coverage: {oracles_exercised_count}/{oracle_count} oracles exercised "
+                f"({coverage_pct * 100:.1f}% vs required {cert_policy.min_oracle_coverage * 100:.1f}%)"
+            )
+            final_status = CertificationStatus.INSUFFICIENT_COVERAGE
+
+        # Flow Step 2: Reference Inconsistency Check
+        elif cert_policy.block_on_reference_inconsistent and metrics.reference_inconsistencies > 0:
+            blocking_reasons.append(
+                f"Reference implementation contradicts frozen validated oracles ({metrics.reference_inconsistencies} occurrences)"
+            )
+            final_status = CertificationStatus.REFERENCE_INCONSISTENT
+
+        # Flow Step 3: Modernized Critical Regression / Mutual Violation / Low Score Check
+        elif cert_policy.block_on_critical_regression and metrics.critical_failures > 0:
+            blocking_reasons.append(
+                f"Modernized implementation contains {metrics.critical_failures} critical behavioral regressions"
+            )
+            final_status = CertificationStatus.NOT_CERTIFIED
+
+        elif cert_policy.block_on_mutual_violation and metrics.mutual_violations > 0:
+            blocking_reasons.append(
+                f"Mutual behavioral violation detected on {metrics.mutual_violations} probes"
+            )
+            final_status = CertificationStatus.NOT_CERTIFIED
+
+        elif metrics.overall_equivalence_score < cert_policy.min_equivalence_score:
+            blocking_reasons.append(
+                f"Equivalence score ({metrics.overall_equivalence_score * 100:.1f}%) below policy threshold "
+                f"({cert_policy.min_equivalence_score * 100:.1f}%)"
+            )
+            final_status = CertificationStatus.NOT_CERTIFIED
+
+        elif metrics.execution_errors > cert_policy.max_permitted_execution_errors:
+            blocking_reasons.append(
+                f"Execution errors ({metrics.execution_errors}) exceed policy limit ({cert_policy.max_permitted_execution_errors})"
+            )
+            final_status = CertificationStatus.NOT_CERTIFIED
+
+        elif metrics.invalid_inputs > cert_policy.max_permitted_invalid_inputs:
+            blocking_reasons.append(
+                f"Invalid inputs ({metrics.invalid_inputs}) exceed policy limit ({cert_policy.max_permitted_invalid_inputs})"
+            )
+            final_status = CertificationStatus.NOT_CERTIFIED
+
+        # Flow Step 4: Non-Critical Warnings Check
+        elif metrics.non_critical_failures > 0:
+            warnings.append(f"{metrics.non_critical_failures} non-critical behavioral regressions detected")
+            if cert_policy.allow_warnings:
+                final_status = CertificationStatus.CERTIFIED_WITH_WARNINGS
+            else:
+                blocking_reasons.append("Non-critical regressions disallowed by current policy")
+                final_status = CertificationStatus.NOT_CERTIFIED
+
+        # Flow Step 5: Full Pass
+        else:
+            final_status = CertificationStatus.CERTIFIED
+
+        is_certified = final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS)
+        cert_id = f"CERT-{uuid.uuid4().hex[:8]}"
+
+        # 7. Compute Cryptographic Content Hash for Certificate
+        cert_payload_for_hashing = {
+            "certification_id": cert_id,
+            "project_id": project_id,
+            "legacy_version": legacy_adapter.version,
+            "modernized_version": modern_adapter.version,
+            "oracle_set_id": oracle_set.oracle_set_id,
+            "oracle_set_version": oracle_set.version,
+            "oracle_set_hash": oracle_set.oracle_set_hash,
+            "input_set_id": input_set_id,
+            "input_set_hash": input_set_hash,
+            "certification_policy_id": cert_policy.policy_id,
+            "certification_policy_version": cert_policy.version,
+            "certification_policy_hash": pol_hash,
+            "status": final_status.value,
+            "certified": is_certified,
+            "score": metrics.overall_equivalence_score,
+            "metrics": metrics.model_dump(),
+            "domain_scores": phase9_report.domain_scores,
+            "blocking_reasons": blocking_reasons,
+            "warnings": warnings,
+        }
+        canonical_cert_json = json.dumps(cert_payload_for_hashing, sort_keys=True, separators=(",", ":"))
+        cert_content_hash = hashlib.sha256(canonical_cert_json.encode("utf-8")).hexdigest()
+
+        # 8. Create Immutable Artifact
+        artifact = CertificationArtifact(
+            certification_id=cert_id,
+            project_id=project_id,
+            legacy_version=legacy_adapter.version,
+            modernized_version=modern_adapter.version,
+            oracle_set_id=oracle_set.oracle_set_id,
+            oracle_set_version=oracle_set.version,
+            oracle_set_hash=oracle_set.oracle_set_hash,
+            input_set_id=input_set_id,
+            input_set_hash=input_set_hash,
+            certification_policy_id=cert_policy.policy_id,
+            certification_policy_version=cert_policy.version,
+            certification_policy_hash=pol_hash,
+            certification_engine_version="1.0.0",
+            timestamp=timestamp,
+            status=final_status,
+            certified=is_certified,
+            score=metrics.overall_equivalence_score,
+            metrics=metrics,
+            domain_scores=phase9_report.domain_scores,
+            oracle_summaries=oracle_summaries,
+            regressions=phase9_report.regressions,
+            reference_inconsistencies=phase9_report.reference_inconsistencies,
+            warnings=warnings,
+            blocking_reasons=blocking_reasons,
+            content_hash=cert_content_hash,
+        )
+
+        return certification_repository.save_artifact(artifact)
+
+
+# Module-level default certification engine singleton
+certification_engine = CertificationEngine()
