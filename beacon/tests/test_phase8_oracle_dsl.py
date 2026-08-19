@@ -295,8 +295,7 @@ def test_evaluator_statuses():
 def test_versioned_immutable_registry():
     test_registry = OracleRegistry()
     cand1 = _create_sample_candidate("credit_score < 600", "REJECT")
-    oracle_v1 = compile_candidate_to_oracle(cand1)
-    oracle_v1.oracle_id = "ORC-TEST"
+    oracle_v1 = compile_candidate_to_oracle(cand1).model_copy(update={"oracle_id": "ORC-TEST"})
 
     # Register initial version (v1)
     registered_v1 = test_registry.register_oracle(oracle_v1)
@@ -305,8 +304,7 @@ def test_versioned_immutable_registry():
 
     # Register modified oracle with same ID (e.g. updated threshold < 580)
     cand2 = _create_sample_candidate("credit_score < 580", "REJECT")
-    oracle_v2 = compile_candidate_to_oracle(cand2)
-    oracle_v2.oracle_id = "ORC-TEST"
+    oracle_v2 = compile_candidate_to_oracle(cand2).model_copy(update={"oracle_id": "ORC-TEST"})
 
     registered_v2 = test_registry.register_oracle(oracle_v2)
     assert registered_v2.version == 2

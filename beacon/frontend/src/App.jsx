@@ -200,10 +200,13 @@ export default function App() {
         {/* Selected Certificate Summary Cards */}
         {selectedArtifact && (
           <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 18 }}>
-            <div style={card}>
+            <div style={{ ...card, borderLeft: `4px solid ${currentStatusStyle.border}` }}>
               <div style={{ fontSize: 12, color: "#64748b", textTransform: "uppercase", fontWeight: 600 }}>Equivalence Score</div>
-              <div style={{ fontSize: 26, fontWeight: 700, color: selectedArtifact.score >= 0.8 ? "#10b981" : "#ef4444", marginTop: 4 }}>
+              <div style={{ fontSize: 26, fontWeight: 700, color: currentStatusStyle.color, marginTop: 4 }}>
                 {(selectedArtifact.score * 100).toFixed(1)}%
+              </div>
+              <div style={{ fontSize: 11, color: currentStatusStyle.color, marginTop: 4, fontWeight: 600 }}>
+                {selectedArtifact.certified ? "✓ Certified under Policy" : `⚠ Non-Certified: ${currentStatusStyle.text}`}
               </div>
             </div>
             <div style={card}>

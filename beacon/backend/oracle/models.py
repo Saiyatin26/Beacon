@@ -28,6 +28,7 @@ class OracleStatus(str, Enum):
 
 class OraclePredicate(BaseModel):
     """Leaf node in condition AST representing a binary comparison."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     type: Literal["comparison"] = "comparison"
     variable: str
     operator: Literal["<", "<=", "==", "!=", ">=", ">"]
@@ -36,12 +37,14 @@ class OraclePredicate(BaseModel):
 
 class CompoundCondition(BaseModel):
     """Branch node representing logical AND / OR combinations."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     type: Literal["AND", "OR"]
     operands: list[Union[OraclePredicate, "CompoundCondition", "UnaryCondition"]]
 
 
 class UnaryCondition(BaseModel):
     """Branch node representing logical NOT inversion."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     type: Literal["NOT"] = "NOT"
     operand: Union[OraclePredicate, "CompoundCondition", "UnaryCondition"]
 
@@ -59,6 +62,7 @@ OracleConditionNode = Union[OraclePredicate, CompoundCondition, UnaryCondition]
 
 class OracleConsequence(BaseModel):
     """Asserts expected output variable value when condition evaluates to True."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     type: Literal["comparison"] = "comparison"
     variable: str = "decision"
     operator: Literal["=="] = "=="
@@ -67,6 +71,7 @@ class OracleConsequence(BaseModel):
 
 class OracleVariable(BaseModel):
     """Describes a single input parameter expected by the Oracle."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     name: str
     var_type: Literal["int", "float", "str", "bool", "unknown"] = "unknown"
     min_value: Optional[float] = None
@@ -75,11 +80,13 @@ class OracleVariable(BaseModel):
 
 class OracleInputSchema(BaseModel):
     """Input parameters required to evaluate the oracle condition."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     variables: list[OracleVariable] = Field(default_factory=list)
 
 
 class OracleOutputSchema(BaseModel):
     """Output attributes produced by the target function to check against consequence."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     variable: str = "decision"
     var_type: str = "str"
     allowed_values: Optional[list[Any]] = None
@@ -91,6 +98,7 @@ class OracleOutputSchema(BaseModel):
 
 class OracleProvenance(BaseModel):
     """Complete audit provenance linking oracle back to evidence and validation run."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
     invariant_id: str
     source_file: str
     source_lines: list[int] = Field(default_factory=list)
@@ -107,7 +115,7 @@ class OracleProvenance(BaseModel):
 
 class OracleDefinition(BaseModel):
     """Canonical, Language-Independent Executable Behavioral Oracle."""
-    model_config = {"protected_namespaces": ()}
+    model_config = {"frozen": True, "protected_namespaces": ()}
 
     oracle_id: str
     version: int = 1

@@ -253,13 +253,18 @@ def list_drift_samples(limit: int = 100):
 # Phase 10 — Production-Grade Certification & Drift Endpoints
 # ==============================================================================
 
+from certification.adapter_registry import adapter_registry
+
+
 class CertificationRunRequest(BaseModel):
     project_id: str = "default_project"
-    legacy_version: str = "1.0.0"
-    modernized_version: str = "2.0.0"
+    legacy_target: str = "loan_approval_legacy"
+    modernized_target: str = "loan_approval_modern_equiv"
+    legacy_version: Optional[str] = None
+    modernized_version: Optional[str] = None
     oracle_set_id: str
     policy: Optional[CertificationPolicy] = None
-    implementation: Literal["equivalent", "buggy"] = "equivalent"
+    implementation: Optional[Literal["equivalent", "buggy"]] = None
     n_samples: int = 100
     seed: int = 42
 
@@ -276,7 +281,7 @@ class DriftEvaluateRequest(BaseModel):
 
 @app.post("/api/v1/certification/run")
 def run_certification_v1(request: CertificationRunRequest):
-    """Executes a policy-driven behavioral certification run and produces an immutable certificate."""
+    """Executes a policy-driven behavioral certification run using registered ImplementationAdapters."""
     oracle_set = registry.get_oracle_set(request.oracle_set_id)
     if oracle_set is None:
         raise HTTPException(
@@ -284,11 +289,27 @@ def run_certification_v1(request: CertificationRunRequest):
             detail=f"Frozen OracleSet '{request.oracle_set_id}' not found in registry.",
         )
 
-    legacy_fn = legacy_loan_approval.evaluate_loan
-    modern_fn = _implementation(request.implementation)
+    # Resolve legacy adapter
+    legacy_adp = adapter_registry.get_adapter(request.legacy_target, request.legacy_version)
+    if legacy_adp is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Legacy implementation adapter '{request.legacy_target}' not found in adapter registry.",
+        )
 
-    legacy_adp = LegacyAdapter(target_fn=legacy_fn, name="legacy_reference", version=request.legacy_version)
-    modern_adp = ModernizedAdapter(target_fn=modern_fn, name="modernized_candidate", version=request.modernized_version)
+    # Determine modern target name
+    mod_target_name = request.modernized_target
+    if request.implementation == "buggy" and mod_target_name in ("loan_approval_modern_equiv", "loan_approval_modern"):
+        mod_target_name = "loan_approval_modern_buggy"
+    elif request.implementation == "equivalent" and mod_target_name == "loan_approval_modern_buggy":
+        mod_target_name = "loan_approval_modern_equiv"
+
+    modern_adp = adapter_registry.get_adapter(mod_target_name, request.modernized_version)
+    if modern_adp is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Modernized implementation adapter '{mod_target_name}' not found in adapter registry.",
+        )
 
     artifact = certification_engine.certify(
         project_id=request.project_id,

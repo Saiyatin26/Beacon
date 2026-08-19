@@ -11,7 +11,7 @@ from pathlib import Path
 import sqlite3
 from typing import Optional
 
-from .models import CertificationArtifact
+from .models import CertificationArtifact, verify_artifact_integrity
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +53,15 @@ class CertificationRepository:
             logger.warning(f"Could not initialize SQLite certification table: {exc}")
 
     def save_artifact(self, artifact: CertificationArtifact) -> CertificationArtifact:
-        """Saves a CertificationArtifact immutably.
-        If an artifact with the same certification_id already exists:
-        - If content_hash is identical, returns existing artifact.
-        - If content_hash differs, raises ValueError (immutability violation).
+        """Saves a CertificationArtifact immutably with integrity verification.
+        - Verifies that stored content_hash matches computed canonical hash.
+        - If an artifact with the same ID exists with identical hash, returns existing.
+        - If hash differs, raises ValueError (immutability violation).
         """
         cid = artifact.certification_id
+
+        if not verify_artifact_integrity(artifact):
+            raise ValueError(f"Integrity violation: Certificate #{cid} content hash does not match its canonical content.")
 
         if cid in self._memory_artifacts:
             existing = self._memory_artifacts[cid]

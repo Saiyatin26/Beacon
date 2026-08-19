@@ -50,8 +50,10 @@ class OracleRegistry:
             }
         )
 
-        # Mark previous version superseded
-        latest_oracle.status = OracleStatus.SUPERSEDED
+        # Mark previous version superseded via immutable copy
+        versions_map[latest_version_num] = latest_oracle.model_copy(
+            update={"status": OracleStatus.SUPERSEDED}
+        )
         versions_map[new_version_num] = new_oracle
         return new_oracle
 
@@ -93,12 +95,18 @@ class OracleRegistry:
         return sorted(result, key=lambda x: x.oracle_id)
 
     def deactivate_oracle(self, oracle_id: str, version: Optional[int] = None) -> bool:
-        """Deactivates an oracle without deleting its historical record."""
-        target = self.get_oracle(oracle_id, version=version)
-        if target:
-            target.status = OracleStatus.INACTIVE
-            return True
-        return False
+        """Deactivates an oracle by creating an immutable snapshot without deleting historical records."""
+        if oracle_id not in self._oracles:
+            return False
+
+        versions_map = self._oracles[oracle_id]
+        target_v = version if version is not None else max(versions_map.keys())
+        if target_v not in versions_map:
+            return False
+
+        target = versions_map[target_v]
+        versions_map[target_v] = target.model_copy(update={"status": OracleStatus.INACTIVE})
+        return True
 
     def create_oracle_set(
         self,

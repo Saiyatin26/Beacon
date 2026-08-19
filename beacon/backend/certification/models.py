@@ -8,7 +8,7 @@ and immutable cryptographic certification artifacts.
 from enum import Enum
 import hashlib
 import json
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, Field
 from oracle.models import OracleEvaluationReport
 
@@ -241,6 +241,28 @@ class CertificationArtifact(BaseModel):
         "This certificate represents quantified behavioral equivalence relative to the frozen validated oracle set "
         "and tested input domain under the declared certification policy. It does not constitute a formal mathematical proof of arbitrary program equivalence."
     )
+
+
+def compute_artifact_content_hash(artifact: Union[CertificationArtifact, dict[str, Any]]) -> str:
+    """Computes deterministic SHA-256 content hash across all material fields of a CertificationArtifact,
+    excluding only the content_hash field itself to avoid circular hashing.
+    """
+    if isinstance(artifact, CertificationArtifact):
+        data = artifact.model_dump(mode="json")
+    else:
+        data = dict(artifact)
+
+    data.pop("content_hash", None)
+    canonical_json = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def verify_artifact_integrity(artifact: CertificationArtifact) -> bool:
+    """Verifies that the stored content_hash matches the SHA-256 digest of its canonical content."""
+    if not artifact.content_hash:
+        return False
+    computed = compute_artifact_content_hash(artifact)
+    return computed == artifact.content_hash
 
 
 class CrossVersionCertificationReport(BaseModel):

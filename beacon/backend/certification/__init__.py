@@ -26,6 +26,8 @@ from .models import (
     Observation,
     OracleEquivalenceMetrics,
     PerOracleCertificationSummary,
+    compute_artifact_content_hash,
+    verify_artifact_integrity,
 )
 from .adapters import (
     FunctionAdapter,
@@ -35,6 +37,7 @@ from .adapters import (
     default_input_normalizer,
     default_output_normalizer,
 )
+from .adapter_registry import AdapterRegistry, adapter_registry
 from .input_generator import generate_certification_test_suite
 from .engine import CrossVersionCertificationEngine
 from .certification_engine import CertificationEngine, certification_engine
@@ -55,10 +58,14 @@ __all__ = [
     "PerOracleCertificationSummary",
     "CertificationMetrics",
     "CertificationArtifact",
+    "compute_artifact_content_hash",
+    "verify_artifact_integrity",
     "ImplementationAdapter",
     "FunctionAdapter",
     "LegacyAdapter",
     "ModernizedAdapter",
+    "AdapterRegistry",
+    "adapter_registry",
     "default_input_normalizer",
     "default_output_normalizer",
     "generate_certification_test_suite",

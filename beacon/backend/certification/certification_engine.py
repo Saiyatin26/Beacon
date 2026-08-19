@@ -26,6 +26,8 @@ from .models import (
     CertificationTestInput,
     CrossVersionCertificationReport,
     PerOracleCertificationSummary,
+    compute_artifact_content_hash,
+    verify_artifact_integrity,
 )
 from .repository import certification_repository
 
@@ -69,7 +71,7 @@ class CertificationEngine:
                 f"does not match calculated hash '{expected_set_hash}'"
             )
             invalid_cert_id = f"CERT-ERR-{uuid.uuid4().hex[:8]}"
-            err_artifact = CertificationArtifact(
+            temp_err = CertificationArtifact(
                 certification_id=invalid_cert_id,
                 project_id=project_id,
                 legacy_version=legacy_adapter.version,
@@ -96,14 +98,35 @@ class CertificationEngine:
                 blocking_reasons=["OracleSet integrity verification failed: hash mismatch"],
                 content_hash="",
             )
+            err_artifact = temp_err.model_copy(update={"content_hash": compute_artifact_content_hash(temp_err)})
             return certification_repository.save_artifact(err_artifact)
 
         # 2. Input Suite Resolution and Input Set Hashing
-        bounds = field_bounds or {
-            "credit_score": (400, 820),
+        from .input_generator import _extract_predicates
+
+        default_base_bounds = {
+            "credit_score": (400.0, 820.0),
             "debt_ratio": (0.0, 0.9),
-            "annual_income": (10_000, 150_000),
+            "annual_income": (10_000.0, 150_000.0),
         }
+
+        if field_bounds:
+            bounds = dict(field_bounds)
+        else:
+            bounds = dict(default_base_bounds)
+
+        # Discover any additional variables in oracle conditions
+        for orc in oracle_set.oracles:
+            for pred in _extract_predicates(orc.condition):
+                if pred.variable not in bounds:
+                    val = pred.value
+                    if isinstance(val, (int, float)):
+                        if val > 0:
+                            bounds[pred.variable] = (0.0, float(val * 2.0))
+                        else:
+                            bounds[pred.variable] = (float(val - 100.0), float(val + 100.0))
+                    else:
+                        bounds[pred.variable] = (0.0, 100.0)
 
         inputs = test_inputs
         if inputs is None:
@@ -283,33 +306,8 @@ class CertificationEngine:
         is_certified = final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS)
         cert_id = f"CERT-{uuid.uuid4().hex[:8]}"
 
-        # 7. Compute Cryptographic Content Hash for Certificate
-        cert_payload_for_hashing = {
-            "certification_id": cert_id,
-            "project_id": project_id,
-            "legacy_version": legacy_adapter.version,
-            "modernized_version": modern_adapter.version,
-            "oracle_set_id": oracle_set.oracle_set_id,
-            "oracle_set_version": oracle_set.version,
-            "oracle_set_hash": oracle_set.oracle_set_hash,
-            "input_set_id": input_set_id,
-            "input_set_hash": input_set_hash,
-            "certification_policy_id": cert_policy.policy_id,
-            "certification_policy_version": cert_policy.version,
-            "certification_policy_hash": pol_hash,
-            "status": final_status.value,
-            "certified": is_certified,
-            "score": metrics.overall_equivalence_score,
-            "metrics": metrics.model_dump(),
-            "domain_scores": phase9_report.domain_scores,
-            "blocking_reasons": blocking_reasons,
-            "warnings": warnings,
-        }
-        canonical_cert_json = json.dumps(cert_payload_for_hashing, sort_keys=True, separators=(",", ":"))
-        cert_content_hash = hashlib.sha256(canonical_cert_json.encode("utf-8")).hexdigest()
-
-        # 8. Create Immutable Artifact
-        artifact = CertificationArtifact(
+        # 7. Create Immutable Artifact and Compute Canonical Content Hash
+        temp_artifact = CertificationArtifact(
             certification_id=cert_id,
             project_id=project_id,
             legacy_version=legacy_adapter.version,
@@ -334,8 +332,11 @@ class CertificationEngine:
             reference_inconsistencies=phase9_report.reference_inconsistencies,
             warnings=warnings,
             blocking_reasons=blocking_reasons,
-            content_hash=cert_content_hash,
+            content_hash="",
         )
+
+        cert_content_hash = compute_artifact_content_hash(temp_artifact)
+        artifact = temp_artifact.model_copy(update={"content_hash": cert_content_hash})
 
         return certification_repository.save_artifact(artifact)
 
