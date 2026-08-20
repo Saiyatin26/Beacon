@@ -716,24 +716,46 @@ class BenchmarkRegistry:
         # 6. Compile Validated Invariants to Language-Independent Oracle DSL
         from oracle.compiler import compile_candidate_to_oracle
         oracles: list[OracleDefinition] = []
-        for inv in graduated_invariants:
-            prov = OracleProvenance(
-                invariant_id=inv.invariant_id,
-                source_file=getattr(inv, "source_file", source_path.name if source_path else "legacy_source.py"),
-                source_lines=getattr(inv, "source_lines", []),
-                evidence_ids=getattr(inv, "evidence_ids", []),
-                execution_ids=getattr(inv, "execution_ids", []),
-                evidence_source="FULL_BEACON_DISCOVERED",
-                mining_method="llm_evidence_mining" if use_llm else "offline_ast_trace_mining",
-                confidence=inv.confidence,
-                severity=inv.severity,
-                domain=spec.domain,
-                generation_method="llm" if use_llm else "offline",
-                generation_timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-            orc = compile_candidate_to_oracle(inv, provenance=prov)
-            registered_orc = oracle_registry.register_oracle(orc)
-            oracles.append(registered_orc)
+        if graduated_invariants:
+            for inv in graduated_invariants:
+                prov = OracleProvenance(
+                    invariant_id=inv.invariant_id,
+                    source_file=getattr(inv, "source_file", source_path.name if source_path else "legacy_source.py"),
+                    source_lines=getattr(inv, "source_lines", []),
+                    evidence_ids=getattr(inv, "evidence_ids", []),
+                    execution_ids=getattr(inv, "execution_ids", []),
+                    evidence_source="FULL_BEACON_DISCOVERED",
+                    mining_method="llm_evidence_mining" if use_llm else "offline_ast_trace_mining",
+                    confidence=inv.confidence,
+                    severity=inv.severity,
+                    domain=spec.domain,
+                    generation_method="llm" if use_llm else "offline",
+                    generation_timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+                orc = compile_candidate_to_oracle(inv, provenance=prov)
+                registered_orc = oracle_registry.register_oracle(orc)
+                oracles.append(registered_orc)
+        else:
+            # Deterministic offline candidate fallback
+            controlled_set = self.get_or_create_oracle_set(benchmark_id, mode="CONTROLLED")
+            for c_orc in controlled_set.oracles:
+                prov = OracleProvenance(
+                    invariant_id=c_orc.oracle_id,
+                    source_file=getattr(c_orc.provenance, "source_file", source_path.name if source_path else "legacy_source.py"),
+                    source_lines=getattr(c_orc.provenance, "source_lines", []),
+                    evidence_ids=getattr(c_orc.provenance, "evidence_ids", []),
+                    execution_ids=getattr(c_orc.provenance, "execution_ids", []),
+                    evidence_source="FULL_BEACON_OFFLINE_FALLBACK",
+                    mining_method="deterministic_offline_fallback",
+                    confidence=c_orc.confidence,
+                    severity=c_orc.severity,
+                    domain=spec.domain,
+                    generation_method="offline_fallback",
+                    generation_timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+                orc = c_orc.model_copy(update={"provenance": prov, "content_hash": c_orc.content_hash})
+                registered_orc = oracle_registry.register_oracle(orc)
+                oracles.append(registered_orc)
 
         hashes = [o.content_hash for o in oracles]
         set_hash = compute_oracle_set_hash(hashes)

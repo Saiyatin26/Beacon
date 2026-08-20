@@ -18,6 +18,7 @@ from .models import (
     BehavioralRegression,
     CertificationArtifact,
     CertificationCase,
+    CertificationContext,
     CertificationInputSet,
     CertificationMetrics,
     CertificationPolicy,

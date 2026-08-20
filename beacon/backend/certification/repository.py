@@ -173,9 +173,10 @@ class CertificationRepository:
     def list_artifacts(
         self,
         project_id: Optional[str] = None,
+        benchmark_id: Optional[str] = None,
         limit: int = 50,
     ) -> list[CertificationArtifact]:
-        """Lists historical CertificationArtifacts sorted newest first."""
+        """Lists historical CertificationArtifacts sorted newest first, with optional benchmark_id or project_id filtering."""
         results: list[CertificationArtifact] = []
 
         try:
@@ -187,14 +188,18 @@ class CertificationRepository:
                     query += " WHERE project_id = ?"
                     params.append(project_id)
                 query += " ORDER BY created_at DESC LIMIT ?"
-                params.append(limit)
+                params.append(limit * 3 if benchmark_id else limit)
 
                 cursor.execute(query, params)
                 for row in cursor.fetchall():
                     data = json.loads(row[0])
                     art = CertificationArtifact.model_validate(data)
-                    results.append(art)
                     self._memory_artifacts[art.certification_id] = art
+                    if benchmark_id:
+                        art_b_id = getattr(art, "benchmark_id", None) or (art.context.benchmark_id if art.context else None) or art.project_id.replace("benchmark_", "")
+                        if art_b_id != benchmark_id and art.project_id != benchmark_id and art.project_id != f"benchmark_{benchmark_id}":
+                            continue
+                    results.append(art)
         except Exception as exc:
             logger.debug(f"SQLite list notice: {exc}")
 
@@ -202,9 +207,17 @@ class CertificationRepository:
             mem_list = list(self._memory_artifacts.values())
             if project_id:
                 mem_list = [a for a in mem_list if a.project_id == project_id]
-            results = sorted(mem_list, key=lambda a: a.timestamp, reverse=True)[:limit]
+            if benchmark_id:
+                mem_list = [
+                    a for a in mem_list
+                    if getattr(a, "benchmark_id", None) == benchmark_id
+                    or (a.context and a.context.benchmark_id == benchmark_id)
+                    or a.project_id == benchmark_id
+                    or a.project_id == f"benchmark_{benchmark_id}"
+                ]
+            results = sorted(mem_list, key=lambda a: a.timestamp, reverse=True)
 
-        return results
+        return results[:limit]
 
     def get_latest(self, project_id: Optional[str] = None) -> Optional[CertificationArtifact]:
         """Retrieves the most recent CertificationArtifact."""

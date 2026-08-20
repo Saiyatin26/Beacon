@@ -42,6 +42,7 @@ class CertificationTestInput(BaseModel):
     """Shared test input with provenance and origin metadata."""
     input_id: str
     values: dict[str, Any]
+    input_hash: str = ""
     origin: Literal[
         "boundary_probe",
         "near_boundary_probe",
@@ -53,6 +54,11 @@ class CertificationTestInput(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)
 
+    def model_post_init(self, __context: Any) -> None:
+        if not self.input_hash and self.values:
+            canonical = json.dumps(self.values, sort_keys=True, separators=(",", ":"))
+            object.__setattr__(self, "input_hash", hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16])
+
 
 class BehavioralRegression(BaseModel):
     """Concrete behavioral regression counterexample produced during certification."""
@@ -60,6 +66,8 @@ class BehavioralRegression(BaseModel):
     oracle_id: str
     oracle_version: int = 1
     input_id: str
+    input_hash: str = ""
+    case_id: Optional[str] = None
     input_values: dict[str, Any]
     expected_behavior: Any
     legacy_output: Any
@@ -74,6 +82,11 @@ class BehavioralRegression(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     source_lines: list[int] = Field(default_factory=list)
 
+    def model_post_init(self, __context: Any) -> None:
+        if not self.input_hash and self.input_values:
+            canonical = json.dumps(self.input_values, sort_keys=True, separators=(",", ":"))
+            object.__setattr__(self, "input_hash", hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16])
+
 
 class ComparisonRecord(BaseModel):
     """Audit record capturing side-by-side comparison of legacy and modern executions."""
@@ -82,6 +95,7 @@ class ComparisonRecord(BaseModel):
     oracle_version: int = 1
     oracle_set_hash: str = ""
     input_id: str
+    input_hash: str = ""
     input_values: dict[str, Any]
     legacy_observation: Observation
     modern_observation: Observation
@@ -128,6 +142,7 @@ class CertificationCase(BaseModel):
     run_id: str
     input_set_id: str
     case_index: int
+    input_id: str = ""
     input_json: str
     input_hash: str
     legacy_output_json: str
@@ -137,6 +152,42 @@ class CertificationCase(BaseModel):
     classification: str
     severity: str = "medium"
     violated_oracle_ids: list[str] = Field(default_factory=list)
+
+
+class CertificationContext(BaseModel):
+    """Authoritative execution context for a single benchmark certification run.
+    Serves as the single source of truth for the UI, API, and audit trail.
+    """
+    model_config = {"protected_namespaces": ()}
+
+    benchmark_id: str = "default_project"
+    benchmark_version: str = "1.0.0"
+    benchmark_name: str = "Default Project"
+    benchmark_provenance: str = "CONTROLLED"  # "CONTROLLED", "REALISTIC", "PUBLIC", "AUTHENTIC_PUBLIC_MIGRATION"
+    dataset_id: str = "default"
+    dataset_version: str = "1.0.0"
+    dataset_checksum: str = ""
+    evaluation_mode: str = "CONTROLLED"  # "CONTROLLED" or "FULL_BEACON"
+    modernization_variant_id: str = "clean_v2"
+    modernization_variant_name: str = "Clean Modernization"
+    modernization_provenance: str = "INDEPENDENT_REIMPLEMENTATION"  # "INDEPENDENT_REIMPLEMENTATION", "CONTROLLED_MUTATION"
+    legacy_implementation_id: str = ""
+    legacy_implementation_hash: str = ""
+    modernized_implementation_id: str = ""
+    modernized_implementation_hash: str = ""
+    oracle_set_id: str = ""
+    oracle_set_hash: str = ""
+    oracle_source_type: str = "CONTROLLED_ORACLE_SET"  # "CONTROLLED_ORACLE_SET", "FULL_BEACON_DISCOVERED", "FULL_BEACON_OFFLINE_FALLBACK"
+    policy_id: str = "POL-DEFAULT"
+    policy_hash: str = ""
+    input_set_id: str = ""
+    input_set_hash: str = ""
+    certification_run_id: str = ""
+    certification_artifact_id: str = ""
+    certification_artifact_hash: str = ""
+    run_timestamp: str = ""
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
+    run_status: str = "NOT_CERTIFIED"
 
 
 def compute_input_set_canonical_hash(
@@ -154,13 +205,13 @@ def compute_input_set_canonical_hash(
             inp_vals = json.loads(raw_inp) if isinstance(raw_inp, str) else raw_inp
             canonical_entries.append({
                 "case_index": item.case_index,
-                "input_id": item.input_hash,
+                "input_id": item.input_id or item.input_hash,
                 "input_values": inp_vals,
             })
         elif isinstance(item, CertificationTestInput):
             canonical_entries.append({
                 "case_index": idx,
-                "input_id": item.input_id,
+                "input_id": item.input_id or item.input_hash,
                 "input_values": item.values,
             })
         elif isinstance(item, dict):
@@ -307,6 +358,12 @@ class CertificationArtifact(BaseModel):
 
     certification_id: str
     project_id: str = "default_project"
+    benchmark_id: Optional[str] = None
+    evaluation_mode: Optional[str] = "CONTROLLED"
+    modernization_variant: Optional[str] = "clean_v2"
+    dataset_checksum: Optional[str] = ""
+    oracle_source_type: Optional[str] = "CONTROLLED_ORACLE_SET"
+    context: Optional[CertificationContext] = None
     legacy_version: str = "1.0.0"
     modernized_version: str = "2.0.0"
     oracle_set_id: str = ""
@@ -339,7 +396,7 @@ class CertificationArtifact(BaseModel):
 
 def compute_artifact_content_hash(artifact: Union[CertificationArtifact, dict[str, Any]]) -> str:
     """Computes deterministic SHA-256 content hash across all material fields of a CertificationArtifact,
-    excluding only the content_hash field itself to avoid circular hashing.
+    excluding only the content_hash field itself and context.certification_artifact_hash to avoid circular hashing.
     """
     if isinstance(artifact, CertificationArtifact):
         data = artifact.model_dump(mode="json")
@@ -347,6 +404,9 @@ def compute_artifact_content_hash(artifact: Union[CertificationArtifact, dict[st
         data = dict(artifact)
 
     data.pop("content_hash", None)
+    if isinstance(data.get("context"), dict):
+        data["context"].pop("certification_artifact_hash", None)
+
     canonical_json = json.dumps(data, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 

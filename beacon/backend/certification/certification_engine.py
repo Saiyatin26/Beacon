@@ -21,6 +21,7 @@ from .models import (
     BehavioralRegression,
     CertificationArtifact,
     CertificationCase,
+    CertificationContext,
     CertificationInputSet,
     CertificationMetrics,
     CertificationPolicy,
@@ -54,6 +55,7 @@ class CertificationEngine:
         test_inputs: Optional[list[CertificationTestInput]] = None,
         field_bounds: Optional[dict[str, tuple[float, float]]] = None,
         domain_of: Optional[dict[str, str]] = None,
+        context: Optional[CertificationContext] = None,
         n_samples: int = 100,
         seed: int = 42,
     ) -> CertificationArtifact:
@@ -235,13 +237,16 @@ class CertificationEngine:
             if mod_obs:
                 exec_time += mod_obs.execution_time_ms
 
+            inp_hash = getattr(inp, "input_hash", "") or hashlib.sha256(json.dumps(inp.values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+
             case = CertificationCase(
                 case_id=f"CASE-{cert_id}-{idx}",
                 run_id=cert_id,
                 input_set_id=input_set_id,
                 case_index=idx,
+                input_id=inp.input_id,
                 input_json=json.dumps(inp.values, sort_keys=True, separators=(",", ":")),
-                input_hash=inp.input_id,
+                input_hash=inp_hash,
                 legacy_output_json=leg_out,
                 modern_output_json=mod_out,
                 execution_time_ms=exec_time,
@@ -251,6 +256,16 @@ class CertificationEngine:
                 violated_oracle_ids=violated_oracles,
             )
             cases_to_save.append(case)
+
+        # Ensure regressions are linked to case_id and input_hash
+        for reg in phase9_report.regressions:
+            matching_case = next((c for c in cases_to_save if c.input_id == reg.input_id or c.input_hash == reg.input_id), None)
+            if matching_case:
+                reg.case_id = matching_case.case_id
+                reg.input_hash = matching_case.input_hash
+            elif not reg.input_hash and reg.input_values:
+                canon = json.dumps(reg.input_values, sort_keys=True, separators=(",", ":"))
+                reg.input_hash = hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
 
         # Reproducibility Verification
         reproducibility_valid = True
@@ -428,9 +443,37 @@ class CertificationEngine:
         is_certified = final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS)
 
         # 7. Create Immutable Artifact and Compute Canonical Content Hash
+        final_context = context or CertificationContext(
+            benchmark_id=project_id,
+            benchmark_version="1.0.0",
+            benchmark_name=project_id,
+            benchmark_provenance="CONTROLLED",
+            evaluation_mode="CONTROLLED",
+            modernization_variant_id=getattr(modern_adapter, "name", "modern_equiv"),
+            modernization_variant_name=getattr(modern_adapter, "name", "Modernized Implementation"),
+            legacy_implementation_id=getattr(legacy_adapter, "name", "legacy"),
+            modernized_implementation_id=getattr(modern_adapter, "name", "modern"),
+        )
+        final_context.certification_run_id = cert_id
+        final_context.certification_artifact_id = cert_id
+        final_context.input_set_id = input_set_id
+        final_context.input_set_hash = input_set_hash
+        final_context.oracle_set_id = oracle_set.oracle_set_id
+        final_context.oracle_set_hash = oracle_set.oracle_set_hash
+        final_context.policy_id = cert_policy.policy_id
+        final_context.policy_hash = pol_hash
+        final_context.run_timestamp = timestamp
+        final_context.run_status = final_status.value
+
         temp_artifact = CertificationArtifact(
             certification_id=cert_id,
             project_id=project_id,
+            benchmark_id=final_context.benchmark_id,
+            evaluation_mode=final_context.evaluation_mode,
+            modernization_variant=final_context.modernization_variant_id,
+            dataset_checksum=final_context.dataset_checksum,
+            oracle_source_type=final_context.oracle_source_type,
+            context=final_context,
             legacy_version=legacy_adapter.version,
             modernized_version=modern_adapter.version,
             oracle_set_id=oracle_set.oracle_set_id,
@@ -458,7 +501,8 @@ class CertificationEngine:
         )
 
         cert_content_hash = compute_artifact_content_hash(temp_artifact)
-        artifact = temp_artifact.model_copy(update={"content_hash": cert_content_hash})
+        final_context.certification_artifact_hash = cert_content_hash
+        artifact = temp_artifact.model_copy(update={"content_hash": cert_content_hash, "context": final_context})
 
         return certification_repository.save_certification_run_atomic(input_set, cases_to_save, artifact)
 

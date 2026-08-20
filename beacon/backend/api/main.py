@@ -16,6 +16,7 @@ from certification.runner import certify
 from certification.scorer import equivalence_score
 from certification import (
     CertificationArtifact,
+    CertificationContext,
     CertificationEngine,
     CertificationPolicy,
     CertificationStatus,
@@ -25,6 +26,7 @@ from certification import (
     certification_repository,
     generate_html_report,
     generate_markdown_report,
+    verify_artifact_integrity,
 )
 from drift import (
     DriftEvent,
@@ -245,8 +247,13 @@ def check_demo_drift(request: DriftRequest):
 
 
 @app.get("/drift")
-def list_drift_samples(limit: int = 100):
-    return {"samples": local_store.list_drift_samples(max(1, min(limit, 500)))}
+def list_drift_samples(limit: int = 100, benchmark_id: Optional[str] = None):
+    all_samples = local_store.list_drift_samples(max(1, min(limit, 500)))
+    if benchmark_id:
+        if benchmark_id in ("loan", "loan_approval"):
+            return {"samples": [s for s in all_samples if s.get("benchmark_id") in ("loan", "loan_approval", None)]}
+        return {"samples": [s for s in all_samples if s.get("benchmark_id") == benchmark_id]}
+    return {"samples": all_samples}
 
 
 # ==============================================================================
@@ -350,6 +357,7 @@ def run_certification_v1(request: CertificationRunRequest):
     """Executes a policy-driven behavioral certification run using registered ImplementationAdapters or Benchmarks."""
     # 1. Benchmark Resolution Mode
     test_inputs = None
+    context = None
     if request.benchmark_id:
         bench_spec = benchmark_registry.get_benchmark(request.benchmark_id)
         if not bench_spec:
@@ -380,6 +388,41 @@ def run_certification_v1(request: CertificationRunRequest):
 
         field_bounds = bench_spec.field_bounds
         proj_id = request.project_id if request.project_id != "default_project" else f"benchmark_{request.benchmark_id}"
+
+        prov_cat = bench_spec.provenance_category.value if hasattr(bench_spec.provenance_category, "value") else str(bench_spec.provenance_category)
+        mod_prov = bench_spec.modernization_provenance.get(variant, "INDEPENDENT_REIMPLEMENTATION")
+        if hasattr(mod_prov, "value"):
+            mod_prov = mod_prov.value
+
+        oracle_src = "CONTROLLED_ORACLE_SET"
+        if mode == "FULL_BEACON":
+            first_prov = getattr(oracle_set.oracles[0], "provenance", None) if oracle_set.oracles else None
+            ev_src = getattr(first_prov, "evidence_source", "") if first_prov else ""
+            oracle_src = "FULL_BEACON_DISCOVERED" if ev_src == "FULL_BEACON_DISCOVERED" else "FULL_BEACON_OFFLINE_FALLBACK"
+
+        context = CertificationContext(
+            benchmark_id=request.benchmark_id,
+            benchmark_version=bench_spec.legacy_version,
+            benchmark_name=bench_spec.name,
+            benchmark_provenance=prov_cat,
+            dataset_id=request.dataset_name,
+            dataset_version=bench_spec.dataset_version,
+            dataset_checksum=bench_spec.dataset_checksum,
+            evaluation_mode=mode,
+            modernization_variant_id=variant,
+            modernization_variant_name=variant.replace("_v2", "").replace("_", " ").title(),
+            modernization_provenance=str(mod_prov),
+            legacy_implementation_id=legacy_adp.name,
+            legacy_implementation_hash="",
+            modernized_implementation_id=modern_adp.name,
+            modernized_implementation_hash="",
+            oracle_set_id=oracle_set.oracle_set_id,
+            oracle_set_hash=oracle_set.oracle_set_hash,
+            oracle_source_type=oracle_src,
+            policy_id=request.policy.policy_id if request.policy else "POL-DEFAULT",
+            policy_hash="",
+            provider_metadata={"model": "openrouter/auto"} if mode == "FULL_BEACON" and request.use_llm else {},
+        )
 
     # 2. Generic Adapter Resolution Mode
     else:
@@ -424,6 +467,7 @@ def run_certification_v1(request: CertificationRunRequest):
         policy=request.policy,
         test_inputs=test_inputs,
         field_bounds=field_bounds,
+        context=context,
         n_samples=request.n_samples,
         seed=request.seed,
     )
@@ -431,12 +475,39 @@ def run_certification_v1(request: CertificationRunRequest):
     return artifact.model_dump(mode="json")
 
 
-
 @app.get("/api/v1/certification/artifacts")
-def list_certification_artifacts(project_id: Optional[str] = None, limit: int = 50):
-    """Lists historical immutable CertificationArtifacts."""
-    artifacts = certification_repository.list_artifacts(project_id=project_id, limit=limit)
+def list_certification_artifacts(
+    project_id: Optional[str] = None,
+    benchmark_id: Optional[str] = None,
+    limit: int = 50,
+):
+    """Lists historical immutable CertificationArtifacts filtered by project or benchmark."""
+    artifacts = certification_repository.list_artifacts(project_id=project_id, benchmark_id=benchmark_id, limit=limit)
     return {"artifacts": [a.model_dump(mode="json") for a in artifacts]}
+
+
+@app.post("/api/v1/certification/{certification_id}/verify")
+def verify_certification_artifact_endpoint(certification_id: str):
+    """Cryptographically verifies artifact content hash and input-set canonical hash."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Certificate '{certification_id}' not found.")
+
+    is_art_valid = verify_artifact_integrity(artifact)
+    is_inp_valid = certification_repository.verify_input_set_integrity(artifact.input_set_id, artifact.certification_id)
+
+    return {
+        "certification_id": certification_id,
+        "artifact_integrity_valid": is_art_valid,
+        "input_set_integrity_valid": is_inp_valid,
+        "content_hash": artifact.content_hash,
+        "input_set_hash": artifact.input_set_hash,
+        "oracle_set_hash": artifact.oracle_set_hash,
+        "policy_hash": artifact.certification_policy_hash,
+        "reproducibility_state": artifact.reproducibility_state,
+        "status": artifact.status.value,
+        "benchmark_id": artifact.benchmark_id or (artifact.context.benchmark_id if artifact.context else None),
+    }
 
 
 @app.get("/api/v1/certification/{certification_id}")
