@@ -77,13 +77,25 @@ export default function App() {
           setSelectedArtifact(data.artifacts[0]);
         }
       }
+  const [benchmarks, setBenchmarks] = useState([]);
+  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("retail_discount_pricing");
+  const [selectedVariant, setSelectedVariant] = useState("clean_v2");
+  const [benchmarkValidation, setBenchmarkValidation] = useState(null);
+
+  const loadBenchmarks = async () => {
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/benchmarks`);
+      if (response.ok) {
+        const data = await response.json();
+        setBenchmarks(data.benchmarks || []);
+      }
     } catch {
-      // Non-fatal if no artifacts yet
+      // Non-fatal
     }
   };
 
   useEffect(() => {
-    Promise.all([loadRuns(), loadInvariants(), loadDrift(), loadArtifacts()]).catch(() =>
+    Promise.all([loadRuns(), loadInvariants(), loadDrift(), loadArtifacts(), loadBenchmarks()]).catch(() =>
       setError("Could not reach the BEACON API. Start it with: python -m uvicorn backend.api.main:app --reload --port 8000")
     );
   }, []);
@@ -116,6 +128,60 @@ export default function App() {
     }
   };
 
+  const validateCurrentBenchmark = async () => {
+    if (!selectedBenchmarkId) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/benchmarks/${selectedBenchmarkId}/validate`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      setBenchmarkValidation(data);
+      if (data.is_valid) {
+        setNotice(`Benchmark '${selectedBenchmarkId}' validation passed: ${data.dataset_record_count} dataset inputs verified.`);
+      } else {
+        setError(`Benchmark validation issues: ${data.errors.join(", ")}`);
+      }
+    } catch (valError) {
+      setError(valError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runBenchmarkCertification = async () => {
+    if (!selectedBenchmarkId) return;
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/certification/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          benchmark_id: selectedBenchmarkId,
+          benchmark_variant: selectedVariant,
+          n_samples: 60,
+        }),
+      });
+      const artifact = await response.json();
+      if (!response.ok) throw new Error(artifact.detail || "Benchmark certification failed.");
+      setSelectedArtifact(artifact);
+      await loadArtifacts();
+      setNotice(
+        artifact.certified
+          ? `Benchmark certified: ${artifact.metrics.matching_probes}/${artifact.metrics.total_inputs} inputs matched with 100% equivalence.`
+          : `Benchmark certification failed as expected: ${artifact.metrics.modern_regressions} regression(s) detected.`
+      );
+    } catch (benchError) {
+      setError(benchError.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const runDriftCheck = async () => {
     if (!selectedRun) return;
     setBusy(true);
@@ -141,6 +207,7 @@ export default function App() {
     }
   };
 
+  const currentBenchmark = benchmarks.find((b) => b.benchmark_id === selectedBenchmarkId) || benchmarks[0];
   const chartData = [...runs].reverse().map((run) => ({
     run: run.run_id,
     score: Math.round(run.equivalence_score * 100),
@@ -151,6 +218,13 @@ export default function App() {
     : selectedRun?.equivalence_score >= 0.8 && selectedRun?.total_violated === 0
     ? statusStyles.CERTIFIED
     : statusStyles.NOT_CERTIFIED;
+
+  const provenanceBadgeColor = {
+    PUBLIC: { bg: "#e0e7ff", color: "#3730a3", text: "PUBLIC DOMAIN" },
+    REALISTIC: { bg: "#ecfdf5", color: "#065f46", text: "REALISTIC ENTERPRISE" },
+    REAL_EXTERNAL: { bg: "#fef3c7", color: "#92400e", text: "EXTERNAL OPEN SOURCE" },
+    CONTROLLED: { bg: "#f1f5f9", color: "#475569", text: "CONTROLLED DEMO" },
+  };
 
   return (
     <main style={{ fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", color: "#1e293b", background: "#f8fafc", minHeight: "100vh", padding: "32px 16px" }}>
@@ -176,9 +250,135 @@ export default function App() {
         {error && <p style={{ ...card, color: "#b42318", borderColor: "#fecdca" }}>{error}</p>}
         {notice && <p style={{ ...card, color: "#067647", borderColor: "#a6f4c5" }}>{notice}</p>}
 
+        {/* Phase 12 Benchmark Catalog & Selection */}
+        <section style={{ ...card, marginBottom: 18, borderLeft: "4px solid #0f766e" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: 1, color: "#0f766e", textTransform: "uppercase" }}>Phase 12 Real-World Benchmark Integration</span>
+              <h2 style={{ margin: "4px 0 6px", fontSize: 18 }}>Select Evaluation Benchmark &amp; Inspect Provenance</h2>
+            </div>
+            {currentBenchmark && (
+              <span
+                style={{
+                  padding: "4px 10px",
+                  borderRadius: 12,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  background: provenanceBadgeColor[currentBenchmark.provenance_category]?.bg || "#f1f5f9",
+                  color: provenanceBadgeColor[currentBenchmark.provenance_category]?.color || "#334155",
+                  border: "1px solid rgba(0,0,0,0.05)"
+                }}
+              >
+                {provenanceBadgeColor[currentBenchmark.provenance_category]?.text || currentBenchmark.provenance_category} &bull; {currentBenchmark.license}
+              </span>
+            )}
+          </div>
+
+          {/* Benchmark Tabs */}
+          <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+            {benchmarks.map((b) => (
+              <button
+                key={b.benchmark_id}
+                onClick={() => {
+                  setSelectedBenchmarkId(b.benchmark_id);
+                  const firstVar = Object.keys(b.modernized_adapters || {})[0] || "clean_v2";
+                  setSelectedVariant(firstVar);
+                  setBenchmarkValidation(null);
+                }}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  border: selectedBenchmarkId === b.benchmark_id ? "2px solid #0f766e" : "1px solid #cbd5e1",
+                  background: selectedBenchmarkId === b.benchmark_id ? "#f0fdfa" : "white",
+                  color: selectedBenchmarkId === b.benchmark_id ? "#0f766e" : "#475569",
+                }}
+              >
+                {b.name}
+              </button>
+            ))}
+          </div>
+
+          {/* Benchmark Details Card */}
+          {currentBenchmark && (
+            <div style={{ marginTop: 14, padding: 14, borderRadius: 8, background: "#f8fafc", border: "1px solid #e2e8f0", fontSize: 13 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 10, marginBottom: 10 }}>
+                <div><strong>Domain:</strong> {currentBenchmark.domain}</div>
+                <div><strong>Language:</strong> {currentBenchmark.language}</div>
+                <div><strong>Dataset Source:</strong> {currentBenchmark.dataset_source}</div>
+                <div><strong>Source / Provenance:</strong> {currentBenchmark.source}</div>
+              </div>
+              <p style={{ margin: "4px 0 12px", color: "#475569", fontSize: 12 }}>{currentBenchmark.description}</p>
+
+              {/* Modernized Target Variant Selector */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: "1px solid #e2e8f0", paddingTop: 10 }}>
+                <span style={{ fontWeight: 600, fontSize: 12, color: "#334155" }}>Target Variant:</span>
+                {Object.keys(currentBenchmark.modernized_adapters || {}).map((varKey) => {
+                  const isClean = varKey.includes("clean") || varKey.includes("equiv");
+                  return (
+                    <button
+                      key={varKey}
+                      onClick={() => setSelectedVariant(varKey)}
+                      style={{
+                        padding: "6px 12px",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        fontWeight: 600,
+                        cursor: "pointer",
+                        border: selectedVariant === varKey ? `2px solid ${isClean ? "#0f766e" : "#ef4444"}` : "1px solid #cbd5e1",
+                        background: selectedVariant === varKey ? (isClean ? "#ccfbf1" : "#fee2e2") : "white",
+                        color: selectedVariant === varKey ? (isClean ? "#0f766e" : "#991b1b") : "#475569",
+                      }}
+                    >
+                      {isClean ? "✓ Clean Modernization" : `⚠ Buggy: ${varKey.replace("_v2", "").replace("buggy_", "")}`}
+                    </button>
+                  );
+                })}
+
+                <button
+                  disabled={busy}
+                  onClick={validateCurrentBenchmark}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    border: "1px solid #0f766e",
+                    background: "white",
+                    color: "#0f766e",
+                    marginLeft: "auto",
+                  }}
+                >
+                  {busy ? "Validating..." : "Pre-Flight Validate"}
+                </button>
+
+                <button
+                  disabled={busy}
+                  onClick={runBenchmarkCertification}
+                  style={{
+                    padding: "6px 16px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: "none",
+                    background: selectedVariant.includes("buggy") ? "#ef4444" : "#0f766e",
+                    color: "white",
+                  }}
+                >
+                  {busy ? "Certifying..." : `Certify ${selectedVariant.includes("buggy") ? "Buggy Variant" : "Equivalent Target"}`}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
+
         {/* Action Panel */}
         <section style={{ ...card, marginBottom: 18 }}>
-          <h2 style={{ marginTop: 0, fontSize: 18 }}>Execute Behavioral Certification</h2>
+          <h2 style={{ marginTop: 0, fontSize: 18 }}>Quick Loan Demo Certification</h2>
           <p style={{ color: "#64748b", fontSize: 14, margin: "4px 0 16px" }}>
             Executes frozen language-independent oracles against legacy reference and modernized candidate versions under strict certification policy.
           </p>

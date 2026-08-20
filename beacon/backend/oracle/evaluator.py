@@ -170,8 +170,12 @@ def evaluate_oracle(
     actual_val = obs_outputs[target_var]
     match = False
 
-    if isinstance(expected_val, str):
-        match = str(actual_val).strip().upper() == expected_val.strip().upper()
+    if isinstance(expected_val, (int, float)) and isinstance(actual_val, (int, float)):
+        match = abs(float(actual_val) - float(expected_val)) < 1e-6
+    elif isinstance(expected_val, bool) or isinstance(actual_val, bool):
+        match = bool(actual_val) == bool(expected_val)
+    elif isinstance(expected_val, str) or isinstance(actual_val, str):
+        match = str(actual_val).strip().upper() == str(expected_val).strip().upper()
     else:
         match = actual_val == expected_val
 

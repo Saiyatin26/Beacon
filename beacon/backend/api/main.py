@@ -254,17 +254,21 @@ def list_drift_samples(limit: int = 100):
 # ==============================================================================
 
 from certification.adapter_registry import adapter_registry
+from benchmarks.registry import benchmark_registry
 
 
 class CertificationRunRequest(BaseModel):
     project_id: str = "default_project"
-    legacy_target: str = "loan_approval_legacy"
-    modernized_target: str = "loan_approval_modern_equiv"
+    benchmark_id: Optional[str] = None
+    benchmark_variant: Optional[str] = "clean_v2"
+    legacy_target: Optional[str] = "loan_approval_legacy"
+    modernized_target: Optional[str] = "loan_approval_modern_equiv"
     legacy_version: Optional[str] = None
     modernized_version: Optional[str] = None
-    oracle_set_id: str
+    oracle_set_id: Optional[str] = None
     policy: Optional[CertificationPolicy] = None
     implementation: Optional[Literal["equivalent", "buggy"]] = None
+    dataset_name: str = "default"
     n_samples: int = 100
     seed: int = 42
 
@@ -279,49 +283,128 @@ class DriftEvaluateRequest(BaseModel):
     certification_id: Optional[str] = None
 
 
+@app.get("/api/v1/benchmarks")
+def list_benchmarks_endpoint():
+    """Lists all registered benchmarks with full provenance metadata."""
+    benchmarks = benchmark_registry.list_benchmarks()
+    return {"benchmarks": [b.model_dump(mode="json") for b in benchmarks]}
+
+
+@app.get("/api/v1/benchmarks/{benchmark_id}")
+def get_benchmark_endpoint(benchmark_id: str):
+    """Retrieves detailed specification for a specific benchmark."""
+    spec = benchmark_registry.get_benchmark(benchmark_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found.")
+    return spec.model_dump(mode="json")
+
+
+@app.post("/api/v1/benchmarks/{benchmark_id}/validate")
+def validate_benchmark_endpoint(benchmark_id: str):
+    """Performs pre-flight validation on schemas, adapters, and input datasets."""
+    result = benchmark_registry.validate_benchmark(benchmark_id)
+    return result.model_dump(mode="json")
+
+
+@app.get("/api/v1/benchmarks/{benchmark_id}/datasets")
+def list_benchmark_datasets_endpoint(benchmark_id: str):
+    """Lists available input datasets for a benchmark."""
+    spec = benchmark_registry.get_benchmark(benchmark_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found.")
+    return {
+        "benchmark_id": benchmark_id,
+        "datasets": [
+            {"dataset_id": "default", "name": "Evaluation Dataset", "source": spec.dataset_source},
+            {"dataset_id": "validation", "name": "Pre-flight Validation Dataset", "source": "validation.json"},
+        ],
+    }
+
+
 @app.post("/api/v1/certification/run")
 def run_certification_v1(request: CertificationRunRequest):
-    """Executes a policy-driven behavioral certification run using registered ImplementationAdapters."""
-    oracle_set = registry.get_oracle_set(request.oracle_set_id)
-    if oracle_set is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Frozen OracleSet '{request.oracle_set_id}' not found in registry.",
-        )
+    """Executes a policy-driven behavioral certification run using registered ImplementationAdapters or Benchmarks."""
+    # 1. Benchmark Resolution Mode
+    test_inputs = None
+    if request.benchmark_id:
+        bench_spec = benchmark_registry.get_benchmark(request.benchmark_id)
+        if not bench_spec:
+            raise HTTPException(status_code=404, detail=f"Benchmark '{request.benchmark_id}' not found.")
 
-    # Resolve legacy adapter
-    legacy_adp = adapter_registry.get_adapter(request.legacy_target, request.legacy_version)
-    if legacy_adp is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Legacy implementation adapter '{request.legacy_target}' not found in adapter registry.",
-        )
+        oracle_set = benchmark_registry.get_or_create_oracle_set(request.benchmark_id)
+        legacy_adp = benchmark_registry.get_legacy_adapter(request.benchmark_id)
+        if not legacy_adp:
+            raise HTTPException(status_code=404, detail=f"Legacy adapter for benchmark '{request.benchmark_id}' not found.")
 
-    # Determine modern target name
-    mod_target_name = request.modernized_target
-    if request.implementation == "buggy" and mod_target_name in ("loan_approval_modern_equiv", "loan_approval_modern"):
-        mod_target_name = "loan_approval_modern_buggy"
-    elif request.implementation == "equivalent" and mod_target_name == "loan_approval_modern_buggy":
-        mod_target_name = "loan_approval_modern_equiv"
+        # Map variant
+        variant = request.benchmark_variant or "clean_v2"
+        if request.implementation == "buggy" and variant == "clean_v2":
+            variant = list(bench_spec.modernized_adapters.keys())[1] if len(bench_spec.modernized_adapters) > 1 else "buggy_v2"
+        elif request.implementation == "equivalent":
+            variant = "clean_v2"
 
-    modern_adp = adapter_registry.get_adapter(mod_target_name, request.modernized_version)
-    if modern_adp is None:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Modernized implementation adapter '{mod_target_name}' not found in adapter registry.",
-        )
+        modern_adp = benchmark_registry.get_modernized_adapter(request.benchmark_id, variant=variant)
+        if not modern_adp:
+            raise HTTPException(status_code=404, detail=f"Modernized adapter variant '{variant}' for benchmark '{request.benchmark_id}' not found.")
+
+        # Load input dataset
+        try:
+            test_inputs = benchmark_registry.get_input_dataset(request.benchmark_id, dataset_name=request.dataset_name)
+        except Exception as exc:
+            logger.warning(f"Could not load dataset for benchmark {request.benchmark_id}: {exc}")
+
+        field_bounds = bench_spec.field_bounds
+        proj_id = request.project_id if request.project_id != "default_project" else f"benchmark_{request.benchmark_id}"
+
+    # 2. Generic Adapter Resolution Mode
+    else:
+        if not request.oracle_set_id:
+            raise HTTPException(status_code=400, detail="Missing oracle_set_id for generic certification run.")
+
+        oracle_set = registry.get_oracle_set(request.oracle_set_id)
+        if oracle_set is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Frozen OracleSet '{request.oracle_set_id}' not found in registry.",
+            )
+
+        legacy_adp = adapter_registry.get_adapter(request.legacy_target or "loan_approval_legacy", request.legacy_version)
+        if legacy_adp is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Legacy implementation adapter '{request.legacy_target}' not found in adapter registry.",
+            )
+
+        mod_target_name = request.modernized_target or "loan_approval_modern_equiv"
+        if request.implementation == "buggy" and mod_target_name in ("loan_approval_modern_equiv", "loan_approval_modern"):
+            mod_target_name = "loan_approval_modern_buggy"
+        elif request.implementation == "equivalent" and mod_target_name == "loan_approval_modern_buggy":
+            mod_target_name = "loan_approval_modern_equiv"
+
+        modern_adp = adapter_registry.get_adapter(mod_target_name, request.modernized_version)
+        if modern_adp is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Modernized implementation adapter '{mod_target_name}' not found in adapter registry.",
+            )
+
+        field_bounds = None
+        proj_id = request.project_id
 
     artifact = certification_engine.certify(
-        project_id=request.project_id,
+        project_id=proj_id,
         legacy_adapter=legacy_adp,
         modern_adapter=modern_adp,
         oracle_set=oracle_set,
         policy=request.policy,
+        test_inputs=test_inputs,
+        field_bounds=field_bounds,
         n_samples=request.n_samples,
         seed=request.seed,
     )
 
     return artifact.model_dump(mode="json")
+
 
 
 @app.get("/api/v1/certification/artifacts")

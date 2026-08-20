@@ -1,0 +1,37 @@
+[
+  {
+    "gross_salary": 65000.0,
+    "tax_bracket": "STANDARD",
+    "dependents_count": 2,
+    "retirement_contribution": 5000.0,
+    "has_health_coverage": true
+  },
+  {
+    "gross_salary": 120000.0,
+    "tax_bracket": "STANDARD",
+    "dependents_count": 1,
+    "retirement_contribution": 10000.0,
+    "has_health_coverage": false
+  },
+  {
+    "gross_salary": 35000.0,
+    "tax_bracket": "STANDARD",
+    "dependents_count": 0,
+    "retirement_contribution": 2000.0,
+    "has_health_coverage": true
+  },
+  {
+    "gross_salary": 45000.0,
+    "tax_bracket": "EXEMPT",
+    "dependents_count": 3,
+    "retirement_contribution": 3000.0,
+    "has_health_coverage": true
+  },
+  {
+    "gross_salary": 180000.0,
+    "tax_bracket": "HIGH_INCOME",
+    "dependents_count": 4,
+    "retirement_contribution": 19500.0,
+    "has_health_coverage": true
+  }
+]

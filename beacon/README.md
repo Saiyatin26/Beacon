@@ -90,12 +90,34 @@ BEACON preserves a strict separation of concerns:
 
 > **Methodological Limitation Notice**: BEACON does not mathematically prove universal program equivalence; it certifies oracle-relative behavioral equivalence over the validated oracle set and tested input domain under a versioned certification policy.
 
+## Phase 12 — Real-World / Public Benchmark Integration
+
+BEACON includes a generic benchmark integration layer supporting multi-domain evaluation without application-specific logic in the certification engine.
+
+### Benchmark Provenance Categories
+- **`PUBLIC`**: Publicly sourced statutory/regulatory logic (e.g. `payroll_tax_calculator` progressive tax brackets).
+- **`REALISTIC`**: Realistic enterprise business engines (e.g. `retail_discount_pricing` loyalty, volume pricing, and shipping tariffs).
+- **`REAL_EXTERNAL`**: Authentic external open-source legacy systems.
+- **`CONTROLLED`**: Synthetic controlled experiment benchmarks (e.g. `loan_demo`, `medical_triage`).
+
+### Adding a New External Benchmark
+1. **Create Benchmark Directory**: Create `benchmarks/<benchmark_id>/` with `metadata.json`, `legacy/`, `modernized/`, `dataset/`, and `adapters/`.
+2. **Implement Adapters**: Subclass `LegacyAdapter` and `ModernizedAdapter` in `adapters/adapter.py`.
+3. **Define Datasets**: Provide `dataset/validation.json` (small pre-flight dataset) and evaluation datasets (`.json` or `.csv`).
+4. **Register Specifications**: The `BenchmarkRegistry` (`backend/benchmarks/registry.py`) automatically discovers the benchmark, validates its schemas, resolves its adapters into the global `AdapterRegistry`, and loads its datasets into Phase-11 `CertificationInputSet` instances.
+5. **Run Certification**: Use the dashboard UI or call `POST /api/v1/certification/run` with `benchmark_id`.
+
 ---
 
 ## Repository Layout
 
 ```
 beacon/
+├── benchmarks/            Phase 12 — External & Public Benchmark Suites
+│   ├── loan_demo/                 Core Loan Underwriting Benchmark
+│   ├── medical_triage/            Clinical Triage Decision Benchmark
+│   ├── retail_discount_pricing/   Realistic Multi-Tier Retail & Wholesale Pricing Engine
+│   └── payroll_tax_calculator/    Public Progressive Tax & Social Insurance Calculation Engine
 ├── legacy_sample/         Sample legacy app + synthetic trace generator
 ├── backend/
 │   ├── common/            Shared config, SQLite/Atlas client, Pydantic models
@@ -136,15 +158,19 @@ beacon/
 │   │   ├── repository.py          Thread-safe immutable certificate, input-set & case storage with integrity verification
 │   │   ├── report_generator.py    Human-readable HTML & Markdown audit reports
 │   │   └── runner.py              Backward-compatible certification runner
+│   ├── benchmarks/        Phase 12 — Benchmark Registry, Schema Validator & Dataset Loader
+│   │   ├── models.py              BenchmarkSpec, DatasetSpec, ProvenanceCategory, Manifest
+│   │   ├── dataset_loader.py      Deterministic loader with SHA-256 validation
+│   │   └── registry.py            Benchmark registry & adapter lifecycle wiring
 │   ├── drift/             Phase 10 — Post-Migration Drift Foundation
 │   │   ├── models.py              DriftObservation, DriftEvent, DriftPolicy
 │   │   └── evaluator.py           Runtime observation evaluation against frozen OracleSet
 │   ├── cli.py             BEACON Command Line Interface
-│   └── api/               FastAPI REST API wiring all stages together with case-level audit endpoints
-├── frontend/              React + Vite + Recharts interactive dashboard with case drill-down & dataset export
+│   └── api/               FastAPI REST API wiring all stages together with benchmark & audit endpoints
+├── frontend/              React + Vite + Recharts interactive dashboard with Benchmark Catalog & Audit Trail
 ├── docs/                  Baseline documentation & architectural verification
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (136 passed tests)
+└── tests/                 Comprehensive pytest test suite (148 passed tests)
 ```
 
 ---

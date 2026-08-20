@@ -184,8 +184,9 @@ class CertificationEngine:
             regs_by_input.setdefault(reg.input_id, []).append(reg)
 
         cases_to_save: list[CertificationCase] = []
-        for i, comp_rec in enumerate(phase9_report.comparison_records):
-            input_regs = regs_by_input.get(comp_rec.input_id, [])
+        for idx, inp in enumerate(inputs):
+            input_recs = [cr for cr in phase9_report.comparison_records if cr.input_id == inp.input_id]
+            input_regs = regs_by_input.get(inp.input_id, [])
             violated_oracles = [r.oracle_id for r in input_regs]
 
             sev = "none"
@@ -199,34 +200,53 @@ class CertificationEngine:
                 else:
                     sev = "low"
 
+            # Aggregate classification across oracles for this input
+            classifications = [cr.equivalence_outcome for cr in input_recs]
+            if "MODERN_REGRESSION" in classifications:
+                classification = "MODERN_REGRESSION"
+            elif "REFERENCE_INCONSISTENT" in classifications:
+                classification = "REFERENCE_INCONSISTENT"
+            elif "MUTUAL_VIOLATION" in classifications:
+                classification = "MUTUAL_VIOLATION"
+            elif "MATCH" in classifications:
+                classification = "MATCH"
+            elif "NOT_APPLICABLE" in classifications:
+                classification = "NOT_APPLICABLE"
+            else:
+                classification = classifications[0] if classifications else "MATCH"
+
+            sample_rec = input_recs[0] if input_recs else None
+            leg_obs = sample_rec.legacy_observation if sample_rec else None
+            mod_obs = sample_rec.modern_observation if sample_rec else None
+
             leg_out = (
-                json.dumps(comp_rec.legacy_observation.raw_outputs, sort_keys=True, separators=(",", ":"))
-                if comp_rec.legacy_observation
+                json.dumps(leg_obs.raw_outputs, sort_keys=True, separators=(",", ":"))
+                if leg_obs and leg_obs.raw_outputs
                 else "{}"
             )
             mod_out = (
-                json.dumps(comp_rec.modern_observation.raw_outputs, sort_keys=True, separators=(",", ":"))
-                if comp_rec.modern_observation
+                json.dumps(mod_obs.raw_outputs, sort_keys=True, separators=(",", ":"))
+                if mod_obs and mod_obs.raw_outputs
                 else "{}"
             )
             exec_time = 0.0
-            if comp_rec.legacy_observation:
-                exec_time += comp_rec.legacy_observation.execution_time_ms
-            if comp_rec.modern_observation:
-                exec_time += comp_rec.modern_observation.execution_time_ms
+            if leg_obs:
+                exec_time += leg_obs.execution_time_ms
+            if mod_obs:
+                exec_time += mod_obs.execution_time_ms
 
             case = CertificationCase(
-                case_id=f"CASE-{cert_id}-{i}",
+                case_id=f"CASE-{cert_id}-{idx}",
                 run_id=cert_id,
                 input_set_id=input_set_id,
-                case_index=i,
-                input_json=json.dumps(comp_rec.input_values, sort_keys=True, separators=(",", ":")),
-                input_hash=comp_rec.input_id,
+                case_index=idx,
+                input_json=json.dumps(inp.values, sort_keys=True, separators=(",", ":")),
+                input_hash=inp.input_id,
                 legacy_output_json=leg_out,
                 modern_output_json=mod_out,
                 execution_time_ms=exec_time,
                 oracle_result="VIOLATED" if input_regs else "PASS",
-                classification=comp_rec.equivalence_outcome,
+                classification=classification,
                 severity=sev,
                 violated_oracle_ids=violated_oracles,
             )

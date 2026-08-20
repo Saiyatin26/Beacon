@@ -1,0 +1,37 @@
+[
+  {
+    "order_amount": 550.0,
+    "customer_tier": "VIP",
+    "items_count": 10,
+    "coupon_code": "NONE",
+    "is_express_shipping": true
+  },
+  {
+    "order_amount": 350.0,
+    "customer_tier": "GOLD",
+    "items_count": 5,
+    "coupon_code": "SAVE10",
+    "is_express_shipping": false
+  },
+  {
+    "order_amount": 250.0,
+    "customer_tier": "SILVER",
+    "items_count": 8,
+    "coupon_code": "NONE",
+    "is_express_shipping": false
+  },
+  {
+    "order_amount": 1200.0,
+    "customer_tier": "STANDARD",
+    "items_count": 60,
+    "coupon_code": "WELCOME20",
+    "is_express_shipping": false
+  },
+  {
+    "order_amount": 80.0,
+    "customer_tier": "STANDARD",
+    "items_count": 2,
+    "coupon_code": "NONE",
+    "is_express_shipping": true
+  }
+]

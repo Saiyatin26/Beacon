@@ -1,0 +1,43 @@
+{
+  "benchmark_id": "payroll_tax_calculator",
+  "name": "Progressive Payroll & Income Tax Calculation Engine",
+  "domain": "Public Finance & Human Resources",
+  "description": "Legacy progressive payroll tax computation, statutory social insurance deductions, dependent allowances, and healthcare tax credit engine.",
+  "source": "Public Statutory Tax Calculation Schedule",
+  "source_url": "https://github.com/Saiyatin26/Beacon/benchmarks/payroll_tax_calculator",
+  "license": "MIT",
+  "language": "Python",
+  "legacy_version": "1.0.0",
+  "modernized_version": "2.0.0",
+  "provenance_category": "PUBLIC",
+  "input_schema": {
+    "gross_salary": "float",
+    "tax_bracket": "str",
+    "dependents_count": "int",
+    "retirement_contribution": "float",
+    "has_health_coverage": "bool"
+  },
+  "output_schema": {
+    "taxable_income": "float",
+    "federal_tax": "float",
+    "state_tax": "float",
+    "fica_tax": "float",
+    "net_pay": "float",
+    "eligible_for_payroll": "bool"
+  },
+  "expected_behavior_source": "oracle_derived",
+  "dataset_source": "synthetic_public_payroll_v1",
+  "dataset_version": "1.0.0",
+  "legacy_adapter_id": "payroll_legacy",
+  "modernized_adapters": {
+    "clean_v2": "payroll_modern_clean",
+    "buggy_bracket_v2": "payroll_modern_buggy_bracket",
+    "buggy_deduction_v2": "payroll_modern_buggy_deduction"
+  },
+  "field_bounds": {
+    "gross_salary": [1000.0, 300000.0],
+    "dependents_count": [0.0, 10.0],
+    "retirement_contribution": [0.0, 40000.0]
+  },
+  "tags": ["payroll", "taxation", "finance", "public_rules"]
+}

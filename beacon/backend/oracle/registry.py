@@ -141,6 +141,11 @@ class OracleRegistry:
         self._oracle_sets[set_id] = oracle_set
         return oracle_set
 
+    def register_oracle_set(self, oracle_set: OracleSet) -> OracleSet:
+        """Stores a pre-constructed, frozen OracleSet directly in the registry."""
+        self._oracle_sets[oracle_set.oracle_set_id] = oracle_set
+        return oracle_set
+
     def get_oracle_set(self, oracle_set_id: str) -> Optional[OracleSet]:
         """Retrieves a frozen OracleSet by ID."""
         return self._oracle_sets.get(oracle_set_id)

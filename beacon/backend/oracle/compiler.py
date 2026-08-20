@@ -129,20 +129,21 @@ def parse_consequence_to_ast(consequence_str: str) -> OracleConsequence:
         parts = raw.split("==", 1)
         var_name = parts[0].strip()
         val_raw = parts[1].strip().strip("'\"")
-        val: Union[str, int, float, bool] = val_raw
-        if val_raw.isdigit():
-            val = int(val_raw)
-        elif val_raw.lower() in ("true", "false"):
-            val = val_raw.lower() == "true"
-        return OracleConsequence(variable=var_name, operator="==", value=val)
-    elif "=" in raw and not raw.startswith("="):
-        parts = raw.split("=", 1)
-        var_name = parts[0].strip()
-        val_raw = parts[1].strip().strip("'\"")
-        return OracleConsequence(variable=var_name, operator="==", value=val_raw)
+        if val_raw.lower() in ("true", "false"):
+            val_clean: Union[str, int, float, bool] = val_raw.lower() == "true"
+        else:
+            try:
+                if "." in val_raw:
+                    val_clean = float(val_raw)
+                else:
+                    val_clean = int(val_raw)
+            except ValueError:
+                val_clean = val_raw
+        return OracleConsequence(variable=var_name, operator="==", value=val_clean)
     else:
-        # Simple scalar consequence e.g. "REJECT", "APPROVE"
         val_clean = raw.strip("'\"")
+        if val_clean.lower() in ("true", "false"):
+            val_clean = val_clean.lower() == "true"
         return OracleConsequence(variable="decision", operator="==", value=val_clean)
 
 
