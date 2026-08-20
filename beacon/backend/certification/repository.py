@@ -11,7 +11,14 @@ from pathlib import Path
 import sqlite3
 from typing import Optional
 
-from .models import CertificationArtifact, verify_artifact_integrity, CertificationInputSet, CertificationCase
+from .models import (
+    CertificationArtifact,
+    CertificationCase,
+    CertificationInputSet,
+    ImmutabilityError,
+    compute_input_set_canonical_hash,
+    verify_artifact_integrity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +26,7 @@ DB_PATH = Path(__file__).resolve().parents[2] / "data" / "beacon.sqlite3"
 
 
 class CertificationRepository:
-    """Manages immutable storage and retrieval of CertificationArtifacts."""
+    """Manages immutable storage and retrieval of CertificationArtifacts, InputSets, and Cases."""
 
     def __init__(self, db_path: Optional[Path] = None):
         self._db_path = db_path or DB_PATH
@@ -80,14 +87,50 @@ class CertificationRepository:
         except Exception as exc:
             logger.warning(f"Could not initialize SQLite certification table: {exc}")
 
-    def save_artifact(self, artifact: CertificationArtifact) -> CertificationArtifact:
-        """Saves a CertificationArtifact immutably with integrity verification.
-        - Verifies that stored content_hash matches computed canonical hash.
-        - If an artifact with the same ID exists with identical hash, returns existing.
-        - If hash differs, raises ValueError (immutability violation).
-        """
+    def _save_artifact_tx(self, artifact: CertificationArtifact, conn: sqlite3.Connection) -> CertificationArtifact:
         cid = artifact.certification_id
+        if not verify_artifact_integrity(artifact):
+            raise ValueError(f"Integrity violation: Certificate #{cid} content hash does not match its canonical content.")
 
+        cursor = conn.cursor()
+        cursor.execute("SELECT content_hash, payload_json FROM certification_artifacts WHERE certification_id = ?", (cid,))
+        row = cursor.fetchone()
+        if row:
+            existing_hash = row[0]
+            if existing_hash == artifact.content_hash:
+                return artifact
+            raise ImmutabilityError(
+                f"Immutability violation: Certificate #{cid} already exists with different content hash "
+                f"('{existing_hash}' vs '{artifact.content_hash}'). Overwrite forbidden."
+            )
+
+        cursor.execute("""
+            INSERT INTO certification_artifacts (
+                certification_id, project_id, legacy_version, modernized_version,
+                oracle_set_id, oracle_set_hash, policy_id, policy_hash,
+                status, certified, score, content_hash, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            artifact.certification_id,
+            artifact.project_id,
+            artifact.legacy_version,
+            artifact.modernized_version,
+            artifact.oracle_set_id,
+            artifact.oracle_set_hash,
+            artifact.certification_policy_id,
+            artifact.certification_policy_hash,
+            artifact.status.value,
+            1 if artifact.certified else 0,
+            artifact.score,
+            artifact.content_hash,
+            artifact.model_dump_json(),
+            artifact.timestamp or datetime.now(timezone.utc).isoformat(),
+        ))
+        return artifact
+
+    def save_artifact(self, artifact: CertificationArtifact) -> CertificationArtifact:
+        """Saves a CertificationArtifact immutably with integrity and duplicate verification."""
+        cid = artifact.certification_id
         if not verify_artifact_integrity(artifact):
             raise ValueError(f"Integrity violation: Certificate #{cid} content hash does not match its canonical content.")
 
@@ -95,39 +138,13 @@ class CertificationRepository:
             existing = self._memory_artifacts[cid]
             if existing.content_hash == artifact.content_hash:
                 return existing
-            raise ValueError(f"Immutability violation: Certificate #{cid} already exists with different content hash.")
+            raise ImmutabilityError(f"Immutability violation: Certificate #{cid} already exists with different content hash.")
+
+        with sqlite3.connect(self._db_path) as conn:
+            self._save_artifact_tx(artifact, conn)
+            conn.commit()
 
         self._memory_artifacts[cid] = artifact
-
-        # Persist to SQLite
-        try:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO certification_artifacts (
-                        certification_id, project_id, legacy_version, modernized_version,
-                        oracle_set_id, oracle_set_hash, policy_id, policy_hash,
-                        status, certified, score, content_hash, payload_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    artifact.certification_id,
-                    artifact.project_id,
-                    artifact.legacy_version,
-                    artifact.modernized_version,
-                    artifact.oracle_set_id,
-                    artifact.oracle_set_hash,
-                    artifact.certification_policy_id,
-                    artifact.certification_policy_hash,
-                    artifact.status.value,
-                    1 if artifact.certified else 0,
-                    artifact.score,
-                    artifact.content_hash,
-                    artifact.model_dump_json(),
-                    artifact.timestamp or datetime.now(timezone.utc).isoformat(),
-                ))
-                conn.commit()
-        except Exception as exc:
-            logger.debug(f"SQLite save notice: {exc}")
-
         return artifact
 
     def get_artifact(self, certification_id: str) -> Optional[CertificationArtifact]:
@@ -161,7 +178,6 @@ class CertificationRepository:
         """Lists historical CertificationArtifacts sorted newest first."""
         results: list[CertificationArtifact] = []
 
-        # Load from DB if possible
         try:
             with sqlite3.connect(self._db_path) as conn:
                 cursor = conn.cursor()
@@ -207,29 +223,44 @@ class CertificationRepository:
         except Exception:
             pass
 
+    def _save_input_set_tx(self, input_set: CertificationInputSet, conn: sqlite3.Connection) -> CertificationInputSet:
+        cursor = conn.cursor()
+        cursor.execute("SELECT canonical_hash, payload_json FROM input_sets WHERE input_set_id = ?", (input_set.input_set_id,))
+        row = cursor.fetchone()
+        if row:
+            existing_hash = row[0]
+            if existing_hash == input_set.canonical_hash:
+                return input_set
+            raise ImmutabilityError(
+                f"Immutability violation: InputSet '{input_set.input_set_id}' already exists with different canonical hash "
+                f"('{existing_hash}' vs '{input_set.canonical_hash}'). Overwrite forbidden."
+            )
+
+        cursor.execute("""
+            INSERT INTO input_sets (
+                input_set_id, version, generator_type, input_count, seed, canonical_hash, payload_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            input_set.input_set_id,
+            input_set.version,
+            input_set.generator_type,
+            input_set.input_count,
+            input_set.seed,
+            input_set.canonical_hash,
+            input_set.model_dump_json(),
+            input_set.created_at or datetime.now(timezone.utc).isoformat(),
+        ))
+        return input_set
+
     def save_input_set(self, input_set: CertificationInputSet) -> CertificationInputSet:
-        try:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO input_sets (
-                        input_set_id, version, generator_type, input_count, seed, canonical_hash, payload_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    input_set.input_set_id,
-                    input_set.version,
-                    input_set.generator_type,
-                    input_set.input_count,
-                    input_set.seed,
-                    input_set.canonical_hash,
-                    input_set.model_dump_json(),
-                    input_set.created_at or datetime.now(timezone.utc).isoformat(),
-                ))
-                conn.commit()
-        except Exception as exc:
-            logger.debug(f"SQLite save input_set notice: {exc}")
+        """Saves a CertificationInputSet immutably with integrity and duplicate verification."""
+        with sqlite3.connect(self._db_path) as conn:
+            self._save_input_set_tx(input_set, conn)
+            conn.commit()
         return input_set
 
     def get_input_set(self, input_set_id: str) -> Optional[CertificationInputSet]:
+        """Retrieves a CertificationInputSet by ID."""
         try:
             with sqlite3.connect(self._db_path) as conn:
                 cursor = conn.cursor()
@@ -241,48 +272,88 @@ class CertificationRepository:
             logger.debug(f"SQLite get input_set notice: {exc}")
         return None
 
-    def save_certification_cases(self, cases: list[CertificationCase]):
+    def _save_certification_cases_tx(self, cases: list[CertificationCase], conn: sqlite3.Connection):
         if not cases:
             return
-        try:
-            with sqlite3.connect(self._db_path) as conn:
-                cursor = conn.cursor()
-                records = [
-                    (
-                        c.case_id,
-                        c.run_id,
-                        c.input_set_id,
-                        c.case_index,
-                        c.input_hash,
-                        c.classification,
-                        c.severity,
-                        c.model_dump_json()
-                    )
-                    for c in cases
-                ]
-                cursor.executemany("""
-                    INSERT OR REPLACE INTO certification_cases (
-                        case_id, run_id, input_set_id, case_index, input_hash, classification, severity, payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, records)
-                conn.commit()
-        except Exception as exc:
-            logger.debug(f"SQLite save certification_cases notice: {exc}")
+        cursor = conn.cursor()
+        for c in cases:
+            cursor.execute("SELECT payload_json FROM certification_cases WHERE case_id = ?", (c.case_id,))
+            row = cursor.fetchone()
+            if row:
+                existing_payload = json.loads(row[0])
+                current_payload = json.loads(c.model_dump_json())
+                if existing_payload == current_payload:
+                    continue
+                raise ImmutabilityError(
+                    f"Immutability violation: CertificationCase '{c.case_id}' already exists with different content. Overwrite forbidden."
+                )
 
-    def list_certification_cases(self, run_id: str, limit: int = 100, offset: int = 0, classification: Optional[str] = None) -> list[CertificationCase]:
+            cursor.execute("""
+                INSERT INTO certification_cases (
+                    case_id, run_id, input_set_id, case_index, input_hash, classification, severity, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                c.case_id,
+                c.run_id,
+                c.input_set_id,
+                c.case_index,
+                c.input_hash,
+                c.classification,
+                c.severity,
+                c.model_dump_json(),
+            ))
+
+    def save_certification_cases(self, cases: list[CertificationCase]):
+        """Saves a list of CertificationCase records immutably with integrity checks."""
+        if not cases:
+            return
+        with sqlite3.connect(self._db_path) as conn:
+            self._save_certification_cases_tx(cases, conn)
+            conn.commit()
+
+    def save_certification_run_atomic(
+        self,
+        input_set: CertificationInputSet,
+        cases: list[CertificationCase],
+        artifact: CertificationArtifact,
+    ) -> CertificationArtifact:
+        """Atomically persists the input set, all certification cases, and the final artifact
+        in a single SQLite transaction with strict immutability checks."""
+        with sqlite3.connect(self._db_path) as conn:
+            try:
+                self._save_input_set_tx(input_set, conn)
+                self._save_certification_cases_tx(cases, conn)
+                self._save_artifact_tx(artifact, conn)
+                conn.commit()
+            except Exception as exc:
+                conn.rollback()
+                logger.error(f"Atomic certification persistence failed; transaction rolled back: {exc}")
+                raise
+
+        self._memory_artifacts[artifact.certification_id] = artifact
+        return artifact
+
+    def list_certification_cases(
+        self,
+        run_id: str,
+        limit: int = 100,
+        offset: int = 0,
+        classification: Optional[str] = None,
+    ) -> list[CertificationCase]:
+        """Lists cases associated with a certification run, optionally filtered by classification."""
         results = []
         try:
             with sqlite3.connect(self._db_path) as conn:
                 cursor = conn.cursor()
                 query = "SELECT payload_json FROM certification_cases WHERE run_id = ?"
-                params = [run_id]
+                params: list[object] = [run_id]
                 if classification and classification != "ALL":
                     query += " AND classification = ?"
                     params.append(classification)
-                
+
                 query += " ORDER BY case_index ASC LIMIT ? OFFSET ?"
                 params.extend([limit, offset])
-                
+
                 cursor.execute(query, params)
                 for row in cursor.fetchall():
                     results.append(CertificationCase.model_validate_json(row[0]))
@@ -290,6 +361,42 @@ class CertificationRepository:
             logger.debug(f"SQLite list certification_cases notice: {exc}")
         return results
 
+    def list_cases_for_input_set(
+        self,
+        input_set_id: str,
+        run_id: Optional[str] = None,
+    ) -> list[CertificationCase]:
+        """Retrieves all persisted CertificationCases for an input set, ordered by case_index."""
+        results = []
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.cursor()
+                if run_id:
+                    cursor.execute(
+                        "SELECT payload_json FROM certification_cases WHERE input_set_id = ? AND run_id = ? ORDER BY case_index ASC",
+                        (input_set_id, run_id),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT payload_json FROM certification_cases WHERE input_set_id = ? ORDER BY case_index ASC",
+                        (input_set_id,),
+                    )
+                for row in cursor.fetchall():
+                    results.append(CertificationCase.model_validate_json(row[0]))
+        except Exception as exc:
+            logger.debug(f"SQLite list cases for input set notice: {exc}")
+        return results
+
+    def verify_input_set_integrity(self, input_set_id: str, run_id: Optional[str] = None) -> bool:
+        """Reconstructs the input-set hash from persisted cases and confirms it matches the stored input-set hash."""
+        input_set = self.get_input_set(input_set_id)
+        if not input_set:
+            return False
+        cases = self.list_cases_for_input_set(input_set_id, run_id)
+        if not cases or len(cases) != input_set.input_count:
+            return False
+        reconstructed_hash = compute_input_set_canonical_hash(cases)
+        return reconstructed_hash == input_set.canonical_hash
 
 # Module-level default repository singleton
 certification_repository = CertificationRepository()

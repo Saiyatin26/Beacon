@@ -43,9 +43,14 @@ Frozen Oracle Set (Immutable, Content-Addressed)
      ▼
 Same Shared Test Inputs Applied to Legacy and Modernized Adapters
      │
+     │
      ▼
 Deterministic Oracle Evaluation & 4-Way Classification
 (MATCH, MODERN_REGRESSION, REFERENCE_INCONSISTENT, MUTUAL_VIOLATION)
+     │
+     ▼
+Phase 11 Evidence Persistence & Reproducibility Verification
+(Immutable InputSets, Execution Cases, Canonical SHA-256 Hash Reconstruction, Atomic SQLite Persistence)
      │
      ▼
 Quantified Certification Policy Engine
@@ -55,7 +60,7 @@ Quantified Certification Policy Engine
 Immutable Cryptographic Certification Artifact (JSON + SHA-256 Hash + HTML/Markdown Report)
      │
      ▼
-Interactive UI Dashboard with Per-Oracle Failure & Counterexample Drill-Down
+Interactive UI Dashboard with Per-Oracle Failure & Case-Level Audit Drill-Down & Dataset Export
      │
      ▼
 Post-Migration Drift Monitoring (Runtime Observations -> evaluate_oracle)
@@ -121,24 +126,25 @@ beacon/
 │   │   ├── compiler.py            Validation-gated oracle compiler
 │   │   ├── evaluator.py           Pure AST evaluator & 5-way status reporter
 │   │   └── registry.py            Versioned immutable oracle & oracle set registry
-│   ├── certification/     Phase 9 & 10 — Cross-Version Equivalence & Certification
-│   │   ├── models.py              Observation, CertificationPolicy, CertificationArtifact
+│   ├── certification/     Phase 9, 10 & 11 — Equivalence, Certification & Evidence Reproducibility
+│   │   ├── models.py              Observation, Policy, Artifact, CertificationInputSet, CertificationCase, ImmutabilityError
 │   │   ├── adapters.py            Generic ImplementationAdapter, LegacyAdapter, ModernizedAdapter
+│   │   ├── adapter_registry.py    Registry resolving application adapters generically without hardcoding
 │   │   ├── input_generator.py     Shared test suite generator & deterministic replay
 │   │   ├── engine.py              Cross-version 4-way comparison engine
-│   │   ├── certification_engine.py Policy-driven certification & certificate synthesis
-│   │   ├── repository.py          Thread-safe immutable certificate storage
+│   │   ├── certification_engine.py Policy-driven certification & atomic evidence synthesis
+│   │   ├── repository.py          Thread-safe immutable certificate, input-set & case storage with integrity verification
 │   │   ├── report_generator.py    Human-readable HTML & Markdown audit reports
 │   │   └── runner.py              Backward-compatible certification runner
 │   ├── drift/             Phase 10 — Post-Migration Drift Foundation
 │   │   ├── models.py              DriftObservation, DriftEvent, DriftPolicy
 │   │   └── evaluator.py           Runtime observation evaluation against frozen OracleSet
 │   ├── cli.py             BEACON Command Line Interface
-│   └── api/               FastAPI REST API wiring all stages together
-├── frontend/              React + Vite + Recharts interactive governance dashboard
+│   └── api/               FastAPI REST API wiring all stages together with case-level audit endpoints
+├── frontend/              React + Vite + Recharts interactive dashboard with case drill-down & dataset export
 ├── docs/                  Baseline documentation & architectural verification
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (123 passed tests)
+└── tests/                 Comprehensive pytest test suite (136 passed tests)
 ```
 
 ---

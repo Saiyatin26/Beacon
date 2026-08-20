@@ -20,8 +20,8 @@ from .input_generator import generate_certification_test_suite
 from .models import (
     BehavioralRegression,
     CertificationArtifact,
-    CertificationInputSet,
     CertificationCase,
+    CertificationInputSet,
     CertificationMetrics,
     CertificationPolicy,
     CertificationStatus,
@@ -29,7 +29,9 @@ from .models import (
     CrossVersionCertificationReport,
     PerOracleCertificationSummary,
     compute_artifact_content_hash,
+    compute_input_set_canonical_hash,
     verify_artifact_integrity,
+    verify_input_set_integrity,
 )
 from .repository import certification_repository
 
@@ -140,8 +142,8 @@ class CertificationEngine:
                 seed=seed,
             )
 
-        sorted_inp_ids = sorted([inp.input_id for inp in inputs])
-        input_set_hash = hashlib.sha256(json.dumps(sorted_inp_ids).encode("utf-8")).hexdigest()
+        # Compute complete canonical dataset hash
+        input_set_hash = compute_input_set_canonical_hash(inputs)
         input_set_id = f"INPSET-{input_set_hash[:8]}"
 
         input_set = CertificationInputSet(
@@ -155,7 +157,6 @@ class CertificationEngine:
             created_at=timestamp,
             provenance={}
         )
-        certification_repository.save_input_set(input_set)
 
         # 3. Cross-Version Execution via Phase 9 Engine
         phase9_report: CrossVersionCertificationReport = self.cross_version_engine.certify_equivalence(
@@ -169,7 +170,7 @@ class CertificationEngine:
             seed=seed,
         )
 
-        # 4. Compile Per-Oracle Summaries
+        # 4. Compile Per-Oracle Summaries and Certification Cases
         oracle_summaries: list[PerOracleCertificationSummary] = []
         critical_failures_count = 0
         non_critical_failures_count = 0
@@ -181,31 +182,45 @@ class CertificationEngine:
         for reg in phase9_report.regressions:
             regs_by_oracle.setdefault(reg.oracle_id, []).append(reg)
             regs_by_input.setdefault(reg.input_id, []).append(reg)
-            
+
         cases_to_save: list[CertificationCase] = []
         for i, comp_rec in enumerate(phase9_report.comparison_records):
             input_regs = regs_by_input.get(comp_rec.input_id, [])
             violated_oracles = [r.oracle_id for r in input_regs]
-            
+
             sev = "none"
             if input_regs:
-                if any(r.severity == "critical" for r in input_regs): sev = "critical"
-                elif any(r.severity == "high" for r in input_regs): sev = "high"
-                elif any(r.severity == "medium" for r in input_regs): sev = "medium"
-                else: sev = "low"
-            
-            leg_out = json.dumps(comp_rec.legacy_observation.raw_outputs, sort_keys=True) if comp_rec.legacy_observation else "{}"
-            mod_out = json.dumps(comp_rec.modern_observation.raw_outputs, sort_keys=True) if comp_rec.modern_observation else "{}"
+                if any(r.severity == "critical" for r in input_regs):
+                    sev = "critical"
+                elif any(r.severity == "high" for r in input_regs):
+                    sev = "high"
+                elif any(r.severity == "medium" for r in input_regs):
+                    sev = "medium"
+                else:
+                    sev = "low"
+
+            leg_out = (
+                json.dumps(comp_rec.legacy_observation.raw_outputs, sort_keys=True, separators=(",", ":"))
+                if comp_rec.legacy_observation
+                else "{}"
+            )
+            mod_out = (
+                json.dumps(comp_rec.modern_observation.raw_outputs, sort_keys=True, separators=(",", ":"))
+                if comp_rec.modern_observation
+                else "{}"
+            )
             exec_time = 0.0
-            if comp_rec.legacy_observation: exec_time += comp_rec.legacy_observation.execution_time_ms
-            if comp_rec.modern_observation: exec_time += comp_rec.modern_observation.execution_time_ms
+            if comp_rec.legacy_observation:
+                exec_time += comp_rec.legacy_observation.execution_time_ms
+            if comp_rec.modern_observation:
+                exec_time += comp_rec.modern_observation.execution_time_ms
 
             case = CertificationCase(
                 case_id=f"CASE-{cert_id}-{i}",
                 run_id=cert_id,
                 input_set_id=input_set_id,
                 case_index=i,
-                input_json=json.dumps(comp_rec.input_values, sort_keys=True),
+                input_json=json.dumps(comp_rec.input_values, sort_keys=True, separators=(",", ":")),
                 input_hash=comp_rec.input_id,
                 legacy_output_json=leg_out,
                 modern_output_json=mod_out,
@@ -213,10 +228,43 @@ class CertificationEngine:
                 oracle_result="VIOLATED" if input_regs else "PASS",
                 classification=comp_rec.equivalence_outcome,
                 severity=sev,
-                violated_oracle_ids=violated_oracles
+                violated_oracle_ids=violated_oracles,
             )
             cases_to_save.append(case)
-        certification_repository.save_certification_cases(cases_to_save)
+
+        # Reproducibility Verification
+        reproducibility_valid = True
+        reproducibility_reasons = []
+
+        if len(cases_to_save) != len(inputs) or len(cases_to_save) != input_set.input_count:
+            reproducibility_valid = False
+            reproducibility_reasons.append(
+                f"Evaluated input count ({len(inputs)}) does not match case count ({len(cases_to_save)})"
+            )
+
+        for c in cases_to_save:
+            if c.run_id != cert_id or c.input_set_id != input_set_id:
+                reproducibility_valid = False
+                reproducibility_reasons.append(f"Case #{c.case_index} reference mismatch (run_id/input_set_id)")
+            if not c.input_json or not c.input_hash:
+                reproducibility_valid = False
+                reproducibility_reasons.append(f"Case #{c.case_index} missing input data or hash")
+            if c.legacy_output_json is None or c.modern_output_json is None:
+                reproducibility_valid = False
+                reproducibility_reasons.append(f"Case #{c.case_index} missing execution outputs")
+            if not c.oracle_result or not c.classification:
+                reproducibility_valid = False
+                reproducibility_reasons.append(f"Case #{c.case_index} missing oracle result or classification")
+
+        reconstructed_hash = compute_input_set_canonical_hash(cases_to_save)
+        if reconstructed_hash != input_set.canonical_hash:
+            reproducibility_valid = False
+            reproducibility_reasons.append(
+                f"Reconstructed input set hash mismatch: expected {input_set.canonical_hash}, got {reconstructed_hash}"
+            )
+
+        repro_state = "FULLY_REPRODUCIBLE" if reproducibility_valid else "LEGACY_PARTIAL"
+
 
         for oracle in oracle_set.oracles:
             m = phase9_report.oracle_metrics.get(oracle.oracle_id)
@@ -375,7 +423,7 @@ class CertificationEngine:
             certification_policy_hash=pol_hash,
             certification_engine_version="1.0.0",
             timestamp=timestamp,
-            reproducibility_state="FULLY_REPRODUCIBLE",
+            reproducibility_state=repro_state,
             status=final_status,
             certified=is_certified,
             score=metrics.overall_equivalence_score,
@@ -392,7 +440,7 @@ class CertificationEngine:
         cert_content_hash = compute_artifact_content_hash(temp_artifact)
         artifact = temp_artifact.model_copy(update={"content_hash": cert_content_hash})
 
-        return certification_repository.save_artifact(artifact)
+        return certification_repository.save_certification_run_atomic(input_set, cases_to_save, artifact)
 
 
 # Module-level default certification engine singleton

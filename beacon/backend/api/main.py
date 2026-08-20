@@ -451,3 +451,25 @@ def export_certification_dataset(certification_id: str):
         content=export_payload,
         headers={"Content-Disposition": f"attachment; filename=certification_export_{certification_id}.json"}
     )
+
+
+@app.get("/api/v1/certification/{certification_id}/verify_reproducibility")
+def verify_certification_reproducibility(certification_id: str):
+    """Verifies that persisted cases match the stored input set and artifact integrity."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Certification not found.")
+
+    artifact_intact = verify_artifact_integrity(artifact)
+    input_set_intact = certification_repository.verify_input_set_integrity(
+        artifact.input_set_id, artifact.certification_id
+    )
+
+    return {
+        "certification_id": certification_id,
+        "artifact_integrity": artifact_intact,
+        "input_set_integrity": input_set_intact,
+        "reproducibility_state": artifact.reproducibility_state,
+        "verified": artifact_intact and input_set_intact,
+    }
+

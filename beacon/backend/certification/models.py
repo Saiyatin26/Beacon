@@ -100,8 +100,15 @@ class ComparisonRecord(BaseModel):
     timestamp: str = ""
 
 
+class ImmutabilityError(ValueError):
+    """Raised when an attempt is made to overwrite or tamper with an immutable certification record."""
+    pass
+
+
 class CertificationInputSet(BaseModel):
     """Immutable record of the exact input dataset used for a certification run."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
+
     input_set_id: str
     version: int = 1
     generator_type: str = "deterministic_phase11"
@@ -115,6 +122,8 @@ class CertificationInputSet(BaseModel):
 
 class CertificationCase(BaseModel):
     """A single execution observation mapped to its legacy and modern output."""
+    model_config = {"frozen": True, "protected_namespaces": ()}
+
     case_id: str
     run_id: str
     input_set_id: str
@@ -128,6 +137,59 @@ class CertificationCase(BaseModel):
     classification: str
     severity: str = "medium"
     violated_oracle_ids: list[str] = Field(default_factory=list)
+
+
+def compute_input_set_canonical_hash(
+    items: list[Union[CertificationCase, CertificationTestInput, dict[str, Any]]]
+) -> str:
+    """Computes deterministic SHA-256 canonical hash across the complete ordered input dataset.
+    Reconstructed from either CertificationCase records or CertificationTestInput items,
+    including every input's stable ID and canonical input values with deterministic ordering
+    and stable JSON serialization.
+    """
+    canonical_entries = []
+    for idx, item in enumerate(items):
+        if isinstance(item, CertificationCase):
+            raw_inp = item.input_json
+            inp_vals = json.loads(raw_inp) if isinstance(raw_inp, str) else raw_inp
+            canonical_entries.append({
+                "case_index": item.case_index,
+                "input_id": item.input_hash,
+                "input_values": inp_vals,
+            })
+        elif isinstance(item, CertificationTestInput):
+            canonical_entries.append({
+                "case_index": idx,
+                "input_id": item.input_id,
+                "input_values": item.values,
+            })
+        elif isinstance(item, dict):
+            c_idx = item.get("case_index", item.get("index", idx))
+            inp_id = item.get("input_hash", item.get("input_id", f"INP-{c_idx}"))
+            raw_inp = item.get("input_values", item.get("input_json", item.get("values", {})))
+            inp_vals = json.loads(raw_inp) if isinstance(raw_inp, str) else raw_inp
+            canonical_entries.append({
+                "case_index": c_idx,
+                "input_id": inp_id,
+                "input_values": inp_vals,
+            })
+    canonical_entries.sort(key=lambda x: x["case_index"])
+    canonical_json = json.dumps(canonical_entries, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def verify_input_set_integrity(input_set: CertificationInputSet, cases: list[CertificationCase]) -> bool:
+    """Verifies that the reconstructed hash from persisted cases matches the stored input-set canonical hash,
+    and that case counts and references match."""
+    if not input_set or not cases:
+        return False
+    if len(cases) != input_set.input_count:
+        return False
+    for c in cases:
+        if c.input_set_id != input_set.input_set_id:
+            return False
+    reconstructed = compute_input_set_canonical_hash(cases)
+    return reconstructed == input_set.canonical_hash
 
 
 
