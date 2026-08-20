@@ -104,6 +104,8 @@ class OracleProvenance(BaseModel):
     source_lines: list[int] = Field(default_factory=list)
     evidence_ids: list[str] = Field(default_factory=list)
     execution_ids: list[str] = Field(default_factory=list)
+    evidence_source: str = "FULL_BEACON_DISCOVERED" # "CONTROLLED_ORACLE_SET" or "FULL_BEACON_DISCOVERED"
+    mining_method: str = "offline"
     validation_run_id: Optional[str] = None
     confidence: float
     severity: str

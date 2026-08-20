@@ -183,6 +183,7 @@ def compile_candidate_to_oracle(
     confidence_threshold: Optional[float] = None,
     name: Optional[str] = None,
     description: Optional[str] = None,
+    provenance: Optional[OracleProvenance] = None,
 ) -> OracleDefinition:
     """Compiles a validated CandidateInvariant into a canonical language-independent Oracle.
 
@@ -234,27 +235,27 @@ def compile_candidate_to_oracle(
     canonical_cond_str = normalize_condition(candidate.condition)
     raw_cond_str = candidate.raw_condition or candidate.condition
 
-    # 4. Construct Audit Provenance
-    validation_run_id = None
-    if val_res:
-        validation_run_id = val_res.get("validation_run_id") if isinstance(val_res, dict) else getattr(val_res, "validation_run_id", None)
-
+    # 4. Construct Audit Provenance if not explicitly provided
     cand_domain = getattr(candidate, "domain", "business_logic")
+    if provenance is None:
+        validation_run_id = None
+        if val_res:
+            validation_run_id = val_res.get("validation_run_id") if isinstance(val_res, dict) else getattr(val_res, "validation_run_id", None)
 
-    provenance = OracleProvenance(
-        invariant_id=candidate.invariant_id,
-        source_file=candidate.source_file,
-        source_lines=candidate.source_lines,
-        evidence_ids=candidate.evidence_ids,
-        execution_ids=candidate.execution_ids,
-        validation_run_id=validation_run_id,
-        confidence=cand_confidence,
-        severity=candidate.severity,
-        domain=cand_domain,
-        generation_method=candidate.generation_method,
-        generation_timestamp=candidate.timestamp or datetime.now(timezone.utc).isoformat(),
-        reproducibility=candidate.reproducibility or {},
-    )
+        provenance = OracleProvenance(
+            invariant_id=candidate.invariant_id,
+            source_file=candidate.source_file,
+            source_lines=candidate.source_lines,
+            evidence_ids=candidate.evidence_ids,
+            execution_ids=candidate.execution_ids,
+            validation_run_id=validation_run_id,
+            confidence=cand_confidence,
+            severity=candidate.severity,
+            domain=cand_domain,
+            generation_method=candidate.generation_method,
+            generation_timestamp=candidate.timestamp or datetime.now(timezone.utc).isoformat(),
+            reproducibility=candidate.reproducibility or {},
+        )
 
     # 5. Deterministic Canonical Serialization & SHA-256 Content Hash
     canonical_json = serialize_canonical_oracle(

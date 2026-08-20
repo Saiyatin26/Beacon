@@ -58,5 +58,10 @@
   {"order_amount": 4800.0, "customer_tier": "VIP", "items_count": 110, "coupon_code": "NONE", "is_express_shipping": true},
   {"order_amount": 120.0, "customer_tier": "VIP", "items_count": 5, "coupon_code": "SAVE10", "is_express_shipping": false},
   {"order_amount": 580.0, "customer_tier": "VIP", "items_count": 15, "coupon_code": "NONE", "is_express_shipping": true},
-  {"order_amount": 720.0, "customer_tier": "VIP", "items_count": 25, "coupon_code": "NONE", "is_express_shipping": false}
+  {"order_amount": 720.0, "customer_tier": "VIP", "items_count": 25, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 1100.0, "customer_tier": "VIP", "items_count": 20, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 1200.0, "customer_tier": "VIP", "items_count": 22, "coupon_code": "NONE", "is_express_shipping": true},
+  {"order_amount": 1300.0, "customer_tier": "VIP", "items_count": 30, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 1400.0, "customer_tier": "VIP", "items_count": 35, "coupon_code": "NONE", "is_express_shipping": true},
+  {"order_amount": 1450.0, "customer_tier": "VIP", "items_count": 40, "coupon_code": "NONE", "is_express_shipping": false}
 ]

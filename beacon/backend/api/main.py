@@ -261,6 +261,8 @@ class CertificationRunRequest(BaseModel):
     project_id: str = "default_project"
     benchmark_id: Optional[str] = None
     benchmark_variant: Optional[str] = "clean_v2"
+    discovery_mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED"
+    use_llm: bool = False
     legacy_target: Optional[str] = "loan_approval_legacy"
     modernized_target: Optional[str] = "loan_approval_modern_equiv"
     legacy_version: Optional[str] = None
@@ -321,6 +323,28 @@ def list_benchmark_datasets_endpoint(benchmark_id: str):
     }
 
 
+@app.get("/api/v1/benchmarks/{benchmark_id}/manifest")
+def get_benchmark_manifest_endpoint(
+    benchmark_id: str,
+    variant: str = "clean_v2",
+    discovery_mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED",
+):
+    """Retrieves the reproducibility and execution manifest for a benchmark."""
+    spec = benchmark_registry.get_benchmark(benchmark_id)
+    if spec is None:
+        raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found.")
+
+    artifacts = certification_repository.list_artifacts(project_id=f"benchmark_{benchmark_id}", limit=1)
+    art = artifacts[0] if artifacts else None
+    manifest = benchmark_registry.create_execution_manifest(
+        benchmark_id=benchmark_id,
+        artifact=art or {},
+        discovery_mode=discovery_mode,
+        variant_name=variant,
+    )
+    return manifest.model_dump(mode="json")
+
+
 @app.post("/api/v1/certification/run")
 def run_certification_v1(request: CertificationRunRequest):
     """Executes a policy-driven behavioral certification run using registered ImplementationAdapters or Benchmarks."""
@@ -331,7 +355,8 @@ def run_certification_v1(request: CertificationRunRequest):
         if not bench_spec:
             raise HTTPException(status_code=404, detail=f"Benchmark '{request.benchmark_id}' not found.")
 
-        oracle_set = benchmark_registry.get_or_create_oracle_set(request.benchmark_id)
+        mode = "FULL_BEACON" if request.discovery_mode == "FULL_BEACON" else "CONTROLLED"
+        oracle_set = benchmark_registry.get_or_create_oracle_set(request.benchmark_id, mode=mode)
         legacy_adp = benchmark_registry.get_legacy_adapter(request.benchmark_id)
         if not legacy_adp:
             raise HTTPException(status_code=404, detail=f"Legacy adapter for benchmark '{request.benchmark_id}' not found.")

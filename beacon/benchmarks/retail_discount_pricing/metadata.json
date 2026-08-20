@@ -3,13 +3,21 @@
   "name": "Retail & Wholesale Discount Pricing Engine",
   "domain": "E-Commerce & Retail Supply Chain",
   "description": "Legacy multi-tiered discount, customer loyalty, volume rebate, and shipping tariff calculation engine.",
-  "source": "Realistic Public Domain Enterprise Benchmark",
+  "source": "Enterprise E-Commerce Pricing Rules (Realistic Reference Implementation)",
+  "source_repository": "https://github.com/Saiyatin26/Beacon",
   "source_url": "https://github.com/Saiyatin26/Beacon/benchmarks/retail_discount_pricing",
+  "source_version": "1.0.0",
+  "source_license": "Apache-2.0",
   "license": "Apache-2.0",
   "language": "Python",
   "legacy_version": "1.0.0",
   "modernized_version": "2.0.0",
   "provenance_category": "REALISTIC",
+  "modernization_provenance": {
+    "clean_v2": "INDEPENDENT_REIMPLEMENTATION",
+    "buggy_threshold_v2": "CONTROLLED_MUTATION",
+    "buggy_operator_v2": "CONTROLLED_MUTATION"
+  },
   "input_schema": {
     "order_amount": "float",
     "customer_tier": "str",
@@ -24,8 +32,10 @@
     "approved_for_fulfillment": "bool"
   },
   "expected_behavior_source": "oracle_derived",
-  "dataset_source": "synthetic_realistic_orders_v1",
+  "dataset_source": "Realistic synthetic e-commerce orders evaluating loyalty tiers, volume thresholds, coupons, and shipping",
+  "dataset_license": "Apache-2.0",
   "dataset_version": "1.0.0",
+  "adapter_version": "1.0.0",
   "legacy_adapter_id": "retail_pricing_legacy",
   "modernized_adapters": {
     "clean_v2": "retail_pricing_modern_clean",
@@ -36,5 +46,5 @@
     "order_amount": [10.0, 5000.0],
     "items_count": [1.0, 200.0]
   },
-  "tags": ["pricing", "retail", "discounts", "benchmarks"]
+  "tags": ["pricing", "retail", "discounts", "benchmarks", "realistic"]
 }

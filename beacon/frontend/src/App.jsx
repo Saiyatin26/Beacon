@@ -77,9 +77,15 @@ export default function App() {
           setSelectedArtifact(data.artifacts[0]);
         }
       }
+    } catch {
+      // Non-fatal
+    }
+  };
+
   const [benchmarks, setBenchmarks] = useState([]);
   const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("retail_discount_pricing");
   const [selectedVariant, setSelectedVariant] = useState("clean_v2");
+  const [discoveryMode, setDiscoveryMode] = useState("CONTROLLED");
   const [benchmarkValidation, setBenchmarkValidation] = useState(null);
 
   const loadBenchmarks = async () => {
@@ -140,7 +146,8 @@ export default function App() {
       const data = await response.json();
       setBenchmarkValidation(data);
       if (data.is_valid) {
-        setNotice(`Benchmark '${selectedBenchmarkId}' validation passed: ${data.dataset_record_count} dataset inputs verified.`);
+        const cs = data.dataset_checksum ? ` (SHA-256: ${data.dataset_checksum.slice(0, 12)}...)` : "";
+        setNotice(`Benchmark '${selectedBenchmarkId}' validation passed: ${data.dataset_record_count} dataset inputs verified${cs}.`);
       } else {
         setError(`Benchmark validation issues: ${data.errors.join(", ")}`);
       }
@@ -163,6 +170,7 @@ export default function App() {
         body: JSON.stringify({
           benchmark_id: selectedBenchmarkId,
           benchmark_variant: selectedVariant,
+          discovery_mode: discoveryMode,
           n_samples: 60,
         }),
       });
@@ -172,8 +180,8 @@ export default function App() {
       await loadArtifacts();
       setNotice(
         artifact.certified
-          ? `Benchmark certified: ${artifact.metrics.matching_probes}/${artifact.metrics.total_inputs} inputs matched with 100% equivalence.`
-          : `Benchmark certification failed as expected: ${artifact.metrics.modern_regressions} regression(s) detected.`
+          ? `Benchmark [${discoveryMode}] certified: ${artifact.metrics.matching_probes}/${artifact.metrics.total_inputs} inputs matched with 100% equivalence.`
+          : `Benchmark [${discoveryMode}] certification failed as expected: ${artifact.metrics.modern_regressions} regression(s) detected.`
       );
     } catch (benchError) {
       setError(benchError.message);
@@ -309,8 +317,46 @@ export default function App() {
                 <div><strong>Language:</strong> {currentBenchmark.language}</div>
                 <div><strong>Dataset Source:</strong> {currentBenchmark.dataset_source}</div>
                 <div><strong>Source / Provenance:</strong> {currentBenchmark.source}</div>
+                {benchmarkValidation?.dataset_checksum && (
+                  <div><strong>Dataset SHA-256:</strong> <code style={{ fontSize: 11, background: "#e2e8f0", padding: "2px 4px", borderRadius: 4 }}>{benchmarkValidation.dataset_checksum.slice(0, 16)}...</code></div>
+                )}
               </div>
               <p style={{ margin: "4px 0 12px", color: "#475569", fontSize: 12 }}>{currentBenchmark.description}</p>
+
+              {/* Evaluation Mode Toggle (CONTROLLED vs FULL_BEACON) */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12, paddingBottom: 10, borderBottom: "1px dashed #cbd5e1" }}>
+                <span style={{ fontWeight: 600, fontSize: 12, color: "#334155" }}>Evaluation Mode:</span>
+                <button
+                  onClick={() => setDiscoveryMode("CONTROLLED")}
+                  style={{
+                    padding: "5px 10px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    border: discoveryMode === "CONTROLLED" ? "2px solid #0f766e" : "1px solid #cbd5e1",
+                    background: discoveryMode === "CONTROLLED" ? "#ccfbf1" : "white",
+                    color: discoveryMode === "CONTROLLED" ? "#0f766e" : "#475569",
+                  }}
+                >
+                  CONTROLLED (Baseline OracleSet)
+                </button>
+                <button
+                  onClick={() => setDiscoveryMode("FULL_BEACON")}
+                  style={{
+                    padding: "5px 10px",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    border: discoveryMode === "FULL_BEACON" ? "2px solid #6366f1" : "1px solid #cbd5e1",
+                    background: discoveryMode === "FULL_BEACON" ? "#e0e7ff" : "white",
+                    color: discoveryMode === "FULL_BEACON" ? "#4338ca" : "#475569",
+                  }}
+                >
+                  FULL_BEACON (Evidence Mining & Discovery)
+                </button>
+              </div>
 
               {/* Modernized Target Variant Selector */}
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderTop: "1px solid #e2e8f0", paddingTop: 10 }}>
@@ -369,7 +415,7 @@ export default function App() {
                     color: "white",
                   }}
                 >
-                  {busy ? "Certifying..." : `Certify ${selectedVariant.includes("buggy") ? "Buggy Variant" : "Equivalent Target"}`}
+                  {busy ? "Certifying..." : `Certify [${discoveryMode}]`}
                 </button>
               </div>
             </div>
