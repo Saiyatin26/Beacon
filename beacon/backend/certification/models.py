@@ -100,6 +100,37 @@ class ComparisonRecord(BaseModel):
     timestamp: str = ""
 
 
+class CertificationInputSet(BaseModel):
+    """Immutable record of the exact input dataset used for a certification run."""
+    input_set_id: str
+    version: int = 1
+    generator_type: str = "deterministic_phase11"
+    generator_config: dict[str, Any] = Field(default_factory=dict)
+    seed: int = 42
+    input_count: int = 0
+    canonical_hash: str = ""
+    created_at: str = ""
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+
+class CertificationCase(BaseModel):
+    """A single execution observation mapped to its legacy and modern output."""
+    case_id: str
+    run_id: str
+    input_set_id: str
+    case_index: int
+    input_json: str
+    input_hash: str
+    legacy_output_json: str
+    modern_output_json: str
+    execution_time_ms: float = 0.0
+    oracle_result: str
+    classification: str
+    severity: str = "medium"
+    violated_oracle_ids: list[str] = Field(default_factory=list)
+
+
+
 class OracleEquivalenceMetrics(BaseModel):
     """Probe-level behavioral metrics for a single oracle."""
     oracle_id: str
@@ -226,6 +257,7 @@ class CertificationArtifact(BaseModel):
     certification_policy_hash: str = ""
     certification_engine_version: str = "1.0.0"
     timestamp: str = ""
+    reproducibility_state: Literal["FULLY_REPRODUCIBLE", "LEGACY_PARTIAL"] = "FULLY_REPRODUCIBLE"
     status: CertificationStatus = CertificationStatus.NOT_CERTIFIED
     certified: bool = False
     score: float = 0.0

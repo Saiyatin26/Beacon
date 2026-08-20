@@ -11,7 +11,7 @@ from pathlib import Path
 import sqlite3
 from typing import Optional
 
-from .models import CertificationArtifact, verify_artifact_integrity
+from .models import CertificationArtifact, verify_artifact_integrity, CertificationInputSet, CertificationCase
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,34 @@ class CertificationRepository:
                         created_at TEXT NOT NULL
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS input_sets (
+                        input_set_id TEXT PRIMARY KEY,
+                        version INTEGER NOT NULL,
+                        generator_type TEXT NOT NULL,
+                        input_count INTEGER NOT NULL,
+                        seed INTEGER NOT NULL,
+                        canonical_hash TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS certification_cases (
+                        case_id TEXT PRIMARY KEY,
+                        run_id TEXT NOT NULL,
+                        input_set_id TEXT NOT NULL,
+                        case_index INTEGER NOT NULL,
+                        input_hash TEXT NOT NULL,
+                        classification TEXT NOT NULL,
+                        severity TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        FOREIGN KEY(run_id) REFERENCES certification_artifacts(certification_id),
+                        FOREIGN KEY(input_set_id) REFERENCES input_sets(input_set_id)
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_cases_run_id ON certification_cases(run_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_cases_input_set_id ON certification_cases(input_set_id)")
                 conn.commit()
         except Exception as exc:
             logger.warning(f"Could not initialize SQLite certification table: {exc}")
@@ -172,10 +200,95 @@ class CertificationRepository:
         self._memory_artifacts.clear()
         try:
             with sqlite3.connect(self._db_path) as conn:
+                conn.execute("DELETE FROM certification_cases")
+                conn.execute("DELETE FROM input_sets")
                 conn.execute("DELETE FROM certification_artifacts")
                 conn.commit()
         except Exception:
             pass
+
+    def save_input_set(self, input_set: CertificationInputSet) -> CertificationInputSet:
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO input_sets (
+                        input_set_id, version, generator_type, input_count, seed, canonical_hash, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    input_set.input_set_id,
+                    input_set.version,
+                    input_set.generator_type,
+                    input_set.input_count,
+                    input_set.seed,
+                    input_set.canonical_hash,
+                    input_set.model_dump_json(),
+                    input_set.created_at or datetime.now(timezone.utc).isoformat(),
+                ))
+                conn.commit()
+        except Exception as exc:
+            logger.debug(f"SQLite save input_set notice: {exc}")
+        return input_set
+
+    def get_input_set(self, input_set_id: str) -> Optional[CertificationInputSet]:
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT payload_json FROM input_sets WHERE input_set_id = ?", (input_set_id,))
+                row = cursor.fetchone()
+                if row:
+                    return CertificationInputSet.model_validate_json(row[0])
+        except Exception as exc:
+            logger.debug(f"SQLite get input_set notice: {exc}")
+        return None
+
+    def save_certification_cases(self, cases: list[CertificationCase]):
+        if not cases:
+            return
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.cursor()
+                records = [
+                    (
+                        c.case_id,
+                        c.run_id,
+                        c.input_set_id,
+                        c.case_index,
+                        c.input_hash,
+                        c.classification,
+                        c.severity,
+                        c.model_dump_json()
+                    )
+                    for c in cases
+                ]
+                cursor.executemany("""
+                    INSERT OR REPLACE INTO certification_cases (
+                        case_id, run_id, input_set_id, case_index, input_hash, classification, severity, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, records)
+                conn.commit()
+        except Exception as exc:
+            logger.debug(f"SQLite save certification_cases notice: {exc}")
+
+    def list_certification_cases(self, run_id: str, limit: int = 100, offset: int = 0, classification: Optional[str] = None) -> list[CertificationCase]:
+        results = []
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.cursor()
+                query = "SELECT payload_json FROM certification_cases WHERE run_id = ?"
+                params = [run_id]
+                if classification and classification != "ALL":
+                    query += " AND classification = ?"
+                    params.append(classification)
+                
+                query += " ORDER BY case_index ASC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+                
+                cursor.execute(query, params)
+                for row in cursor.fetchall():
+                    results.append(CertificationCase.model_validate_json(row[0]))
+        except Exception as exc:
+            logger.debug(f"SQLite list certification_cases notice: {exc}")
+        return results
 
 
 # Module-level default repository singleton

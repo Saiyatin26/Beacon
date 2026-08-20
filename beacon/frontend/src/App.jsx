@@ -31,6 +31,19 @@ export default function App() {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [artifactCases, setArtifactCases] = useState([]);
+  const [caseFilter, setCaseFilter] = useState("ALL");
+
+  useEffect(() => {
+    if (selectedArtifact) {
+      fetch(`${API_BASE}/api/v1/certification/${selectedArtifact.certification_id}/cases?classification=${caseFilter}`)
+        .then(res => res.json())
+        .then(data => setArtifactCases(data.cases || []))
+        .catch(console.error);
+    } else {
+      setArtifactCases([]);
+    }
+  }, [selectedArtifact, caseFilter]);
 
   const loadRuns = async () => {
     const response = await fetch(`${API_BASE}/runs`);
@@ -291,6 +304,67 @@ export default function App() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+        )}
+
+        {/* Test Cases / Audit Trail */}
+        {selectedArtifact && (
+          <section style={{ ...card, marginBottom: 18 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h2 style={{ marginTop: 0, fontSize: 18 }}>Test Cases / Audit Trail</h2>
+              <a
+                href={`${API_BASE}/api/v1/certification/${selectedArtifact.certification_id}/export`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ padding: "8px 12px", border: "1px solid #cbd5e1", borderRadius: 8, background: "#f8fafc", color: "#334155", textDecoration: "none", fontWeight: 600, fontSize: 12 }}
+              >
+                Export Dataset
+              </a>
+            </div>
+            
+            <div style={{ margin: "14px 0", display: "flex", gap: 8 }}>
+              {["ALL", "MATCH", "MODERN_REGRESSION", "REFERENCE_INCONSISTENT"].map(filter => (
+                <button
+                  key={filter}
+                  onClick={() => setCaseFilter(filter)}
+                  style={{
+                    padding: "4px 8px",
+                    borderRadius: 4,
+                    fontSize: 12,
+                    border: caseFilter === filter ? "1px solid #0f766e" : "1px solid #cbd5e1",
+                    background: caseFilter === filter ? "#ccfbf1" : "#f8fafc",
+                    color: caseFilter === filter ? "#0f766e" : "#475569",
+                    cursor: "pointer"
+                  }}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
+
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, textAlign: "left" }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid #e2e8f0", color: "#64748b" }}>
+                    <th style={{ padding: "8px" }}>Index</th>
+                    <th style={{ padding: "8px" }}>Input</th>
+                    <th style={{ padding: "8px" }}>Result</th>
+                    <th style={{ padding: "8px" }}>Classification</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {artifactCases.slice(0, 50).map(c => (
+                    <tr key={c.case_id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "8px", color: "#64748b" }}>#{c.case_index}</td>
+                      <td style={{ padding: "8px", fontFamily: "monospace", fontSize: 11 }}>{c.input_json}</td>
+                      <td style={{ padding: "8px", fontWeight: "bold", color: c.oracle_result === "PASS" ? "#10b981" : "#ef4444" }}>{c.oracle_result}</td>
+                      <td style={{ padding: "8px" }}>{c.classification}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {artifactCases.length > 50 && <p style={{ fontSize: 12, color: "#64748b", textAlign: "center" }}>Showing first 50 cases for this filter.</p>}
             </div>
           </section>
         )}

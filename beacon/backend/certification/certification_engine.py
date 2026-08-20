@@ -20,6 +20,8 @@ from .input_generator import generate_certification_test_suite
 from .models import (
     BehavioralRegression,
     CertificationArtifact,
+    CertificationInputSet,
+    CertificationCase,
     CertificationMetrics,
     CertificationPolicy,
     CertificationStatus,
@@ -57,6 +59,7 @@ class CertificationEngine:
         cert_policy = policy or CertificationPolicy()
         pol_hash = cert_policy.compute_hash()
         timestamp = datetime.now(timezone.utc).isoformat()
+        cert_id = f"CERT-{uuid.uuid4().hex[:8]}"
 
         # 1. OracleSet Integrity and Content Hash Verification
         if not oracle_set.oracles:
@@ -141,6 +144,19 @@ class CertificationEngine:
         input_set_hash = hashlib.sha256(json.dumps(sorted_inp_ids).encode("utf-8")).hexdigest()
         input_set_id = f"INPSET-{input_set_hash[:8]}"
 
+        input_set = CertificationInputSet(
+            input_set_id=input_set_id,
+            version=1,
+            generator_type="deterministic_phase11",
+            generator_config={"field_bounds": bounds, "n_samples": n_samples},
+            seed=seed,
+            input_count=len(inputs),
+            canonical_hash=input_set_hash,
+            created_at=timestamp,
+            provenance={}
+        )
+        certification_repository.save_input_set(input_set)
+
         # 3. Cross-Version Execution via Phase 9 Engine
         phase9_report: CrossVersionCertificationReport = self.cross_version_engine.certify_equivalence(
             oracles=oracle_set,
@@ -159,10 +175,48 @@ class CertificationEngine:
         non_critical_failures_count = 0
         oracles_exercised_count = 0
 
-        # Group regressions by oracle_id
+        # Group regressions by oracle_id and input_id
         regs_by_oracle: dict[str, list[BehavioralRegression]] = {}
+        regs_by_input: dict[str, list[BehavioralRegression]] = {}
         for reg in phase9_report.regressions:
             regs_by_oracle.setdefault(reg.oracle_id, []).append(reg)
+            regs_by_input.setdefault(reg.input_id, []).append(reg)
+            
+        cases_to_save: list[CertificationCase] = []
+        for i, comp_rec in enumerate(phase9_report.comparison_records):
+            input_regs = regs_by_input.get(comp_rec.input_id, [])
+            violated_oracles = [r.oracle_id for r in input_regs]
+            
+            sev = "none"
+            if input_regs:
+                if any(r.severity == "critical" for r in input_regs): sev = "critical"
+                elif any(r.severity == "high" for r in input_regs): sev = "high"
+                elif any(r.severity == "medium" for r in input_regs): sev = "medium"
+                else: sev = "low"
+            
+            leg_out = json.dumps(comp_rec.legacy_observation.raw_outputs, sort_keys=True) if comp_rec.legacy_observation else "{}"
+            mod_out = json.dumps(comp_rec.modern_observation.raw_outputs, sort_keys=True) if comp_rec.modern_observation else "{}"
+            exec_time = 0.0
+            if comp_rec.legacy_observation: exec_time += comp_rec.legacy_observation.execution_time_ms
+            if comp_rec.modern_observation: exec_time += comp_rec.modern_observation.execution_time_ms
+
+            case = CertificationCase(
+                case_id=f"CASE-{cert_id}-{i}",
+                run_id=cert_id,
+                input_set_id=input_set_id,
+                case_index=i,
+                input_json=json.dumps(comp_rec.input_values, sort_keys=True),
+                input_hash=comp_rec.input_id,
+                legacy_output_json=leg_out,
+                modern_output_json=mod_out,
+                execution_time_ms=exec_time,
+                oracle_result="VIOLATED" if input_regs else "PASS",
+                classification=comp_rec.equivalence_outcome,
+                severity=sev,
+                violated_oracle_ids=violated_oracles
+            )
+            cases_to_save.append(case)
+        certification_repository.save_certification_cases(cases_to_save)
 
         for oracle in oracle_set.oracles:
             m = phase9_report.oracle_metrics.get(oracle.oracle_id)
@@ -304,7 +358,6 @@ class CertificationEngine:
             final_status = CertificationStatus.CERTIFIED
 
         is_certified = final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS)
-        cert_id = f"CERT-{uuid.uuid4().hex[:8]}"
 
         # 7. Create Immutable Artifact and Compute Canonical Content Hash
         temp_artifact = CertificationArtifact(
@@ -322,6 +375,7 @@ class CertificationEngine:
             certification_policy_hash=pol_hash,
             certification_engine_version="1.0.0",
             timestamp=timestamp,
+            reproducibility_state="FULLY_REPRODUCIBLE",
             status=final_status,
             certified=is_certified,
             score=metrics.overall_equivalence_score,

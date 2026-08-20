@@ -402,3 +402,52 @@ def evaluate_drift_endpoint(request: DriftEvaluateRequest):
 
     return event.model_dump(mode="json")
 
+
+@app.get("/api/v1/certification/{certification_id}/cases")
+def get_certification_cases(certification_id: str, limit: int = 100, offset: int = 0, classification: Optional[str] = None):
+    """Retrieves paginated test cases for a certification run."""
+    cases = certification_repository.list_certification_cases(certification_id, limit, offset, classification)
+    return {"cases": [c.model_dump(mode="json") for c in cases]}
+
+
+@app.get("/api/v1/certification/{certification_id}/input_set")
+def get_certification_input_set(certification_id: str):
+    """Retrieves the full InputSet used by a certification run."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Certification not found.")
+    input_set = certification_repository.get_input_set(artifact.input_set_id)
+    if not input_set:
+        raise HTTPException(status_code=404, detail="Input set not found.")
+    return input_set.model_dump(mode="json")
+
+
+from fastapi.responses import JSONResponse
+@app.get("/api/v1/certification/{certification_id}/export")
+def export_certification_dataset(certification_id: str):
+    """Exports the entire dataset for a certification run."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail="Certification not found.")
+    cases = certification_repository.list_certification_cases(certification_id, limit=100000)
+    input_set = certification_repository.get_input_set(artifact.input_set_id)
+    
+    export_payload = {
+        "metadata": {
+            "certification_id": artifact.certification_id,
+            "project_id": artifact.project_id,
+            "artifact_hash": artifact.content_hash,
+            "oracle_set_id": artifact.oracle_set_id,
+            "oracle_set_hash": artifact.oracle_set_hash,
+            "policy_id": artifact.certification_policy_id,
+            "policy_hash": artifact.certification_policy_hash,
+            "reproducibility_state": artifact.reproducibility_state,
+        },
+        "input_set": input_set.model_dump(mode="json") if input_set else None,
+        "cases": [c.model_dump(mode="json") for c in cases]
+    }
+    
+    return JSONResponse(
+        content=export_payload,
+        headers={"Content-Disposition": f"attachment; filename=certification_export_{certification_id}.json"}
+    )
