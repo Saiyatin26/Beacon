@@ -12,7 +12,7 @@
   "language": "Python",
   "legacy_version": "1.0.0",
   "modernized_version": "2.0.0",
-  "provenance_category": "REALISTIC",
+  "provenance_category": "REALISTIC_SYNTHETIC",
   "modernization_provenance": {
     "clean_v2": "INDEPENDENT_REIMPLEMENTATION",
     "buggy_threshold_v2": "CONTROLLED_MUTATION",

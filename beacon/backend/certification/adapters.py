@@ -5,7 +5,9 @@ producing structured Observations with raw and normalized inputs/outputs.
 """
 
 from abc import ABC, abstractmethod
+import hashlib
 import logging
+from pathlib import Path
 import time
 from typing import Any, Callable, Optional
 
@@ -55,12 +57,54 @@ def default_input_normalizer(raw_inputs: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def compute_implementation_hash(target: Any) -> str:
+    """Computes a deterministic SHA-256 cryptographic hash over an implementation target."""
+    if not target:
+        return ""
+    if isinstance(target, (str, Path)):
+        p = Path(target)
+        if not p.exists():
+            return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+        if p.is_file():
+            with open(p, "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        hasher = hashlib.sha256()
+        all_files = sorted(
+            [f for f in p.rglob("*") if f.is_file() and not f.name.endswith((".pyc", ".DS_Store")) and "__pycache__" not in f.parts],
+            key=lambda f: str(f.relative_to(p)).replace("\\", "/")
+        )
+        for file_p in all_files:
+            rel = str(file_p.relative_to(p)).replace("\\", "/")
+            hasher.update(rel.encode("utf-8"))
+            with open(file_p, "rb") as f:
+                hasher.update(f.read())
+        return hasher.hexdigest()
+
+    if hasattr(target, "_target_fn") or hasattr(target, "target_fn"):
+        fn = getattr(target, "_target_fn", None) or getattr(target, "target_fn", None)
+        return compute_implementation_hash(fn)
+
+    if callable(target):
+        try:
+            import inspect
+            src = inspect.getsource(target)
+            return hashlib.sha256(src.encode("utf-8")).hexdigest()
+        except Exception:
+            code = getattr(target, "__code__", None)
+            if code:
+                return hashlib.sha256(code.co_code).hexdigest()
+            return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+
+    return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+
+
 class ImplementationAdapter(ABC):
     """Abstract Base Class for implementation target runners (Python, Java, Rust, REST, etc.)."""
 
     name: str = "base_adapter"
     version: str = "1.0.0"
     role: str = "target"
+    implementation_hash: str = ""
 
     @abstractmethod
     def execute(self, inputs: dict[str, Any], input_id: str = "") -> Observation:
@@ -86,6 +130,7 @@ class FunctionAdapter(ImplementationAdapter):
         self.role = role
         self.input_normalizer = input_normalizer or default_input_normalizer
         self.output_normalizer = output_normalizer or default_output_normalizer
+        self.implementation_hash = compute_implementation_hash(target_fn)
 
     def execute(self, inputs: dict[str, Any], input_id: str = "") -> Observation:
         raw_inputs = dict(inputs)

@@ -96,8 +96,13 @@ def _parse_ast_node(node: ast.AST) -> OracleConditionNode:
             raise OracleCompilationError(f"Unsupported boolean operator: {type(node.op).__name__}")
 
     elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        if isinstance(node.operand, ast.Name):
+            return OraclePredicate(variable=node.operand.id, operator="==", value=False)
         operand = _parse_ast_node(node.operand)
         return UnaryCondition(type="NOT", operand=operand)
+
+    elif isinstance(node, ast.Name):
+        return OraclePredicate(variable=node.id, operator="==", value=True)
 
     else:
         raise OracleCompilationError(

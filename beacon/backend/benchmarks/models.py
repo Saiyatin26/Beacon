@@ -11,10 +11,12 @@ from pydantic import BaseModel, Field
 
 class ProvenanceCategory(str, Enum):
     """Categorizes the origin and realism of a benchmark."""
-    CONTROLLED = "CONTROLLED"                              # Synthetic/controlled experiment benchmark
-    REALISTIC = "REALISTIC"                                # Realistic synthetic production-representative business engine
-    PUBLIC = "PUBLIC"                                      # Publicly sourced statutory/regulatory logic (e.g. public tax rules)
-    AUTHENTIC_PUBLIC_MIGRATION = "AUTHENTIC_PUBLIC_MIGRATION" # Genuine external public migration codebase
+    CONTROLLED = "CONTROLLED"                                    # Controlled synthetic reference benchmark
+    REALISTIC_SYNTHETIC = "REALISTIC_SYNTHETIC"                  # Realistic synthetic domain engine
+    REALISTIC = "REALISTIC"                                      # Backward compatible alias for REALISTIC_SYNTHETIC
+    PUBLIC_STATUTORY = "PUBLIC_STATUTORY"                        # Public-style statutory/regulatory logic bundled in benchmark
+    PUBLIC = "PUBLIC"                                            # Backward compatible alias for PUBLIC_STATUTORY
+    AUTHENTIC_PUBLIC_MIGRATION = "AUTHENTIC_PUBLIC_MIGRATION"   # Genuine external public migration codebase
 
 
 class ModernizationProvenance(str, Enum):
@@ -74,7 +76,7 @@ class BenchmarkSpec(BaseModel):
     language: str = "Python"
     legacy_version: str = "1.0.0"
     modernized_version: str = "2.0.0"
-    provenance_category: ProvenanceCategory = ProvenanceCategory.REALISTIC
+    provenance_category: ProvenanceCategory = ProvenanceCategory.REALISTIC_SYNTHETIC
     modernization_provenance: dict[str, ModernizationProvenance] = Field(default_factory=dict)
     input_schema: dict[str, str] = Field(default_factory=dict)
     output_schema: dict[str, str] = Field(default_factory=dict)
@@ -85,6 +87,7 @@ class BenchmarkSpec(BaseModel):
     dataset_checksum: str = ""
     adapter_version: str = "1.0.0"
     legacy_adapter_id: str = ""
+    legacy_implementation_hash: str = ""
     modernized_adapters: dict[str, str] = Field(default_factory=dict) # variant_name -> adapter_id
     field_bounds: dict[str, tuple[float, float]] = Field(default_factory=dict)
     reproducibility_manifest: Optional[ReproducibilityManifest] = None
@@ -102,11 +105,12 @@ class BenchmarkValidationResult(BaseModel):
     modernized_adapters_status: dict[str, str] = Field(default_factory=dict)
     dataset_record_count: int = 0
     dataset_checksum: str = ""
+    legacy_implementation_hash: str = ""
     metadata_provenance_valid: bool = True
 
 
 class BenchmarkExecutionManifest(BaseModel):
-    """Audit record capturing complete provenance and configuration for a benchmark certification run."""
+    """Audit record capturing complete provenance, implementation hashes, and disambiguated metrics."""
     model_config = {"protected_namespaces": ()}
 
     benchmark_id: str
@@ -115,6 +119,8 @@ class BenchmarkExecutionManifest(BaseModel):
     modernization_provenance: str
     source_version: str = "1.0.0"
     adapter_version: str = "1.0.0"
+    legacy_implementation_hash: str = ""
+    modernized_implementation_hash: str = ""
     dataset_id: str
     dataset_version: str = "1.0.0"
     dataset_checksum: str
@@ -123,20 +129,34 @@ class BenchmarkExecutionManifest(BaseModel):
     evidence_collection_version: str = "1.0.0"
     invariant_mining_config: dict[str, Any] = Field(default_factory=dict)
     model_provider_identifier: str = "offline/deterministic"
+    provider: str = "offline"
+    model: str = "deterministic"
+    generation_method: str = "offline"
     oracle_set_id: str
     oracle_set_hash: str
-    oracle_set_provenance: str = "CONTROLLED_ORACLE_SET" # "CONTROLLED_ORACLE_SET" or "FULL_BEACON_DISCOVERED"
+    oracle_set_provenance: str = "CONTROLLED_ORACLE_SET"
+    oracle_source_type: str = "CONTROLLED_ORACLE_SET"
     policy_id: str
     policy_hash: str
     beacon_version: str = "1.0.0"
     execution_timestamp: str = ""
     discovery_mode: DiscoveryMode = DiscoveryMode.CONTROLLED
     environment_info: dict[str, str] = Field(default_factory=dict)
+    # Disambiguated metrics
+    unique_input_count: int = 0
+    certification_case_count: int = 0
+    oracle_count: int = 0
+    oracle_evaluation_count: int = 0
+    matching_case_count: int = 0
+    regression_case_count: int = 0
+    execution_error_count: int = 0
+    counterexample_count: int = 0
     total_inputs: int = 0
     total_oracles: int = 0
     total_cases: int = 0
     violations: int = 0
     errors: int = 0
+    oracle_coverage_pct: float = 0.0
     equivalence_score: float = 0.0
     certification_status: str = "NOT_CERTIFIED"
     artifact_hash: str = ""

@@ -163,7 +163,7 @@ class CertificationContext(BaseModel):
     benchmark_id: str = "default_project"
     benchmark_version: str = "1.0.0"
     benchmark_name: str = "Default Project"
-    benchmark_provenance: str = "CONTROLLED"  # "CONTROLLED", "REALISTIC", "PUBLIC", "AUTHENTIC_PUBLIC_MIGRATION"
+    benchmark_provenance: str = "CONTROLLED"  # "CONTROLLED", "REALISTIC_SYNTHETIC", "PUBLIC_STATUTORY", "AUTHENTIC_PUBLIC_MIGRATION"
     dataset_id: str = "default"
     dataset_version: str = "1.0.0"
     dataset_checksum: str = ""
@@ -178,6 +178,9 @@ class CertificationContext(BaseModel):
     oracle_set_id: str = ""
     oracle_set_hash: str = ""
     oracle_source_type: str = "CONTROLLED_ORACLE_SET"  # "CONTROLLED_ORACLE_SET", "FULL_BEACON_DISCOVERED", "FULL_BEACON_OFFLINE_FALLBACK"
+    provider: str = "offline"
+    model: str = "deterministic"
+    generation_method: str = "offline"
     policy_id: str = "POL-DEFAULT"
     policy_hash: str = ""
     input_set_id: str = ""
@@ -188,6 +191,15 @@ class CertificationContext(BaseModel):
     run_timestamp: str = ""
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
     run_status: str = "NOT_CERTIFIED"
+    # Disambiguated metrics
+    unique_input_count: int = 0
+    certification_case_count: int = 0
+    oracle_count: int = 0
+    oracle_evaluation_count: int = 0
+    matching_case_count: int = 0
+    regression_case_count: int = 0
+    execution_error_count: int = 0
+    counterexample_count: int = 0
 
 
 def compute_input_set_canonical_hash(
@@ -267,8 +279,8 @@ class CertificationPolicy(BaseModel):
     version: int = 1
     name: str = "Standard Behavioral Certification Policy"
     min_equivalence_score: float = 0.80
-    min_oracle_coverage: float = 1.0  # 100% of oracles in frozen set must be exercised
-    min_applicable_probes_per_oracle: int = 5
+    min_oracle_coverage: float = 0.80  # At least 80% of oracles in frozen set must be exercised
+    min_applicable_probes_per_oracle: int = 1
     allow_warnings: bool = False  # If True, non-critical regressions may yield CERTIFIED_WITH_WARNINGS
     max_permitted_execution_errors: int = 0
     max_permitted_invalid_inputs: int = 0
@@ -335,6 +347,16 @@ class PerOracleCertificationSummary(BaseModel):
 
 class CertificationMetrics(BaseModel):
     """Aggregated quantitative metrics for the entire certification run."""
+    # Disambiguated metrics
+    unique_input_count: int = 0
+    certification_case_count: int = 0
+    oracle_count: int = 0
+    oracle_evaluation_count: int = 0
+    matching_case_count: int = 0
+    regression_case_count: int = 0
+    execution_error_count: int = 0
+    counterexample_count: int = 0
+    # Detailed probe metrics
     total_inputs: int = 0
     applicable_inputs: int = 0
     not_applicable: int = 0
@@ -346,7 +368,6 @@ class CertificationMetrics(BaseModel):
     execution_errors: int = 0
     critical_failures: int = 0
     non_critical_failures: int = 0
-    oracle_count: int = 0
     oracles_exercised: int = 0
     oracle_coverage_pct: float = 0.0
     overall_equivalence_score: float = 0.0
@@ -363,6 +384,8 @@ class CertificationArtifact(BaseModel):
     modernization_variant: Optional[str] = "clean_v2"
     dataset_checksum: Optional[str] = ""
     oracle_source_type: Optional[str] = "CONTROLLED_ORACLE_SET"
+    legacy_implementation_hash: Optional[str] = ""
+    modernized_implementation_hash: Optional[str] = ""
     context: Optional[CertificationContext] = None
     legacy_version: str = "1.0.0"
     modernized_version: str = "2.0.0"

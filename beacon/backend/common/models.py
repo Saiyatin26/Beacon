@@ -154,12 +154,18 @@ class CertificationRun(BaseModel):
 
 
 class DriftSample(BaseModel):
-    """Stage 5 output, persisted to drift_samples_col."""
+    """Continuous Drift Monitoring sample with benchmark identity and baseline tracking."""
     run_timestamp: str
     equivalence_score: float
-    baseline_score: float
-    delta_pct: float
-    alert: bool
+    baseline_score: float = 1.0
+    delta_pct: float = 0.0
+    alert: bool = False
+    benchmark_id: Optional[str] = None
+    benchmark_version: Optional[str] = "1.0.0"
+    certification_run_id: Optional[str] = None
+    oracle_set_id: Optional[str] = None
+    oracle_set_hash: Optional[str] = None
+    policy_id: Optional[str] = "POL-DEFAULT"
 
 
 # Stage 1 — Static Analysis Evidence Models (Phase 3)

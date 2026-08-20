@@ -43,6 +43,7 @@ export default function App() {
   const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("retail_discount_pricing");
   const [selectedVariant, setSelectedVariant] = useState("clean_v2");
   const [discoveryMode, setDiscoveryMode] = useState("CONTROLLED");
+  const [preferredProvider, setPreferredProvider] = useState("auto");
   const [benchmarkValidation, setBenchmarkValidation] = useState(null);
 
   // Authoritative Active Certification Result (Single Source of Truth)
@@ -238,7 +239,8 @@ export default function App() {
           benchmark_id: selectedBenchmarkId,
           benchmark_variant: selectedVariant,
           discovery_mode: discoveryMode,
-          use_llm: false,
+          preferred_provider: preferredProvider,
+          use_llm: discoveryMode === "FULL_BEACON" && preferredProvider !== "offline",
           dataset_name: "default",
         }),
       });
@@ -274,6 +276,12 @@ export default function App() {
     } catch (e) {
       console.error(e);
     }
+  };
+
+  // Export Certification Dossier (JSON / Markdown / CSV)
+  const exportDossier = (certId, format) => {
+    if (!certId) return;
+    window.open(`${API_BASE}/api/v1/certification/${certId}/export?format=${format}`, "_blank");
   };
 
   // Run Legacy Loan Demo (isolated)
@@ -432,11 +440,11 @@ export default function App() {
               </div>
 
               {/* Grid of Controls */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "18px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1.2fr 1fr", gap: "14px" }}>
                 {/* 1. Benchmark Selector */}
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
-                    1. Target Application Benchmark
+                    1. Target Benchmark
                   </label>
                   <select
                     value={selectedBenchmarkId}
@@ -464,14 +472,14 @@ export default function App() {
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
                     2. Evaluation Mode
                   </label>
-                  <div style={{ display: "flex", gap: "8px" }}>
+                  <div style={{ display: "flex", gap: "6px" }}>
                     <button
                       onClick={() => handleModeChange("CONTROLLED")}
                       style={{
                         flex: 1,
-                        padding: "9px 8px",
+                        padding: "8px 4px",
                         borderRadius: "6px",
-                        fontSize: "12px",
+                        fontSize: "11px",
                         fontWeight: "600",
                         cursor: "pointer",
                         border: discoveryMode === "CONTROLLED" ? "2px solid #2563eb" : "1px solid #cbd5e1",
@@ -480,15 +488,15 @@ export default function App() {
                       }}
                     >
                       CONTROLLED<br />
-                      <span style={{ fontSize: "10px", fontWeight: "400", color: "#64748b" }}>Predefined Baseline</span>
+                      <span style={{ fontSize: "9px", fontWeight: "400", color: "#64748b" }}>Baseline</span>
                     </button>
                     <button
                       onClick={() => handleModeChange("FULL_BEACON")}
                       style={{
                         flex: 1,
-                        padding: "9px 8px",
+                        padding: "8px 4px",
                         borderRadius: "6px",
-                        fontSize: "12px",
+                        fontSize: "11px",
                         fontWeight: "600",
                         cursor: "pointer",
                         border: discoveryMode === "FULL_BEACON" ? "2px solid #2563eb" : "1px solid #cbd5e1",
@@ -497,15 +505,41 @@ export default function App() {
                       }}
                     >
                       FULL_BEACON<br />
-                      <span style={{ fontSize: "10px", fontWeight: "400", color: "#64748b" }}>Evidence-Discovered</span>
+                      <span style={{ fontSize: "9px", fontWeight: "400", color: "#64748b" }}>Discovered</span>
                     </button>
                   </div>
                 </div>
 
-                {/* 3. Modernization Variant */}
+                {/* 3. Model Provider Hierarchy */}
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
-                    3. Modernization Target Variant
+                    3. Provider Hierarchy
+                  </label>
+                  <select
+                    value={preferredProvider}
+                    onChange={(e) => setPreferredProvider(e.target.value)}
+                    style={{
+                      width: "100%",
+                      padding: "9px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid #cbd5e1",
+                      background: "#ffffff",
+                      fontSize: "13px",
+                      fontWeight: "500",
+                    }}
+                  >
+                    <option value="auto">Auto Fallback (OpenRouter &rarr; Anthropic &rarr; Ollama &rarr; Offline)</option>
+                    <option value="openrouter">OpenRouter (Primary Cloud)</option>
+                    <option value="anthropic">Anthropic (Claude Fallback)</option>
+                    <option value="ollama">Ollama (Local Mistral/Qwen)</option>
+                    <option value="offline">Deterministic Offline (No LLM)</option>
+                  </select>
+                </div>
+
+                {/* 4. Modernization Variant */}
+                <div>
+                  <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
+                    4. Target Variant
                   </label>
                   <select
                     value={selectedVariant}
@@ -543,7 +577,7 @@ export default function App() {
                         Truthful Provenance Metadata
                       </span>
                       <span style={badgeStyle("#dbeafe", "#1e40af", "#93c5fd")}>
-                        {currentSpec.provenance_category || "REALISTIC"}
+                        {currentSpec.provenance_category || "REALISTIC_SYNTHETIC"}
                       </span>
                       <span style={badgeStyle("#f1f5f9", "#334155", "#cbd5e1")}>
                         License: {currentSpec.license || "Apache-2.0"}
@@ -579,7 +613,7 @@ export default function App() {
                       {benchmarkValidation.is_valid ? "✅ Pre-Flight Validation Passed" : "❌ Pre-Flight Validation Failed"}
                     </span>
                     <span style={{ fontSize: "12px", color: "#475569" }}>
-                      Dataset Record Count: <strong>{benchmarkValidation.dataset_record_count}</strong> | Legacy Adapter: <strong>{benchmarkValidation.legacy_adapter_found ? "OK" : "Missing"}</strong>
+                      Dataset Record Count: <strong>{benchmarkValidation.dataset_record_count}</strong> | Legacy Adapter: <strong>{benchmarkValidation.legacy_adapter_status || "OK"}</strong>
                     </span>
                   </div>
                   {benchmarkValidation.dataset_checksum && (
@@ -661,58 +695,98 @@ export default function App() {
                     </div>
                   </div>
 
-                  <button
-                    onClick={() => verifyArtifactIntegrity(targetArtifact.certification_id)}
-                    style={{
-                      background: "#ffffff",
-                      border: "1px solid #cbd5e1",
-                      color: "#0f172a",
-                      padding: "8px 16px",
-                      borderRadius: "6px",
-                      fontWeight: "600",
-                      fontSize: "13px",
-                      cursor: "pointer",
-                      boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-                    }}
-                  >
-                    🔒 Verify Cryptographic Proof
-                  </button>
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button
+                      onClick={() => exportDossier(targetArtifact.certification_id, "json")}
+                      style={{ background: "#ffffff", border: "1px solid #cbd5e1", color: "#0f172a", padding: "6px 12px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                    >
+                      ⬇️ JSON Dossier
+                    </button>
+                    <button
+                      onClick={() => exportDossier(targetArtifact.certification_id, "markdown")}
+                      style={{ background: "#ffffff", border: "1px solid #cbd5e1", color: "#0f172a", padding: "6px 12px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                    >
+                      ⬇️ Markdown Report
+                    </button>
+                    <button
+                      onClick={() => exportDossier(targetArtifact.certification_id, "csv")}
+                      style={{ background: "#ffffff", border: "1px solid #cbd5e1", color: "#0f172a", padding: "6px 12px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                    >
+                      ⬇️ CSV Cases
+                    </button>
+                    <button
+                      onClick={() => verifyArtifactIntegrity(targetArtifact.certification_id)}
+                      style={{
+                        background: "#2563eb",
+                        border: "none",
+                        color: "#ffffff",
+                        padding: "6px 14px",
+                        borderRadius: "6px",
+                        fontWeight: "600",
+                        fontSize: "12px",
+                        cursor: "pointer",
+                        boxShadow: "0 1px 2px rgba(37,99,235,0.2)",
+                      }}
+                    >
+                      🔒 Verify Integrity
+                    </button>
+                  </div>
                 </div>
 
-                {/* Cryptographic Proof Verification Result */}
+                {/* 8-Point Cryptographic Proof Verification Result */}
                 {cryptographicProof && (
-                  <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: "8px", padding: "14px 18px", marginBottom: "20px" }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                      <span style={{ fontWeight: "700", color: "#166534", fontSize: "14px" }}>
-                        🛡️ CRYPTOGRAPHIC INTEGRITY VERIFIED — TAMPER-PROOF
+                  <div style={{ background: cryptographicProof.status === "PASS" ? "#f0fdf4" : "#fef2f2", border: `1px solid ${cryptographicProof.status === "PASS" ? "#86efac" : "#fca5a5"}`, borderRadius: "8px", padding: "16px 20px", marginBottom: "20px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                      <span style={{ fontWeight: "700", color: cryptographicProof.status === "PASS" ? "#166534" : "#991b1b", fontSize: "14px" }}>
+                        🛡️ 8-POINT CRYPTOGRAPHIC INTEGRITY REPORT: {cryptographicProof.status === "PASS" ? "ALL CHECKS PASSED (TAMPER-PROOF)" : "INTEGRITY VIOLATION DETECTED"}
                       </span>
-                      <span style={badgeStyle("#dcfce7", "#15803d", "#86efac")}>VALID</span>
+                      <span style={badgeStyle(cryptographicProof.status === "PASS" ? "#dcfce7" : "#fee2e2", cryptographicProof.status === "PASS" ? "#15803d" : "#991b1b", cryptographicProof.status === "PASS" ? "#86efac" : "#fca5a5")}>
+                        {cryptographicProof.status}
+                      </span>
                     </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", fontSize: "12px", color: "#166534", fontFamily: "monospace" }}>
-                      <div>Artifact Hash: {cryptographicProof.content_hash}</div>
-                      <div>Input Set Hash: {cryptographicProof.input_set_hash}</div>
-                      <div>Oracle Set Hash: {cryptographicProof.oracle_set_hash}</div>
-                      <div>Policy Hash: {cryptographicProof.policy_hash}</div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", fontSize: "12px" }}>
+                      {cryptographicProof.checks && Object.entries(cryptographicProof.checks).map(([chkKey, chkVal]) => (
+                        <div key={chkKey} style={{ display: "flex", alignItems: "center", gap: "6px", color: chkVal ? "#166534" : "#991b1b" }}>
+                          <span>{chkVal ? "✅" : "❌"}</span>
+                          <span style={{ fontWeight: "600" }}>{chkKey.replace(/_/g, " ").toUpperCase()}:</span>
+                          <span>{chkVal ? "VALID" : "FAILED"}</span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {cryptographicProof.errors?.length > 0 && (
+                      <div style={{ marginTop: "10px", padding: "8px 12px", borderRadius: "6px", background: "#fee2e2", color: "#991b1b", fontSize: "12px" }}>
+                        <strong>Integrity Errors:</strong> {cryptographicProof.errors.join("; ")}
+                      </div>
+                    )}
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px", paddingTop: "10px", borderTop: "1px solid #e2e8f0", fontSize: "11px", color: "#475569", fontFamily: "monospace" }}>
+                      <div>Artifact Hash: {cryptographicProof.artifact_hash?.slice(0, 24)}...</div>
+                      <div>Input Set Hash: {cryptographicProof.input_set_hash?.slice(0, 24)}...</div>
+                      <div>Legacy Adapter Hash: {cryptographicProof.legacy_implementation_hash?.slice(0, 24) || "—"}</div>
+                      <div>Modern Adapter Hash: {cryptographicProof.modernized_implementation_hash?.slice(0, 24) || "—"}</div>
                     </div>
                   </div>
                 )}
 
-                {/* 2. Authoritative Summary Metrics */}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "14px", marginBottom: "20px" }}>
+                {/* 2. Authoritative Disambiguated Summary Metrics */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: "10px", marginBottom: "20px" }}>
                   {[
-                    { label: "Equivalence Score", val: `${((targetArtifact.score || 0) * 100).toFixed(1)}%`, color: targetArtifact.score >= 0.8 ? "#059669" : "#dc2626" },
-                    { label: "Oracle Coverage", val: `${((targetArtifact.metrics?.oracle_coverage_pct || 0) * 100).toFixed(0)}%`, color: "#0284c7", tip: "Evaluated oracle set coverage against tested inputs" },
-                    { label: "Inputs Evaluated", val: targetArtifact.metrics?.total_inputs || 0, color: "#334155" },
-                    { label: "Matching Probes", val: targetArtifact.metrics?.matching_probes || 0, color: "#059669" },
-                    { label: "Regressions", val: targetArtifact.metrics?.modern_regressions || 0, color: (targetArtifact.metrics?.modern_regressions || 0) > 0 ? "#dc2626" : "#059669" },
-                    { label: "Execution Errors", val: targetArtifact.metrics?.execution_errors || 0, color: "#334155" },
+                    { label: "Score", val: `${((targetArtifact.score || 0) * 100).toFixed(1)}%`, color: targetArtifact.score >= 0.8 ? "#059669" : "#dc2626" },
+                    { label: "Coverage", val: `${((targetArtifact.metrics?.oracle_coverage_pct || 0) * 100).toFixed(0)}%`, color: "#0284c7" },
+                    { label: "Unique Inputs", val: targetArtifact.metrics?.unique_input_count || targetArtifact.metrics?.total_inputs || 0, color: "#334155" },
+                    { label: "Persisted Cases", val: targetArtifact.metrics?.certification_case_count || targetArtifact.metrics?.total_inputs || 0, color: "#334155" },
+                    { label: "Oracles", val: targetArtifact.metrics?.oracle_count || targetArtifact.oracle_summaries?.length || 0, color: "#2563eb" },
+                    { label: "Evaluations", val: targetArtifact.metrics?.oracle_evaluation_count || 0, color: "#475569" },
+                    { label: "Matching Cases", val: targetArtifact.metrics?.matching_case_count || 0, color: "#059669" },
+                    { label: "Regressions", val: targetArtifact.metrics?.regression_case_count || targetArtifact.metrics?.modern_regressions || 0, color: (targetArtifact.metrics?.regression_case_count || targetArtifact.metrics?.modern_regressions || 0) > 0 ? "#dc2626" : "#059669" },
                   ].map((m, i) => (
-                    <div key={i} style={{ ...cardStyle, marginBottom: 0, padding: "16px", textAlign: "center" }}>
-                      <div style={{ fontSize: "11px", fontWeight: "600", color: "#64748b", textTransform: "uppercase", marginBottom: "4px" }}>
+                    <div key={i} style={{ ...cardStyle, marginBottom: 0, padding: "12px 8px", textAlign: "center" }}>
+                      <div style={{ fontSize: "10px", fontWeight: "600", color: "#64748b", textTransform: "uppercase", marginBottom: "2px" }}>
                         {m.label}
                       </div>
-                      <div style={{ fontSize: "22px", fontWeight: "800", color: m.color }}>{m.val}</div>
-                      {m.tip && <div style={{ fontSize: "10px", color: "#94a3b8", marginTop: "2px" }}>{m.tip}</div>}
+                      <div style={{ fontSize: "18px", fontWeight: "800", color: m.color }}>{m.val}</div>
                     </div>
                   ))}
                 </div>
@@ -722,11 +796,14 @@ export default function App() {
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
                       <span style={{ fontSize: "12px", fontWeight: "600", color: "#64748b", textTransform: "uppercase" }}>
-                        Oracle Set Provenance & Discovery Method
+                        Oracle Set Provenance & Discovery Pipeline
                       </span>
                       <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "4px" }}>
                         <span style={badgeStyle("#eff6ff", "#1e40af", "#bfdbfe")}>
-                          Oracle Source: {targetArtifact.oracle_source_type || (targetArtifact.evaluation_mode === "FULL_BEACON" ? "FULL_BEACON_DISCOVERED" : "CONTROLLED_ORACLE_SET")}
+                          Provenance: {targetArtifact.oracle_source_type || (targetArtifact.context?.oracle_source_type || "CONTROLLED_ORACLE_SET")}
+                        </span>
+                        <span style={{ fontSize: "12px", color: "#475569" }}>
+                          Provider: <strong>{targetArtifact.context?.provider || targetArtifact.provider || "offline"}</strong>
                         </span>
                         <span style={{ fontSize: "12px", color: "#475569" }}>
                           Oracle Set ID: <strong>{targetArtifact.oracle_set_id}</strong>
@@ -914,20 +991,28 @@ export default function App() {
                   </h3>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", fontSize: "12px", fontFamily: "monospace" }}>
                     <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <span style={{ color: "#64748b" }}>Legacy Implementation SHA-256:</span>
+                      <div style={{ color: "#0f172a", marginTop: "2px", wordBreak: "break-all" }}>{targetArtifact.legacy_implementation_hash || targetArtifact.context?.legacy_implementation_hash || "—"}</div>
+                    </div>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <span style={{ color: "#64748b" }}>Modern Implementation SHA-256:</span>
+                      <div style={{ color: "#0f172a", marginTop: "2px", wordBreak: "break-all" }}>{targetArtifact.modernized_implementation_hash || targetArtifact.context?.modernized_implementation_hash || "—"}</div>
+                    </div>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
                       <span style={{ color: "#64748b" }}>Dataset Checksum (SHA-256):</span>
-                      <div style={{ color: "#0f172a", marginTop: "2px" }}>{targetArtifact.dataset_checksum || "—"}</div>
+                      <div style={{ color: "#0f172a", marginTop: "2px", wordBreak: "break-all" }}>{targetArtifact.dataset_checksum || targetArtifact.context?.dataset_checksum || "—"}</div>
                     </div>
                     <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
                       <span style={{ color: "#64748b" }}>Input-Set Hash (SHA-256):</span>
-                      <div style={{ color: "#0f172a", marginTop: "2px" }}>{targetArtifact.input_set_hash || "—"}</div>
+                      <div style={{ color: "#0f172a", marginTop: "2px", wordBreak: "break-all" }}>{targetArtifact.input_set_hash || "—"}</div>
                     </div>
                     <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
                       <span style={{ color: "#64748b" }}>Oracle-Set Hash (SHA-256):</span>
-                      <div style={{ color: "#0f172a", marginTop: "2px" }}>{targetArtifact.oracle_set_hash || "—"}</div>
+                      <div style={{ color: "#0f172a", marginTop: "2px", wordBreak: "break-all" }}>{targetArtifact.oracle_set_hash || "—"}</div>
                     </div>
                     <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
                       <span style={{ color: "#64748b" }}>Policy Hash (SHA-256):</span>
-                      <div style={{ color: "#0f172a", marginTop: "2px" }}>{targetArtifact.certification_policy_hash || "—"}</div>
+                      <div style={{ color: "#0f172a", marginTop: "2px", wordBreak: "break-all" }}>{targetArtifact.certification_policy_hash || "—"}</div>
                     </div>
                   </div>
                 </div>

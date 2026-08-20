@@ -355,9 +355,24 @@ class CertificationEngine:
 
         # 5. Compile Quantitative Certification Metrics
         oracle_count = len(oracle_set.oracles)
+        u_inputs = len(inputs)
+        c_cases = len(cases_to_save)
+        o_evals = phase9_report.total_applicable_probes
+        m_cases = sum(1 for c in cases_to_save if c.classification == "MATCH")
+        r_cases = sum(1 for c in cases_to_save if c.classification == "MODERN_REGRESSION")
+        e_errors = sum(1 for c in cases_to_save if c.classification in ("ERROR", "EXECUTION_ERROR"))
+        c_count = len(phase9_report.regressions)
         coverage_pct = round(oracles_exercised_count / oracle_count, 4) if oracle_count > 0 else 0.0
 
         metrics = CertificationMetrics(
+            unique_input_count=u_inputs,
+            certification_case_count=c_cases,
+            oracle_count=oracle_count,
+            oracle_evaluation_count=o_evals,
+            matching_case_count=m_cases,
+            regression_case_count=r_cases,
+            execution_error_count=e_errors,
+            counterexample_count=c_count,
             total_inputs=phase9_report.total_probes,
             applicable_inputs=phase9_report.total_applicable_probes,
             not_applicable=phase9_report.total_not_applicable,
@@ -369,7 +384,6 @@ class CertificationEngine:
             execution_errors=phase9_report.total_execution_errors,
             critical_failures=critical_failures_count,
             non_critical_failures=non_critical_failures_count,
-            oracle_count=oracle_count,
             oracles_exercised=oracles_exercised_count,
             oracle_coverage_pct=coverage_pct,
             overall_equivalence_score=phase9_report.overall_equivalence_score,
@@ -443,6 +457,9 @@ class CertificationEngine:
         is_certified = final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS)
 
         # 7. Create Immutable Artifact and Compute Canonical Content Hash
+        leg_impl_hash = getattr(legacy_adapter, "implementation_hash", "") or getattr(legacy_adapter, "version", "1.0.0")
+        mod_impl_hash = getattr(modern_adapter, "implementation_hash", "") or getattr(modern_adapter, "version", "2.0.0")
+
         final_context = context or CertificationContext(
             benchmark_id=project_id,
             benchmark_version="1.0.0",
@@ -454,6 +471,10 @@ class CertificationEngine:
             legacy_implementation_id=getattr(legacy_adapter, "name", "legacy"),
             modernized_implementation_id=getattr(modern_adapter, "name", "modern"),
         )
+        final_context.legacy_implementation_id = getattr(legacy_adapter, "name", "legacy_adapter")
+        final_context.legacy_implementation_hash = leg_impl_hash
+        final_context.modernized_implementation_id = getattr(modern_adapter, "name", "modern_adapter")
+        final_context.modernized_implementation_hash = mod_impl_hash
         final_context.certification_run_id = cert_id
         final_context.certification_artifact_id = cert_id
         final_context.input_set_id = input_set_id
@@ -464,6 +485,15 @@ class CertificationEngine:
         final_context.policy_hash = pol_hash
         final_context.run_timestamp = timestamp
         final_context.run_status = final_status.value
+        # Assign disambiguated metrics to context
+        final_context.unique_input_count = u_inputs
+        final_context.certification_case_count = c_cases
+        final_context.oracle_count = oracle_count
+        final_context.oracle_evaluation_count = o_evals
+        final_context.matching_case_count = m_cases
+        final_context.regression_case_count = r_cases
+        final_context.execution_error_count = e_errors
+        final_context.counterexample_count = c_count
 
         temp_artifact = CertificationArtifact(
             certification_id=cert_id,
@@ -473,6 +503,8 @@ class CertificationEngine:
             modernization_variant=final_context.modernization_variant_id,
             dataset_checksum=final_context.dataset_checksum,
             oracle_source_type=final_context.oracle_source_type,
+            legacy_implementation_hash=leg_impl_hash,
+            modernized_implementation_hash=mod_impl_hash,
             context=final_context,
             legacy_version=legacy_adapter.version,
             modernized_version=modern_adapter.version,

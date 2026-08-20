@@ -44,10 +44,16 @@ class LocalStore:
                     baseline_score REAL NOT NULL,
                     delta_pct REAL NOT NULL,
                     alert INTEGER NOT NULL,
+                    benchmark_id TEXT,
                     payload TEXT NOT NULL
                 );
                 """
             )
+            # Add benchmark_id column if table already existed without it
+            try:
+                connection.execute("ALTER TABLE drift_samples ADD COLUMN benchmark_id TEXT")
+            except Exception:
+                pass
 
     def save_run(self, run: CertificationRun) -> None:
         payload = run.model_dump(mode="json")
@@ -79,17 +85,23 @@ class LocalStore:
         with self._connect() as connection:
             connection.execute(
                 """INSERT INTO drift_samples
-                (run_timestamp, equivalence_score, baseline_score, delta_pct, alert, payload)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                (run_timestamp, equivalence_score, baseline_score, delta_pct, alert, benchmark_id, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (sample.run_timestamp, sample.equivalence_score, sample.baseline_score,
-                 sample.delta_pct, int(sample.alert), json.dumps(payload)),
+                 sample.delta_pct, int(sample.alert), sample.benchmark_id, json.dumps(payload)),
             )
 
-    def list_drift_samples(self, limit: int = 100) -> list[dict]:
+    def list_drift_samples(self, benchmark_id: str | None = None, limit: int = 100) -> list[dict]:
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT payload FROM drift_samples ORDER BY id DESC LIMIT ?", (limit,)
-            ).fetchall()
+            if benchmark_id:
+                rows = connection.execute(
+                    "SELECT payload FROM drift_samples WHERE benchmark_id = ? ORDER BY id DESC LIMIT ?",
+                    (benchmark_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT payload FROM drift_samples ORDER BY id DESC LIMIT ?", (limit,)
+                ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
 

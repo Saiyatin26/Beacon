@@ -65,7 +65,7 @@ def test_benchmark_metadata_provenance_and_schema():
 
     retail = benchmark_registry.get_benchmark("retail_discount_pricing")
     assert retail is not None
-    assert retail.provenance_category == ProvenanceCategory.REALISTIC
+    assert retail.provenance_category == ProvenanceCategory.REALISTIC_SYNTHETIC
     assert retail.license == "Apache-2.0"
     assert "order_amount" in retail.input_schema
     assert "final_price" in retail.output_schema
@@ -74,7 +74,7 @@ def test_benchmark_metadata_provenance_and_schema():
 
     payroll = benchmark_registry.get_benchmark("payroll_tax_calculator")
     assert payroll is not None
-    assert payroll.provenance_category == ProvenanceCategory.PUBLIC
+    assert payroll.provenance_category == ProvenanceCategory.REALISTIC_SYNTHETIC
     assert payroll.license == "MIT"
     assert "gross_salary" in payroll.input_schema
     assert "federal_tax" in payroll.output_schema
@@ -349,7 +349,7 @@ def test_benchmark_execution_manifest_and_secret_freedom():
     )
 
     assert manifest.benchmark_id == "retail_discount_pricing"
-    assert manifest.provenance_category == ProvenanceCategory.REALISTIC
+    assert manifest.provenance_category == ProvenanceCategory.REALISTIC_SYNTHETIC
     assert manifest.modernization_provenance == "INDEPENDENT_REIMPLEMENTATION"
     assert manifest.dataset_checksum != ""
     assert manifest.input_set_hash == artifact.input_set_hash
@@ -383,7 +383,7 @@ def test_benchmark_api_endpoints():
     res_spec = client.get("/api/v1/benchmarks/retail_discount_pricing")
     assert res_spec.status_code == 200
     spec_data = res_spec.json()
-    assert spec_data["provenance_category"] == "REALISTIC"
+    assert spec_data["provenance_category"] == "REALISTIC_SYNTHETIC"
 
     # 3. POST /api/v1/benchmarks/{id}/validate
     res_val = client.post("/api/v1/benchmarks/retail_discount_pricing/validate")
@@ -398,7 +398,7 @@ def test_benchmark_api_endpoints():
     assert res_man.status_code == 200
     man_data = res_man.json()
     assert man_data["benchmark_id"] == "retail_discount_pricing"
-    assert man_data["provenance_category"] == "REALISTIC"
+    assert man_data["provenance_category"] == "REALISTIC_SYNTHETIC"
 
     # 5. POST /api/v1/certification/run with benchmark_id (clean)
     res_cert_clean = client.post(

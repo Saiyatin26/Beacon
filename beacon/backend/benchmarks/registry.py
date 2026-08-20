@@ -13,8 +13,9 @@ from pathlib import Path
 import sys
 from typing import Any, Callable, Optional
 
+import hashlib
 from certification.adapter_registry import adapter_registry
-from certification.adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter
+from certification.adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter, compute_implementation_hash
 from certification.models import CertificationTestInput
 from oracle.models import (
     OracleDefinition,
@@ -141,6 +142,11 @@ class BenchmarkRegistry:
             mod_clean_adp = ModernizedAdapter(target_fn=mod_clean_fn, name="loan_approval_modern_equiv", version="2.0.0")
             mod_buggy_adp = ModernizedAdapter(target_fn=mod_buggy_fn, name="loan_approval_modern_buggy", version="2.0.0-buggy")
 
+            leg_adp.implementation_hash = compute_implementation_hash(ROOT_DIR / "legacy_sample" / "legacy_loan_approval.py")
+            mod_clean_adp.implementation_hash = compute_implementation_hash(ROOT_DIR / "modern_sample" / "modern_loan_approval.py")
+            mod_buggy_adp.implementation_hash = compute_implementation_hash(ROOT_DIR / "modern_sample" / "modern_loan_approval_buggy.py")
+            spec.legacy_implementation_hash = leg_adp.implementation_hash
+
             self._legacy_adapters[spec.benchmark_id] = leg_adp
             self._modern_adapters[(spec.benchmark_id, "clean_v2")] = mod_clean_adp
             self._modern_adapters[(spec.benchmark_id, "buggy_v2")] = mod_buggy_adp
@@ -235,6 +241,11 @@ class BenchmarkRegistry:
         mod_clean_adp = ModernizedAdapter(target_fn=modern_medical_clean, name="medical_triage_modern_clean", version="2.0.0")
         mod_buggy_adp = ModernizedAdapter(target_fn=modern_medical_buggy, name="medical_triage_modern_buggy", version="2.0.0-buggy")
 
+        leg_adp.implementation_hash = compute_implementation_hash(legacy_medical)
+        mod_clean_adp.implementation_hash = compute_implementation_hash(modern_medical_clean)
+        mod_buggy_adp.implementation_hash = compute_implementation_hash(modern_medical_buggy)
+        spec.legacy_implementation_hash = leg_adp.implementation_hash
+
         self._legacy_adapters[spec.benchmark_id] = leg_adp
         self._modern_adapters[(spec.benchmark_id, "clean_v2")] = mod_clean_adp
         self._modern_adapters[(spec.benchmark_id, "buggy_v2")] = mod_buggy_adp
@@ -255,6 +266,11 @@ class BenchmarkRegistry:
             if eval_files:
                 spec.dataset_checksum = compute_file_checksum(eval_files[0])
             
+            # Pre-compute legacy implementation hash
+            leg_dir = bench_dir / "legacy"
+            if leg_dir.exists():
+                spec.legacy_implementation_hash = compute_implementation_hash(leg_dir)
+
             if not spec.reproducibility_manifest:
                 spec.reproducibility_manifest = ReproducibilityManifest(
                     benchmark_id=spec.benchmark_id,
@@ -283,14 +299,20 @@ class BenchmarkRegistry:
                         if isinstance(cls, type) and issubclass(cls, ImplementationAdapter) and cls not in (ImplementationAdapter, LegacyAdapter, ModernizedAdapter):
                             try:
                                 adp_instance = cls()
-                                adapter_registry.register_adapter(adp_instance)
                                 if getattr(adp_instance, "role", "") == "legacy":
+                                    adp_instance.implementation_hash = spec.legacy_implementation_hash or compute_implementation_hash(leg_dir if leg_dir.exists() else adp_instance)
                                     self._legacy_adapters[spec.benchmark_id] = adp_instance
                                 else:
                                     # Match variant
                                     for var_key, adp_id in spec.modernized_adapters.items():
                                         if adp_instance.name == adp_id:
+                                            var_clean_key = var_key.replace("_v2", "")
+                                            mod_dir = bench_dir / f"modern_{var_clean_key}"
+                                            if not mod_dir.exists():
+                                                mod_dir = bench_dir / var_key
+                                            adp_instance.implementation_hash = compute_implementation_hash(mod_dir if mod_dir.exists() else adp_instance)
                                             self._modern_adapters[(spec.benchmark_id, var_key)] = adp_instance
+                                adapter_registry.register_adapter(adp_instance)
                             except Exception as exc:
                                 logger.warning(f"Could not instantiate adapter class {attr_name}: {exc}")
 
@@ -462,20 +484,30 @@ class BenchmarkRegistry:
             checks_passed=passed,
             errors=errors,
             warnings=warnings,
-            legacy_adapter_status=leg_status,
-            modernized_adapters_status=mod_status,
-            dataset_record_count=record_count,
-            dataset_checksum=checksum,
-            metadata_provenance_valid=len(errors) == 0,
-        )
+                    legacy_adapter_status=leg_status,
+                    modernized_adapters_status=mod_status,
+                    dataset_record_count=record_count,
+                    dataset_checksum=checksum,
+                    metadata_provenance_valid=len(errors) == 0,
+                )
 
-    def get_or_create_oracle_set(self, benchmark_id: str, mode: str = "CONTROLLED") -> OracleSet:
+    def get_or_create_oracle_set(
+        self,
+        benchmark_id: str,
+        mode: str = "CONTROLLED",
+        preferred_provider: Optional[str] = None,
+        use_llm: bool = False,
+    ) -> OracleSet:
         """Retrieves or builds an OracleSet.
         - CONTROLLED: Returns predefined baseline OracleSet with 'CONTROLLED_ORACLE_SET' provenance.
         - FULL_BEACON: Executes the full evidence mining, grounding, adversarial validation, and Oracle compilation pipeline.
         """
         if mode == "FULL_BEACON":
-            return self.discover_oracle_set_full_pipeline(benchmark_id)
+            return self.discover_oracle_set_full_pipeline(
+                benchmark_id=benchmark_id,
+                use_llm=use_llm,
+                preferred_provider=preferred_provider,
+            )
 
         # CONTROLLED Mode Baseline
         set_id = f"SET-{benchmark_id.upper()}-CONTROLLED"
@@ -624,6 +656,7 @@ class BenchmarkRegistry:
         self,
         benchmark_id: str,
         use_llm: bool = False,
+        preferred_provider: Optional[str] = None,
         model_provider: Optional[str] = None,
     ) -> OracleSet:
         """Executes genuine full-pipeline discovery:
@@ -631,14 +664,37 @@ class BenchmarkRegistry:
         Invariant Mining -> Evidence Grounding -> Adversarial Validation ->
         Confidence Scoring -> Language-Independent Oracle Compilation.
         """
-        set_id = f"SET-{benchmark_id.upper()}-FULL"
-        existing = oracle_registry.get_oracle_set(set_id)
-        if existing:
-            return existing
-
         spec = self.get_benchmark(benchmark_id)
         if not spec:
             raise ValueError(f"Unknown benchmark '{benchmark_id}'")
+
+        legacy_adp = self.get_legacy_adapter(benchmark_id)
+        if not legacy_adp:
+            raise ValueError(f"Legacy adapter missing for benchmark '{benchmark_id}'")
+
+        legacy_fn: Callable = getattr(legacy_adp, "_target_fn", None) or getattr(legacy_adp, "target_fn", None)
+        if not legacy_fn:
+            legacy_fn = lambda **kw: legacy_adp.execute(kw).raw_outputs
+
+        legacy_impl_hash = getattr(legacy_adp, "implementation_hash", "") or compute_implementation_hash(legacy_fn)
+        pref_prov = (preferred_provider or model_provider or "auto").lower().strip()
+
+        # Build unique canonical configuration digest for cache keying
+        discovery_config = {
+            "benchmark_id": benchmark_id,
+            "legacy_version": spec.legacy_version,
+            "legacy_implementation_hash": legacy_impl_hash,
+            "use_llm": use_llm,
+            "preferred_provider": pref_prov,
+            "pipeline_version": "1.0.0",
+        }
+        config_canonical_json = json.dumps(discovery_config, sort_keys=True, separators=(",", ":"))
+        config_hash = hashlib.sha256(config_canonical_json.encode("utf-8")).hexdigest()
+        set_id = f"SET-{benchmark_id.upper()}-FULL-{config_hash[:8]}"
+
+        existing = oracle_registry.get_oracle_set(set_id)
+        if existing:
+            return existing
 
         # 1. Locate Legacy Source File
         source_path: Optional[Path] = None
@@ -660,15 +716,6 @@ class BenchmarkRegistry:
         static_result = extract_ast_structure(source_path)
 
         # 3. Dynamic Execution Tracing
-        legacy_adp = self.get_legacy_adapter(benchmark_id)
-        if not legacy_adp:
-            raise ValueError(f"Legacy adapter missing for benchmark '{benchmark_id}'")
-
-        legacy_fn: Callable = getattr(legacy_adp, "_target_fn", None) or getattr(legacy_adp, "target_fn", None)
-        if not legacy_fn:
-            # Wrap adapter execute as callable
-            legacy_fn = lambda **kw: legacy_adp.execute(kw).raw_outputs
-
         traces = []
         if benchmark_id == "loan_demo":
             trace_file = Path(__file__).resolve().parents[2] / "legacy_sample" / "trace_log.json"
@@ -695,6 +742,7 @@ class BenchmarkRegistry:
             field_bounds=spec.field_bounds,
             use_atlas=False,
             use_llm=use_llm,
+            preferred_provider=pref_prov,
         )
 
         # If zero invariants graduated from automated miner, graduate verified candidates from evidence
@@ -787,6 +835,40 @@ class BenchmarkRegistry:
             variant_name, ModernizationProvenance.INDEPENDENT_REIMPLEMENTATION
         )
 
+        metrics = getattr(artifact, "metrics", None)
+        u_inputs = getattr(metrics, "unique_input_count", 0) or getattr(metrics, "total_inputs", 0)
+        c_cases = getattr(metrics, "certification_case_count", 0) or u_inputs
+        o_count = getattr(metrics, "oracle_count", 0) or len(getattr(artifact, "oracle_summaries", []))
+        o_evals = getattr(metrics, "oracle_evaluation_count", 0) or (getattr(metrics, "applicable_inputs", 0) * max(o_count, 1))
+        m_cases = getattr(metrics, "matching_case_count", 0)
+        r_cases = getattr(metrics, "regression_case_count", 0)
+        e_errors = getattr(metrics, "execution_error_count", 0) or getattr(metrics, "execution_errors", 0)
+        c_count = getattr(metrics, "counterexample_count", 0) or len(getattr(artifact, "regressions", []))
+        cov_pct = getattr(metrics, "oracle_coverage_pct", 0.0)
+
+        leg_hash = getattr(artifact, "legacy_implementation_hash", "") or (artifact.context.legacy_implementation_hash if getattr(artifact, "context", None) else "") or spec.legacy_implementation_hash
+        mod_hash = getattr(artifact, "modernized_implementation_hash", "") or (artifact.context.modernized_implementation_hash if getattr(artifact, "context", None) else "")
+        prov_src = getattr(artifact, "oracle_source_type", "") or (artifact.context.oracle_source_type if getattr(artifact, "context", None) else ("FULL_BEACON_DISCOVERED" if discovery_mode == DiscoveryMode.FULL_BEACON else "CONTROLLED_ORACLE_SET"))
+
+        ctx = getattr(artifact, "context", None) if artifact and not isinstance(artifact, dict) else None
+        d_id = getattr(ctx, "dataset_id", f"DATASET-{benchmark_id}") if ctx else f"DATASET-{benchmark_id}"
+        prov = getattr(ctx, "provider", model_provider.split("/")[0]) if ctx else model_provider.split("/")[0]
+        mod = getattr(ctx, "model", model_provider.split("/")[1] if "/" in model_provider else "default") if ctx else "default"
+        gen_m = getattr(ctx, "generation_method", "offline") if ctx else "offline"
+
+        cert_status = "NOT_CERTIFIED"
+        art_hash = ""
+        eq_score = 0.0
+        if artifact and not isinstance(artifact, dict):
+            status_obj = getattr(artifact, "status", None)
+            cert_status = getattr(status_obj, "value", str(status_obj)) if status_obj else "NOT_CERTIFIED"
+            art_hash = getattr(artifact, "content_hash", "")
+            eq_score = getattr(artifact, "score", 0.0)
+        elif isinstance(artifact, dict) and artifact:
+            cert_status = artifact.get("status", "NOT_CERTIFIED")
+            art_hash = artifact.get("content_hash", "")
+            eq_score = artifact.get("score", 0.0)
+
         return BenchmarkExecutionManifest(
             benchmark_id=benchmark_id,
             benchmark_version=spec.legacy_version,
@@ -794,31 +876,46 @@ class BenchmarkRegistry:
             modernization_provenance=mod_prov.value if hasattr(mod_prov, "value") else str(mod_prov),
             source_version=spec.source_version,
             adapter_version=spec.adapter_version,
-            dataset_id=f"DATASET-{benchmark_id}",
+            legacy_implementation_hash=leg_hash,
+            modernized_implementation_hash=mod_hash,
+            dataset_id=d_id,
             dataset_version=spec.dataset_version,
-            dataset_checksum=spec.dataset_checksum or (spec.reproducibility_manifest.dataset_checksum if spec.reproducibility_manifest else ""),
-            input_set_id=getattr(artifact, "input_set_id", ""),
-            input_set_hash=getattr(artifact, "input_set_hash", ""),
+            dataset_checksum=getattr(artifact, "dataset_checksum", "") or spec.dataset_checksum,
+            input_set_id=getattr(artifact, "input_set_id", "") if artifact and not isinstance(artifact, dict) else (artifact.get("input_set_id", "") if isinstance(artifact, dict) else ""),
+            input_set_hash=getattr(artifact, "input_set_hash", "") if artifact and not isinstance(artifact, dict) else (artifact.get("input_set_hash", "") if isinstance(artifact, dict) else ""),
             evidence_collection_version="1.0.0",
             invariant_mining_config={"use_llm": discovery_mode == DiscoveryMode.FULL_BEACON, "provider": model_provider},
             model_provider_identifier=model_provider,
-            oracle_set_id=getattr(artifact, "oracle_set_id", ""),
-            oracle_set_hash=getattr(artifact, "oracle_set_hash", ""),
-            oracle_set_provenance="FULL_BEACON_DISCOVERED" if discovery_mode == DiscoveryMode.FULL_BEACON else "CONTROLLED_ORACLE_SET",
-            policy_id=getattr(artifact, "certification_policy_id", "POL-DEFAULT"),
-            policy_hash=getattr(artifact, "certification_policy_hash", ""),
+            provider=prov,
+            model=mod,
+            generation_method=gen_m,
+            oracle_set_id=getattr(artifact, "oracle_set_id", "") if artifact and not isinstance(artifact, dict) else (artifact.get("oracle_set_id", "") if isinstance(artifact, dict) else ""),
+            oracle_set_hash=getattr(artifact, "oracle_set_hash", "") if artifact and not isinstance(artifact, dict) else (artifact.get("oracle_set_hash", "") if isinstance(artifact, dict) else ""),
+            oracle_set_provenance=prov_src,
+            oracle_source_type=prov_src,
+            policy_id=getattr(artifact, "certification_policy_id", "POL-DEFAULT") if artifact and not isinstance(artifact, dict) else "POL-DEFAULT",
+            policy_hash=getattr(artifact, "certification_policy_hash", "") if artifact and not isinstance(artifact, dict) else "",
             beacon_version="1.0.0",
-            execution_timestamp=getattr(artifact, "timestamp", datetime.now(timezone.utc).isoformat()),
+            execution_timestamp=getattr(artifact, "timestamp", datetime.now(timezone.utc).isoformat()) if artifact and not isinstance(artifact, dict) else datetime.now(timezone.utc).isoformat(),
             discovery_mode=discovery_mode,
             environment_info={"python_version": sys.version.split()[0], "platform": sys.platform},
-            total_inputs=getattr(artifact.metrics, "total_inputs", 0) if hasattr(artifact, "metrics") else 0,
-            total_oracles=getattr(artifact.metrics, "oracle_count", 0) if hasattr(artifact, "metrics") else 0,
-            total_cases=len(getattr(artifact, "oracle_summaries", [])),
-            violations=getattr(artifact.metrics, "modern_regressions", 0) if hasattr(artifact, "metrics") else 0,
-            errors=getattr(artifact.metrics, "execution_errors", 0) if hasattr(artifact, "metrics") else 0,
-            equivalence_score=getattr(artifact, "score", 0.0),
-            certification_status=getattr(artifact.status, "value", str(getattr(artifact, "status", "NOT_CERTIFIED"))),
-            artifact_hash=getattr(artifact, "content_hash", ""),
+            unique_input_count=u_inputs,
+            certification_case_count=c_cases,
+            oracle_count=o_count,
+            oracle_evaluation_count=o_evals,
+            matching_case_count=m_cases,
+            regression_case_count=r_cases,
+            execution_error_count=e_errors,
+            counterexample_count=c_count,
+            total_inputs=u_inputs,
+            total_oracles=o_count,
+            total_cases=c_cases,
+            violations=getattr(metrics, "modern_regressions", 0) if metrics else 0,
+            errors=e_errors,
+            oracle_coverage_pct=cov_pct,
+            equivalence_score=eq_score,
+            certification_status=cert_status,
+            artifact_hash=art_hash,
         )
 
 

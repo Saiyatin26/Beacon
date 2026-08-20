@@ -248,7 +248,7 @@ def check_demo_drift(request: DriftRequest):
 
 @app.get("/drift")
 def list_drift_samples(limit: int = 100, benchmark_id: Optional[str] = None):
-    all_samples = local_store.list_drift_samples(max(1, min(limit, 500)))
+    all_samples = local_store.list_drift_samples(benchmark_id=benchmark_id, limit=max(1, min(limit, 500)))
     if benchmark_id:
         if benchmark_id in ("loan", "loan_approval"):
             return {"samples": [s for s in all_samples if s.get("benchmark_id") in ("loan", "loan_approval", None)]}
@@ -261,14 +261,15 @@ def list_drift_samples(limit: int = 100, benchmark_id: Optional[str] = None):
 # ==============================================================================
 
 from certification.adapter_registry import adapter_registry
+from benchmarks.models import DiscoveryMode
 from benchmarks.registry import benchmark_registry
-
 
 class CertificationRunRequest(BaseModel):
     project_id: str = "default_project"
     benchmark_id: Optional[str] = None
     benchmark_variant: Optional[str] = "clean_v2"
     discovery_mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED"
+    preferred_provider: Optional[str] = "auto"
     use_llm: bool = False
     legacy_target: Optional[str] = "loan_approval_legacy"
     modernized_target: Optional[str] = "loan_approval_modern_equiv"
@@ -308,41 +309,31 @@ def get_benchmark_endpoint(benchmark_id: str):
     return spec.model_dump(mode="json")
 
 
+@app.get("/api/v1/benchmarks/{benchmark_id}/validate")
 @app.post("/api/v1/benchmarks/{benchmark_id}/validate")
 def validate_benchmark_endpoint(benchmark_id: str):
-    """Performs pre-flight validation on schemas, adapters, and input datasets."""
+    """Performs pre-flight validation on a benchmark's adapters, schemas, and dataset."""
     result = benchmark_registry.validate_benchmark(benchmark_id)
     return result.model_dump(mode="json")
 
 
-@app.get("/api/v1/benchmarks/{benchmark_id}/datasets")
-def list_benchmark_datasets_endpoint(benchmark_id: str):
-    """Lists available input datasets for a benchmark."""
-    spec = benchmark_registry.get_benchmark(benchmark_id)
-    if spec is None:
-        raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found.")
-    return {
-        "benchmark_id": benchmark_id,
-        "datasets": [
-            {"dataset_id": "default", "name": "Evaluation Dataset", "source": spec.dataset_source},
-            {"dataset_id": "validation", "name": "Pre-flight Validation Dataset", "source": "validation.json"},
-        ],
-    }
-
-
 @app.get("/api/v1/benchmarks/{benchmark_id}/manifest")
-def get_benchmark_manifest_endpoint(
+def get_benchmark_manifest(
     benchmark_id: str,
+    discovery_mode: DiscoveryMode = DiscoveryMode.CONTROLLED,
     variant: str = "clean_v2",
-    discovery_mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED",
 ):
-    """Retrieves the reproducibility and execution manifest for a benchmark."""
+    """Retrieves an execution manifest matching the EXACT benchmark, mode, and variant context."""
     spec = benchmark_registry.get_benchmark(benchmark_id)
     if spec is None:
         raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found.")
 
-    artifacts = certification_repository.list_artifacts(project_id=f"benchmark_{benchmark_id}", limit=1)
-    art = artifacts[0] if artifacts else None
+    mode_str = discovery_mode.value if hasattr(discovery_mode, "value") else str(discovery_mode)
+    art = certification_repository.get_artifact_by_context(
+        benchmark_id=benchmark_id,
+        evaluation_mode=mode_str,
+        modernization_variant=variant,
+    )
     manifest = benchmark_registry.create_execution_manifest(
         benchmark_id=benchmark_id,
         artifact=art or {},
@@ -364,7 +355,15 @@ def run_certification_v1(request: CertificationRunRequest):
             raise HTTPException(status_code=404, detail=f"Benchmark '{request.benchmark_id}' not found.")
 
         mode = "FULL_BEACON" if request.discovery_mode == "FULL_BEACON" else "CONTROLLED"
-        oracle_set = benchmark_registry.get_or_create_oracle_set(request.benchmark_id, mode=mode)
+        pref_prov = (request.preferred_provider or "auto").lower().strip()
+        use_llm_flag = request.use_llm or (mode == "FULL_BEACON" and pref_prov != "offline")
+
+        oracle_set = benchmark_registry.get_or_create_oracle_set(
+            request.benchmark_id,
+            mode=mode,
+            preferred_provider=pref_prov,
+            use_llm=use_llm_flag,
+        )
         legacy_adp = benchmark_registry.get_legacy_adapter(request.benchmark_id)
         if not legacy_adp:
             raise HTTPException(status_code=404, detail=f"Legacy adapter for benchmark '{request.benchmark_id}' not found.")
@@ -394,11 +393,11 @@ def run_certification_v1(request: CertificationRunRequest):
         if hasattr(mod_prov, "value"):
             mod_prov = mod_prov.value
 
-        oracle_src = "CONTROLLED_ORACLE_SET"
-        if mode == "FULL_BEACON":
-            first_prov = getattr(oracle_set.oracles[0], "provenance", None) if oracle_set.oracles else None
-            ev_src = getattr(first_prov, "evidence_source", "") if first_prov else ""
-            oracle_src = "FULL_BEACON_DISCOVERED" if ev_src == "FULL_BEACON_DISCOVERED" else "FULL_BEACON_OFFLINE_FALLBACK"
+        first_prov = getattr(oracle_set.oracles[0], "provenance", None) if oracle_set.oracles else None
+        ev_src = getattr(first_prov, "evidence_source", "") if first_prov else ""
+        gen_method = getattr(first_prov, "generation_method", "offline") if first_prov else "offline"
+        mining_method = getattr(first_prov, "mining_method", "manual_baseline_specification") if first_prov else "manual"
+        oracle_src = "CONTROLLED_ORACLE_SET" if mode == "CONTROLLED" else ("FULL_BEACON_DISCOVERED" if ev_src == "FULL_BEACON_DISCOVERED" else "FULL_BEACON_OFFLINE_FALLBACK")
 
         context = CertificationContext(
             benchmark_id=request.benchmark_id,
@@ -413,15 +412,23 @@ def run_certification_v1(request: CertificationRunRequest):
             modernization_variant_name=variant.replace("_v2", "").replace("_", " ").title(),
             modernization_provenance=str(mod_prov),
             legacy_implementation_id=legacy_adp.name,
-            legacy_implementation_hash="",
+            legacy_implementation_hash=getattr(legacy_adp, "implementation_hash", "") or bench_spec.legacy_implementation_hash,
             modernized_implementation_id=modern_adp.name,
-            modernized_implementation_hash="",
+            modernized_implementation_hash=getattr(modern_adp, "implementation_hash", ""),
             oracle_set_id=oracle_set.oracle_set_id,
             oracle_set_hash=oracle_set.oracle_set_hash,
             oracle_source_type=oracle_src,
+            provider=pref_prov if mode == "FULL_BEACON" else "offline",
+            model="deterministic" if mode == "CONTROLLED" else ("openrouter/auto" if pref_prov == "auto" else pref_prov),
+            generation_method=gen_method,
             policy_id=request.policy.policy_id if request.policy else "POL-DEFAULT",
             policy_hash="",
-            provider_metadata={"model": "openrouter/auto"} if mode == "FULL_BEACON" and request.use_llm else {},
+            provider_metadata={
+                "preferred_provider": pref_prov,
+                "generation_method": gen_method,
+                "mining_method": mining_method,
+                "oracle_source_type": oracle_src,
+            },
         )
 
     # 2. Generic Adapter Resolution Mode
@@ -488,26 +495,11 @@ def list_certification_artifacts(
 
 @app.post("/api/v1/certification/{certification_id}/verify")
 def verify_certification_artifact_endpoint(certification_id: str):
-    """Cryptographically verifies artifact content hash and input-set canonical hash."""
-    artifact = certification_repository.get_artifact(certification_id)
-    if artifact is None:
-        raise HTTPException(status_code=404, detail=f"Certificate '{certification_id}' not found.")
-
-    is_art_valid = verify_artifact_integrity(artifact)
-    is_inp_valid = certification_repository.verify_input_set_integrity(artifact.input_set_id, artifact.certification_id)
-
-    return {
-        "certification_id": certification_id,
-        "artifact_integrity_valid": is_art_valid,
-        "input_set_integrity_valid": is_inp_valid,
-        "content_hash": artifact.content_hash,
-        "input_set_hash": artifact.input_set_hash,
-        "oracle_set_hash": artifact.oracle_set_hash,
-        "policy_hash": artifact.certification_policy_hash,
-        "reproducibility_state": artifact.reproducibility_state,
-        "status": artifact.status.value,
-        "benchmark_id": artifact.benchmark_id or (artifact.context.benchmark_id if artifact.context else None),
-    }
+    """Cryptographically validates complete 8-point integrity of a certification artifact and its inputs."""
+    report = certification_repository.verify_certification_run_integrity(certification_id)
+    if report.get("status") == "FAIL" and any("not found" in e for e in report.get("errors", [])):
+        raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
+    return report
 
 
 @app.get("/api/v1/certification/{certification_id}")
@@ -601,54 +593,129 @@ def get_certification_input_set(certification_id: str):
     return input_set.model_dump(mode="json")
 
 
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+
 @app.get("/api/v1/certification/{certification_id}/export")
-def export_certification_dataset(certification_id: str):
-    """Exports the entire dataset for a certification run."""
+def export_certification_dossier(
+    certification_id: str,
+    format: Literal["json", "markdown", "csv"] = "json",
+):
+    """Exports a complete, auditable certification dossier in JSON, Markdown, or CSV format with complete context and zero secrets."""
     artifact = certification_repository.get_artifact(certification_id)
     if not artifact:
         raise HTTPException(status_code=404, detail="Certification not found.")
-    cases = certification_repository.list_certification_cases(certification_id, limit=100000)
+
+    cases = certification_repository.list_cases_for_input_set(artifact.input_set_id, run_id=artifact.certification_id)
     input_set = certification_repository.get_input_set(artifact.input_set_id)
-    
-    export_payload = {
-        "metadata": {
+    integrity_report = certification_repository.verify_certification_run_integrity(certification_id)
+
+    if format == "json":
+        export_payload = {
             "certification_id": artifact.certification_id,
-            "project_id": artifact.project_id,
             "artifact_hash": artifact.content_hash,
-            "oracle_set_id": artifact.oracle_set_id,
-            "oracle_set_hash": artifact.oracle_set_hash,
-            "policy_id": artifact.certification_policy_id,
-            "policy_hash": artifact.certification_policy_hash,
-            "reproducibility_state": artifact.reproducibility_state,
-        },
-        "input_set": input_set.model_dump(mode="json") if input_set else None,
-        "cases": [c.model_dump(mode="json") for c in cases]
-    }
-    
-    return JSONResponse(
-        content=export_payload,
-        headers={"Content-Disposition": f"attachment; filename=certification_export_{certification_id}.json"}
-    )
+            "status": artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status),
+            "score": artifact.score,
+            "context": artifact.context.model_dump(mode="json") if artifact.context else {},
+            "metrics": artifact.metrics.model_dump(mode="json"),
+            "integrity_verification": integrity_report,
+            "oracle_set": {
+                "oracle_set_id": artifact.oracle_set_id,
+                "oracle_set_hash": artifact.oracle_set_hash,
+                "summaries": [s.model_dump(mode="json") for s in artifact.oracle_summaries],
+            },
+            "policy": {
+                "policy_id": artifact.certification_policy_id,
+                "policy_hash": artifact.certification_policy_hash,
+            },
+            "regressions": [r.model_dump(mode="json") for r in artifact.regressions],
+            "input_set": input_set.model_dump(mode="json") if input_set else None,
+            "cases_sample": [c.model_dump(mode="json") for c in cases[:100]],
+        }
+        return JSONResponse(
+            content=export_payload,
+            headers={"Content-Disposition": f"attachment; filename=certification_dossier_{certification_id}.json"}
+        )
+
+    elif format == "markdown":
+        ctx = artifact.context
+        b_id = ctx.benchmark_id if ctx else artifact.benchmark_id or "default"
+        b_name = ctx.benchmark_name if ctx else b_id
+        prov = ctx.benchmark_provenance if ctx else "CONTROLLED"
+        mode = ctx.evaluation_mode if ctx else artifact.evaluation_mode or "CONTROLLED"
+        var = ctx.modernization_variant_id if ctx else artifact.modernization_variant or "clean_v2"
+        leg_h = getattr(artifact, "legacy_implementation_hash", "") or (ctx.legacy_implementation_hash if ctx else "")
+        mod_h = getattr(artifact, "modernized_implementation_hash", "") or (ctx.modernized_implementation_hash if ctx else "")
+        data_chk = getattr(artifact, "dataset_checksum", "") or (ctx.dataset_checksum if ctx else "")
+
+        md = f"""# BEACON Behavioral Equivalence Certificate Dossier
+
+## Certificate Identity
+- **Certificate ID:** `{artifact.certification_id}`
+- **Artifact Content Hash (SHA-256):** `{artifact.content_hash}`
+- **Integrity Verification Status:** **`{integrity_report.get('status', 'UNKNOWN')}`**
+- **Certification Status:** **`{artifact.status.value if hasattr(artifact.status, 'value') else str(artifact.status)}`**
+- **Equivalence Score:** `{artifact.score * 100:.1f}%`
+
+## Execution Context & Cryptographic Fingerprints
+- **Benchmark:** `{b_id}` ({b_name})
+- **Provenance Category:** `{prov}`
+- **Evaluation Mode:** `{mode}` ({ctx.oracle_source_type if ctx else 'CONTROLLED_ORACLE_SET'})
+- **Modernization Variant:** `{var}` ({ctx.modernization_provenance if ctx else 'INDEPENDENT_REIMPLEMENTATION'})
+- **Legacy Implementation Hash:** `{leg_h}`
+- **Modernized Implementation Hash:** `{mod_h}`
+- **Dataset Checksum:** `{data_chk}`
+- **Input Set ID & Hash:** `{artifact.input_set_id}` (`{artifact.input_set_hash}`)
+- **Oracle Set ID & Hash:** `{artifact.oracle_set_id}` (`{artifact.oracle_set_hash}`)
+- **Policy ID & Hash:** `{artifact.certification_policy_id}` (`{artifact.certification_policy_hash}`)
+- **Execution Timestamp:** `{artifact.timestamp}`
+
+## Disambiguated Metric Breakdown
+- **Unique Inputs Evaluated:** `{artifact.metrics.unique_input_count}`
+- **Certification Cases Persisted:** `{artifact.metrics.certification_case_count}`
+- **Oracle Definitions:** `{artifact.metrics.oracle_count}`
+- **Oracle Evaluations Executed:** `{artifact.metrics.oracle_evaluation_count}`
+- **Matching Cases:** `{artifact.metrics.matching_case_count}`
+- **Regression Cases:** `{artifact.metrics.regression_case_count}`
+- **Execution Errors:** `{artifact.metrics.execution_error_count}`
+- **Counterexamples Detected:** `{artifact.metrics.counterexample_count}`
+- **Oracle Coverage:** `{artifact.metrics.oracle_coverage_pct * 100:.1f}%`
+
+## Behavioral Regressions ({len(artifact.regressions)})
+"""
+        for r in artifact.regressions:
+            md += f"- **Oracle `{r.oracle_id}`** on Input `{r.input_id}` (Hash `{r.input_hash}`): Legacy `{r.legacy_output}` vs Modern `{r.modern_output}`. *{r.details}*\n"
+
+        return Response(
+            content=md,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f"attachment; filename=certification_dossier_{certification_id}.md"}
+        )
+
+    elif format == "csv":
+        import io, csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["case_id", "case_index", "input_id", "input_hash", "classification", "severity", "oracle_result", "input_json", "legacy_output_json", "modern_output_json"])
+        for c in cases:
+            writer.writerow([c.case_id, c.case_index, c.input_id, c.input_hash, c.classification, c.severity, c.oracle_result, c.input_json, c.legacy_output_json, c.modern_output_json])
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=certification_cases_{certification_id}.csv"}
+        )
+
+
+@app.post("/api/v1/certification/{certification_id}/verify")
+def verify_certification_artifact(certification_id: str):
+    """Cryptographically validates complete 8-point integrity of a certification artifact and its inputs."""
+    report = certification_repository.verify_certification_run_integrity(certification_id)
+    if report.get("status") == "FAIL" and any("not found" in e for e in report.get("errors", [])):
+        raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
+    return report
 
 
 @app.get("/api/v1/certification/{certification_id}/verify_reproducibility")
 def verify_certification_reproducibility(certification_id: str):
-    """Verifies that persisted cases match the stored input set and artifact integrity."""
-    artifact = certification_repository.get_artifact(certification_id)
-    if not artifact:
-        raise HTTPException(status_code=404, detail="Certification not found.")
-
-    artifact_intact = verify_artifact_integrity(artifact)
-    input_set_intact = certification_repository.verify_input_set_integrity(
-        artifact.input_set_id, artifact.certification_id
-    )
-
-    return {
-        "certification_id": certification_id,
-        "artifact_integrity": artifact_intact,
-        "input_set_integrity": input_set_intact,
-        "reproducibility_state": artifact.reproducibility_state,
-        "verified": artifact_intact and input_set_intact,
-    }
+    """Backward-compatible endpoint for checking artifact and input-set integrity."""
+    return verify_certification_artifact(certification_id)
 

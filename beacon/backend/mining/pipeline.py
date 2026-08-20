@@ -22,12 +22,13 @@ def run_mining_pipeline(
     already_validated: Optional[list[ValidatedInvariant]] = None,
     use_atlas: bool = True,
     use_llm: bool = False,
+    preferred_provider: Optional[str] = None,
 ) -> tuple[list[ValidatedInvariant], list[UnconfirmedCandidate]]:
     """Runs the canonical candidate generation and validation pipeline."""
     
     # 1. Candidate Generation (Offline or LLM)
     if use_llm:
-        generator = LLMCandidateGenerator()
+        generator = LLMCandidateGenerator(provider_name=preferred_provider)
     else:
         generator = OfflineCandidateGenerator()
         
