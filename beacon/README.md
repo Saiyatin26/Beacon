@@ -203,7 +203,7 @@ beacon/
 ├── frontend/              React + Vite + Recharts dashboard with Benchmark Catalog & Audit Trail
 ├── docs/                  Baseline documentation & architectural verification
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (171 passed tests)
+└── tests/                 Comprehensive pytest test suite (176 passed tests)
 ```
 
 ---

@@ -94,6 +94,29 @@ class CorrelatedConditionEvidence(BaseModel):
     observed_outcomes: dict[str, int] = Field(default_factory=dict)  # {"REJECT": 12, "APPROVE": 0}
 
 
+import hashlib
+import json
+
+
+def compute_evidence_package_hash(package: UnifiedEvidencePackage) -> str:
+    """Computes a deterministic 64-character SHA-256 canonical hash across all evidence components:
+    static analysis, runtime traces, static facts, dynamic facts, correlated facts, and metadata.
+    """
+    canonical_dict = {
+        "package_id": package.package_id,
+        "project_id": package.project_id,
+        "source_file": package.source_file,
+        "language": package.language,
+        "static_analysis": package.static_analysis.model_dump(mode="json") if package.static_analysis else None,
+        "runtime_traces": [t.model_dump(mode="json") for t in package.runtime_traces],
+        "static_evidence_items": [s.model_dump(mode="json") for s in sorted(package.static_evidence_items, key=lambda x: (x.evidence_id, x.file, x.line))],
+        "dynamic_evidence_items": [d.model_dump(mode="json") for d in sorted(package.dynamic_evidence_items, key=lambda x: (x.evidence_id, x.execution_id))],
+        "correlated_conditions": [c.model_dump(mode="json") for c in sorted(package.correlated_conditions, key=lambda x: x.condition_expr)],
+    }
+    canonical_json = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
 class UnifiedEvidencePackage(BaseModel):
     """Container combining static facts, dynamic traces, and correlated evidence."""
     package_id: str
@@ -106,3 +129,10 @@ class UnifiedEvidencePackage(BaseModel):
     static_evidence_items: list[StaticEvidenceItem] = Field(default_factory=list)
     dynamic_evidence_items: list[DynamicEvidenceItem] = Field(default_factory=list)
     correlated_conditions: list[CorrelatedConditionEvidence] = Field(default_factory=list)
+    evidence_package_hash: str = ""
+
+    def compute_hash(self) -> str:
+        """Computes deterministic canonical SHA-256 hash of this evidence package."""
+        h = compute_evidence_package_hash(self)
+        object.__setattr__(self, "evidence_package_hash", h)
+        return h

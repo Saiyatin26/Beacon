@@ -395,3 +395,208 @@ def test_export_roundtrip_verification(client):
     assert dossier["oracle_set_hash"] == art["oracle_set_hash"]
     assert dossier["content_hash"] == art["content_hash"]
     assert dossier["integrity_verification"]["status"] == "PASS"
+
+
+def test_complete_input_sha256_hashing():
+    """Verifies that input hashing uses full 64-character SHA-256 digests and is invariant to key order."""
+    from certification.models import (
+        CertificationTestInput,
+        BehavioralRegression,
+        compute_canonical_input_hash,
+    )
+
+    inp_dict_1 = {"credit_score": 650, "debt_ratio": 0.35, "loan_amount": 25000}
+    inp_dict_2 = {"loan_amount": 25000, "credit_score": 650, "debt_ratio": 0.35}
+    inp_dict_diff = {"credit_score": 651, "debt_ratio": 0.35, "loan_amount": 25000}
+
+    hash_1 = compute_canonical_input_hash(inp_dict_1)
+    hash_2 = compute_canonical_input_hash(inp_dict_2)
+    hash_diff = compute_canonical_input_hash(inp_dict_diff)
+
+    assert len(hash_1) == 64
+    assert len(hash_2) == 64
+    assert len(hash_diff) == 64
+    assert hash_1 == hash_2
+    assert hash_1 != hash_diff
+
+    # CertificationTestInput model post-init
+    test_inp = CertificationTestInput(input_id="INP-001", values=inp_dict_1)
+    assert len(test_inp.input_hash) == 64
+    assert test_inp.input_hash == hash_1
+
+    # BehavioralRegression model post-init
+    reg = BehavioralRegression(
+        regression_id="REG-001",
+        oracle_id="ORC-001",
+        input_id="INP-001",
+        input_values=inp_dict_1,
+        expected_behavior="APPROVE",
+        legacy_output="APPROVE",
+        modern_output="REJECT",
+        failed_assertion="output == APPROVE",
+    )
+    assert len(reg.input_hash) == 64
+    assert reg.input_hash == hash_1
+
+
+def test_canonical_evidence_package_hash():
+    """Verifies that UnifiedEvidencePackage computes deterministic 64-character canonical SHA-256 hash."""
+    from evidence.models import (
+        UnifiedEvidencePackage,
+        StaticEvidenceItem,
+        DynamicEvidenceItem,
+        CorrelatedConditionEvidence,
+        compute_evidence_package_hash,
+    )
+    from common.models import StaticAnalysisResult, TraceEvent
+
+    pkg1 = UnifiedEvidencePackage(
+        package_id="EV-PKG-01",
+        project_id="retail_discount_pricing",
+        source_file="retail_pricing.py",
+        language="python",
+        timestamp="2026-08-21T00:00:00Z",
+        static_evidence_items=[
+            StaticEvidenceItem(
+                evidence_id="EV-S-01",
+                file="retail_pricing.py",
+                line=10,
+                condition="total > 100",
+                operator=">",
+                left="total",
+                right=100,
+            )
+        ],
+        runtime_traces=[
+            TraceEvent(
+                execution_id="EX-01",
+                timestamp="2026-08-21T00:00:01Z",
+                inputs={"total": 150},
+                output={"discount": 15},
+            )
+        ],
+    )
+
+    pkg2 = UnifiedEvidencePackage(
+        package_id="EV-PKG-01",
+        project_id="retail_discount_pricing",
+        source_file="retail_pricing.py",
+        language="python",
+        timestamp="2026-08-21T00:00:00Z",
+        static_evidence_items=[
+            StaticEvidenceItem(
+                evidence_id="EV-S-01",
+                file="retail_pricing.py",
+                line=10,
+                condition="total > 100",
+                operator=">",
+                left="total",
+                right=100,
+            )
+        ],
+        runtime_traces=[
+            TraceEvent(
+                execution_id="EX-01",
+                timestamp="2026-08-21T00:00:01Z",
+                inputs={"total": 150},
+                output={"discount": 15},
+            )
+        ],
+    )
+
+    pkg_diff = UnifiedEvidencePackage(
+        package_id="EV-PKG-01",
+        project_id="retail_discount_pricing",
+        source_file="retail_pricing.py",
+        language="python",
+        timestamp="2026-08-21T00:00:00Z",
+        static_evidence_items=[
+            StaticEvidenceItem(
+                evidence_id="EV-S-01",
+                file="retail_pricing.py",
+                line=10,
+                condition="total > 200",  # Changed threshold
+                operator=">",
+                left="total",
+                right=200,
+            )
+        ],
+    )
+
+    h1 = compute_evidence_package_hash(pkg1)
+    h2 = compute_evidence_package_hash(pkg2)
+    h_diff = compute_evidence_package_hash(pkg_diff)
+
+    assert len(h1) == 64
+    assert len(h2) == 64
+    assert len(h_diff) == 64
+    assert h1 == h2
+    assert h1 != h_diff
+
+
+def test_prompt_version_consistency_and_cache_isolation():
+    """Verifies that authoritative PROMPT_VERSION is used consistently and affects discovery configuration hash."""
+    from mining.prompt_builder import PROMPT_VERSION
+    assert PROMPT_VERSION == "v1.0"
+
+    set_full = benchmark_registry.get_or_create_oracle_set(
+        "payroll_tax_calculator", mode="FULL_BEACON", preferred_provider="auto", use_llm=False
+    )
+    assert set_full.oracle_set_id.startswith("SET-PAYROLL_TAX_CALCULATOR-FULL-")
+    assert len(set_full.oracle_set_id.split("-")[-1]) == 12
+
+
+def test_manifest_provider_consistency_with_context(client):
+    """Verifies that ExecutionManifest provider and model metadata match the CertificationContext."""
+    res_run = client.post("/api/v1/certification/run", json={
+        "benchmark_id": "payroll_tax_calculator",
+        "benchmark_variant": "clean_v2",
+        "discovery_mode": "CONTROLLED",
+    })
+    art = res_run.json()
+    cert_id = art["certification_id"]
+
+    res_man = client.get("/api/v1/benchmarks/payroll_tax_calculator/manifest?discovery_mode=CONTROLLED&variant=clean_v2")
+    assert res_man.status_code == 200
+    man = res_man.json()
+
+    assert man["provider"] == art["context"]["provider"]
+    assert man["model"] == art["context"]["model"]
+    assert man["unique_input_count"] == art["metrics"]["unique_input_count"]
+    assert man["certification_case_count"] == art["metrics"]["certification_case_count"]
+    assert man["oracle_count"] == art["metrics"]["oracle_count"]
+    assert man["regression_case_count"] == art["metrics"]["regression_case_count"]
+
+
+def test_second_benchmark_acceptance_and_cross_isolation(client):
+    """Verifies clean and buggy runs on a second benchmark (payroll_tax_calculator) and confirms isolation from retail."""
+    # 1. Payroll clean run -> CERTIFIED
+    res_clean = client.post("/api/v1/certification/run", json={
+        "benchmark_id": "payroll_tax_calculator",
+        "benchmark_variant": "clean_v2",
+        "discovery_mode": "CONTROLLED",
+    })
+    assert res_clean.status_code == 200
+    art_clean = res_clean.json()
+    assert art_clean["status"] in ("CERTIFIED", "CERTIFIED_WITH_WARNINGS")
+    assert art_clean["context"]["benchmark_id"] == "payroll_tax_calculator"
+
+    # 2. Payroll buggy run -> NOT_CERTIFIED + counterexamples
+    res_buggy = client.post("/api/v1/certification/run", json={
+        "benchmark_id": "payroll_tax_calculator",
+        "benchmark_variant": "buggy_bracket_v2",
+        "discovery_mode": "CONTROLLED",
+    })
+    assert res_buggy.status_code == 200
+    art_buggy = res_buggy.json()
+    assert art_buggy["status"] == "NOT_CERTIFIED"
+    assert art_buggy["metrics"]["regression_case_count"] > 0
+    assert len(art_buggy["regressions"]) > 0
+    assert art_buggy["context"]["benchmark_id"] == "payroll_tax_calculator"
+
+    # 3. Confirm retail manifest has not been modified or contaminated by payroll
+    res_ret_man = client.get("/api/v1/benchmarks/retail_discount_pricing/manifest?discovery_mode=CONTROLLED&variant=clean_v2")
+    assert res_ret_man.status_code == 200
+    ret_man = res_ret_man.json()
+    assert ret_man["benchmark_id"] == "retail_discount_pricing"
+

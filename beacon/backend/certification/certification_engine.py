@@ -237,7 +237,7 @@ class CertificationEngine:
             if mod_obs:
                 exec_time += mod_obs.execution_time_ms
 
-            inp_hash = getattr(inp, "input_hash", "") or hashlib.sha256(json.dumps(inp.values, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:16]
+            inp_hash = getattr(inp, "input_hash", "") or compute_canonical_input_hash(inp.values)
 
             case = CertificationCase(
                 case_id=f"CASE-{cert_id}-{idx}",

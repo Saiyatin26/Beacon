@@ -411,6 +411,9 @@ def run_certification_v1(request: CertificationRunRequest):
         else:
             oracle_src = "FULL_BEACON_DISCOVERED"
 
+        ev_pkg_h = repro.get("evidence_package_hash", "")
+        prompt_ver = repro.get("prompt_version", "v1.0")
+
         context = CertificationContext(
             benchmark_id=request.benchmark_id,
             benchmark_version=bench_spec.legacy_version,
@@ -430,6 +433,8 @@ def run_certification_v1(request: CertificationRunRequest):
             oracle_set_id=oracle_set.oracle_set_id,
             oracle_set_hash=oracle_set.oracle_set_hash,
             oracle_source_type=oracle_src,
+            evidence_package_hash=ev_pkg_h,
+            prompt_version=prompt_ver,
             provider=act_prov,
             model=act_mod,
             generation_method=gen_method,
@@ -442,6 +447,8 @@ def run_certification_v1(request: CertificationRunRequest):
                 "fallback_occurred": fb_occ,
                 "fallback_chain": fb_chain,
                 "fallback_reason": fb_reason,
+                "evidence_package_hash": ev_pkg_h,
+                "prompt_version": prompt_ver,
                 "generation_method": gen_method,
                 "mining_method": mining_method,
                 "oracle_source_type": oracle_src,

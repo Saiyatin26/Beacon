@@ -695,42 +695,6 @@ class BenchmarkRegistry:
         if not source_path or not source_path.exists():
             raise FileNotFoundError(f"Legacy source file not found for benchmark '{benchmark_id}'")
 
-        legacy_source_code = source_path.read_text(encoding="utf-8")
-        dataset_chk = getattr(spec, "dataset_checksum", "")
-        ev_hash = hashlib.sha256(legacy_source_code.encode("utf-8") + dataset_chk.encode("utf-8")).hexdigest()
-
-        # Build comprehensive canonical discovery configuration object
-        discovery_config = {
-            "benchmark_id": benchmark_id,
-            "benchmark_version": spec.legacy_version,
-            "dataset_id": getattr(spec, "dataset_id", f"DATASET-{benchmark_id}"),
-            "dataset_version": spec.dataset_version,
-            "dataset_checksum": dataset_chk,
-            "legacy_implementation_hash": legacy_impl_hash,
-            "evidence_package_hash": ev_hash,
-            "use_llm": use_llm,
-            "requested_provider": pref_prov,
-            "model_configuration": getattr(settings, "openrouter_model", "") if pref_prov == "openrouter" else (getattr(settings, "anthropic_model", "") if pref_prov == "anthropic" else (getattr(settings, "ollama_model", "") if pref_prov == "ollama" else "deterministic")),
-            "prompt_version": "1.0.0",
-            "candidate_generator_version": "2.0.0",
-            "discovery_pipeline_version": "2.0.0",
-            "validator_version": "2.0.0",
-            "confidence_threshold": settings.confidence_threshold,
-            "field_bounds": {k: list(v) for k, v in sorted(spec.field_bounds.items())} if spec.field_bounds else {},
-            "adversarial_validation_config": {
-                "max_probes_per_candidate": 100,
-                "boundary_pass_rate_min": 0.8,
-            },
-            "oracle_compiler_version": "2.0.0",
-        }
-        config_canonical_json = json.dumps(discovery_config, sort_keys=True, separators=(",", ":"))
-        config_hash = hashlib.sha256(config_canonical_json.encode("utf-8")).hexdigest()
-        set_id = f"SET-{benchmark_id.upper()}-FULL-{config_hash[:12]}"
-
-        existing = oracle_registry.get_oracle_set(set_id)
-        if existing:
-            return existing
-
         # 2. Static AST Parsing
         from ingestion.legacy_parser import extract_ast_structure
         static_result = extract_ast_structure(source_path)
@@ -750,9 +714,61 @@ class BenchmarkRegistry:
             tracer = PythonRuntimeTracer()
             traces = tracer.trace_batch(legacy_fn, sample_dicts) if sample_dicts else []
 
-        # 4. Build Unified Evidence Package
+        # 4. Build Unified Evidence Package and Compute Canonical Evidence Hash
         from evidence.builder import build_evidence_package
+        from evidence.models import compute_evidence_package_hash
         evidence_pkg = build_evidence_package(static_result, traces)
+        ev_hash = compute_evidence_package_hash(evidence_pkg)
+        evidence_pkg.evidence_package_hash = ev_hash
+
+        # Authoritative prompt version from mining.prompt_builder
+        from mining.prompt_builder import PROMPT_VERSION
+
+        dataset_chk = getattr(spec, "dataset_checksum", "")
+
+        # Build sanitized model configuration mapping
+        model_config = {
+            "requested_provider": pref_prov,
+            "provider_order": ["openrouter", "anthropic", "ollama", "offline"],
+            "openrouter_model": getattr(settings, "openrouter_model", ""),
+            "anthropic_model": getattr(settings, "anthropic_model", ""),
+            "ollama_model": getattr(settings, "ollama_model", ""),
+        } if pref_prov == "auto" else {
+            "requested_provider": pref_prov,
+            "model": getattr(settings, "openrouter_model", "") if pref_prov == "openrouter" else (getattr(settings, "anthropic_model", "") if pref_prov == "anthropic" else (getattr(settings, "ollama_model", "") if pref_prov == "ollama" else "deterministic")),
+        }
+
+        # Build comprehensive canonical discovery configuration object
+        discovery_config = {
+            "benchmark_id": benchmark_id,
+            "benchmark_version": spec.legacy_version,
+            "dataset_id": getattr(spec, "dataset_id", f"DATASET-{benchmark_id}"),
+            "dataset_version": spec.dataset_version,
+            "dataset_checksum": dataset_chk,
+            "legacy_implementation_hash": legacy_impl_hash,
+            "evidence_package_hash": ev_hash,
+            "use_llm": use_llm,
+            "requested_provider": pref_prov,
+            "model_configuration": model_config,
+            "prompt_version": PROMPT_VERSION,
+            "candidate_generator_version": "2.0.0",
+            "discovery_pipeline_version": "2.0.0",
+            "validator_version": "2.0.0",
+            "confidence_threshold": settings.confidence_threshold,
+            "field_bounds": {k: list(v) for k, v in sorted(spec.field_bounds.items())} if spec.field_bounds else {},
+            "adversarial_validation_config": {
+                "max_probes_per_candidate": 100,
+                "boundary_pass_rate_min": 0.8,
+            },
+            "oracle_compiler_version": "2.0.0",
+        }
+        config_canonical_json = json.dumps(discovery_config, sort_keys=True, separators=(",", ":"))
+        config_hash = hashlib.sha256(config_canonical_json.encode("utf-8")).hexdigest()
+        set_id = f"SET-{benchmark_id.upper()}-FULL-{config_hash[:12]}"
+
+        existing = oracle_registry.get_oracle_set(set_id)
+        if existing:
+            return existing
 
         # 5. Run Mining Pipeline (Grounding + Adversarial Validation + Confidence Scoring)
         from mining.pipeline import run_mining_pipeline
@@ -790,6 +806,9 @@ class BenchmarkRegistry:
                             "fallback_occurred": True,
                             "fallback_chain": ["openrouter", "anthropic", "ollama", "offline"],
                             "fallback_reason": "Model path did not produce validated invariants; offline fallback engaged",
+                            "evidence_package_hash": ev_hash,
+                            "prompt_version": PROMPT_VERSION,
+                            "config_hash": config_hash,
                         }
                     })
                     graduated_invariants.append(cand_grad)
@@ -832,6 +851,8 @@ class BenchmarkRegistry:
                     "fallback_occurred": fb_occurred,
                     "fallback_chain": fb_chain,
                     "fallback_reason": fb_reason,
+                    "evidence_package_hash": ev_hash,
+                    "prompt_version": PROMPT_VERSION,
                     "config_hash": config_hash,
                     "validator_version": "2.0.0",
                 }
@@ -995,6 +1016,8 @@ class BenchmarkRegistry:
             oracle_set_hash=getattr(artifact, "oracle_set_hash", "") if artifact and not isinstance(artifact, dict) else (artifact.get("oracle_set_hash", "") if isinstance(artifact, dict) else ""),
             oracle_set_provenance=prov_src,
             oracle_source_type=prov_src,
+            evidence_package_hash=getattr(ctx, "evidence_package_hash", "") if ctx else "",
+            prompt_version=getattr(ctx, "prompt_version", "v1.0") if ctx else "v1.0",
             policy_id=getattr(artifact, "certification_policy_id", "POL-DEFAULT") if artifact and not isinstance(artifact, dict) else "POL-DEFAULT",
             policy_hash=getattr(artifact, "certification_policy_hash", "") if artifact and not isinstance(artifact, dict) else "",
             beacon_version="1.0.0",

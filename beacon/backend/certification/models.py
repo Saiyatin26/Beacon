@@ -38,6 +38,12 @@ class Observation(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
+def compute_canonical_input_hash(values: dict[str, Any]) -> str:
+    """Computes a full 64-character SHA-256 digest of canonical input values with stable key ordering."""
+    canonical = json.dumps(values, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 class CertificationTestInput(BaseModel):
     """Shared test input with provenance and origin metadata."""
     input_id: str
@@ -56,8 +62,7 @@ class CertificationTestInput(BaseModel):
 
     def model_post_init(self, __context: Any) -> None:
         if not self.input_hash and self.values:
-            canonical = json.dumps(self.values, sort_keys=True, separators=(",", ":"))
-            object.__setattr__(self, "input_hash", hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16])
+            object.__setattr__(self, "input_hash", compute_canonical_input_hash(self.values))
 
 
 class BehavioralRegression(BaseModel):
@@ -84,8 +89,7 @@ class BehavioralRegression(BaseModel):
 
     def model_post_init(self, __context: Any) -> None:
         if not self.input_hash and self.input_values:
-            canonical = json.dumps(self.input_values, sort_keys=True, separators=(",", ":"))
-            object.__setattr__(self, "input_hash", hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16])
+            object.__setattr__(self, "input_hash", compute_canonical_input_hash(self.input_values))
 
 
 class ComparisonRecord(BaseModel):
@@ -178,6 +182,8 @@ class CertificationContext(BaseModel):
     oracle_set_id: str = ""
     oracle_set_hash: str = ""
     oracle_source_type: str = "CONTROLLED_ORACLE_SET"  # "CONTROLLED_ORACLE_SET", "FULL_BEACON_DISCOVERED", "FULL_BEACON_OFFLINE_FALLBACK"
+    evidence_package_hash: str = ""
+    prompt_version: str = "v1.0"
     provider: str = "offline"
     model: str = "deterministic"
     generation_method: str = "offline"

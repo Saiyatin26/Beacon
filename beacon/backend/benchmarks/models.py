@@ -136,6 +136,8 @@ class BenchmarkExecutionManifest(BaseModel):
     oracle_set_hash: str
     oracle_set_provenance: str = "CONTROLLED_ORACLE_SET"
     oracle_source_type: str = "CONTROLLED_ORACLE_SET"
+    evidence_package_hash: str = ""
+    prompt_version: str = "v1.0"
     policy_id: str
     policy_hash: str
     beacon_version: str = "1.0.0"
