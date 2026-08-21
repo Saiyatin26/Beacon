@@ -47,12 +47,16 @@ class ProviderManager:
                     raw_text="",
                     provider_name=provider.name,
                     model_name=provider.model,
+                    requested_provider=mode,
                     success=False,
                     error=f"Explicitly requested provider '{mode}' is not configured or available.",
                 )
             
             resp = provider.generate(prompt, system=system, json_mode=json_mode)
+            resp.requested_provider = mode
             if resp.success or not settings.allow_auto_fallback:
+                resp.fallback_chain = [mode]
+                resp.metadata["provider_config"] = f"{resp.provider_name}:{resp.model_name}"
                 return resp
             
             logger.warning(
@@ -73,13 +77,13 @@ class ProviderManager:
 
             try:
                 resp = provider.generate(prompt, system=system, json_mode=json_mode)
-                if resp.success and resp.parsed_json is not None:
+                resp.requested_provider = mode
+                if resp.success and (resp.parsed_json is not None or not json_mode):
                     resp.fallback_occurred = len(fallback_chain) > 1
-                    resp.fallback_chain = fallback_chain
-                    return resp
-                elif resp.success and not json_mode:
-                    resp.fallback_occurred = len(fallback_chain) > 1
-                    resp.fallback_chain = fallback_chain
+                    resp.fallback_chain = list(fallback_chain)
+                    if resp.fallback_occurred and last_error:
+                        resp.fallback_reason = last_error
+                    resp.metadata["provider_config"] = f"{resp.provider_name}:{resp.model_name}"
                     return resp
                 else:
                     last_error = resp.error or "Invalid response / failed JSON parsing"
@@ -91,10 +95,12 @@ class ProviderManager:
         # Guaranteed fallback to Offline provider
         offline_provider = self.providers["offline"]
         offline_resp = offline_provider.generate(prompt, system=system, json_mode=json_mode)
+        offline_resp.requested_provider = mode
         offline_resp.fallback_occurred = True
-        offline_resp.fallback_chain = fallback_chain
-        if last_error:
-            offline_resp.metadata["prior_error"] = last_error
+        offline_resp.fallback_chain = list(fallback_chain) if "offline" in fallback_chain else list(fallback_chain) + ["offline"]
+        offline_resp.fallback_reason = last_error or "Configured model path unavailable"
+        offline_resp.metadata["prior_error"] = last_error or "Configured model path unavailable"
+        offline_resp.metadata["provider_config"] = f"{offline_resp.provider_name}:{offline_resp.model_name}"
         return offline_resp
 
     def get_status(self) -> dict[str, Any]:

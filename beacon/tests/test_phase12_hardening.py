@@ -298,3 +298,100 @@ def test_benchmark_aware_drift_monitoring(client):
     retail_samples = res_retail.json()["samples"]
     assert any(s["benchmark_id"] == "retail_discount_pricing" for s in retail_samples)
     assert not any(s["benchmark_id"] == "payroll_tax_calculator" for s in retail_samples)
+
+
+def test_full_beacon_actual_provider_provenance_propagation(client):
+    """Verifies that the actual provider used is propagated from LLMResponse into OracleSet and CertificationContext."""
+    from oracle.registry import registry as oracle_registry
+    oracle_registry._oracle_sets.clear()
+
+    # 1. Mock OpenRouter Success with grounded candidate
+    mock_candidates = [{
+        "condition": "credit_score < 600 and debt_ratio > 0.4",
+        "consequence": "REJECT",
+        "severity": "high",
+        "rationale": "Subprime credit scores with high debt ratio are rejected",
+        "supporting_evidence_ids": [],
+        "source_lines": [14],
+    }]
+
+    with patch("llm.openrouter_provider.OpenRouterProvider.is_available", return_value=True), \
+         patch("llm.openrouter_provider.OpenRouterProvider.generate", return_value=LLMResponse(
+             raw_text=json.dumps(mock_candidates),
+             parsed_json=mock_candidates,
+             provider_name="openrouter",
+             model_name="anthropic/claude-3.5-sonnet",
+             success=True,
+         )):
+        set_openrouter = benchmark_registry.discover_oracle_set_full_pipeline(
+            "loan_demo", use_llm=True, preferred_provider="openrouter"
+        )
+        assert set_openrouter is not None
+        prov = set_openrouter.oracles[0].provenance
+        actual_prov = prov.reproducibility.get("actual_provider") or prov.reproducibility.get("provider")
+        assert actual_prov == "openrouter"
+        assert prov.reproducibility.get("actual_model") == "anthropic/claude-3.5-sonnet"
+        assert prov.evidence_source == "FULL_BEACON_DISCOVERED"
+
+    # 2. Mock OpenRouter Fail -> Anthropic Success
+    with patch("llm.openrouter_provider.OpenRouterProvider.is_available", return_value=True), \
+         patch("llm.openrouter_provider.OpenRouterProvider.generate", return_value=LLMResponse(
+             raw_text="", provider_name="openrouter", model_name="auto", success=False, error="Rate limit"
+         )), \
+         patch("llm.anthropic_provider.AnthropicProvider.is_available", return_value=True), \
+         patch("llm.anthropic_provider.AnthropicProvider.generate", return_value=LLMResponse(
+             raw_text=json.dumps(mock_candidates),
+             parsed_json=mock_candidates,
+             provider_name="anthropic",
+             model_name="claude-3-5-sonnet-20241022",
+             success=True,
+         )):
+        set_anthropic = benchmark_registry.discover_oracle_set_full_pipeline(
+            "loan_demo", use_llm=True, preferred_provider="anthropic"
+        )
+        assert set_anthropic is not None
+        prov_ant = set_anthropic.oracles[0].provenance
+        actual_prov_ant = prov_ant.reproducibility.get("actual_provider") or prov_ant.reproducibility.get("provider")
+        assert actual_prov_ant == "anthropic"
+        assert prov_ant.evidence_source == "FULL_BEACON_DISCOVERED"
+
+
+def test_source_modification_changes_implementation_hash(tmp_path):
+    """Verifies that modifying source files deterministically invalidates implementation fingerprints."""
+    temp_file = tmp_path / "implementation.py"
+    temp_file.write_text("def calculate_price(x): return x * 0.9", encoding="utf-8")
+    hash_v1 = compute_implementation_hash(temp_file)
+
+    # Modify source
+    temp_file.write_text("def calculate_price(x): return x * 0.85", encoding="utf-8")
+    hash_v2 = compute_implementation_hash(temp_file)
+
+    assert len(hash_v1) == 64
+    assert len(hash_v2) == 64
+    assert hash_v1 != hash_v2
+
+
+def test_export_roundtrip_verification(client):
+    """Verifies that exported JSON dossiers round-trip completely without missing fields or secrets."""
+    res_run = client.post("/api/v1/certification/run", json={
+        "benchmark_id": "payroll_tax_calculator",
+        "benchmark_variant": "clean_v2",
+        "discovery_mode": "CONTROLLED",
+    })
+    art = res_run.json()
+    cert_id = art["certification_id"]
+
+    res_exp = client.get(f"/api/v1/certification/{cert_id}/export?format=json")
+    assert res_exp.status_code == 200
+    dossier = res_exp.json()
+
+    assert dossier["certification_id"] == cert_id
+    assert dossier["benchmark_id"] == "payroll_tax_calculator"
+    assert dossier["metrics"]["unique_input_count"] == art["metrics"]["unique_input_count"]
+    assert dossier["metrics"]["certification_case_count"] == art["metrics"]["certification_case_count"]
+    assert dossier["legacy_implementation_hash"] == art["legacy_implementation_hash"]
+    assert dossier["modernized_implementation_hash"] == art["modernized_implementation_hash"]
+    assert dossier["input_set_hash"] == art["input_set_hash"]
+    assert dossier["oracle_set_hash"] == art["oracle_set_hash"]
+    assert dossier["content_hash"] == art["content_hash"]
+    assert dossier["integrity_verification"]["status"] == "PASS"

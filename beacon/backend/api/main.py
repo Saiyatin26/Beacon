@@ -395,9 +395,21 @@ def run_certification_v1(request: CertificationRunRequest):
 
         first_prov = getattr(oracle_set.oracles[0], "provenance", None) if oracle_set.oracles else None
         ev_src = getattr(first_prov, "evidence_source", "") if first_prov else ""
+        repro = getattr(first_prov, "reproducibility", {}) if first_prov else {}
+        act_prov = repro.get("actual_provider") or repro.get("provider") or ("offline" if mode == "CONTROLLED" else pref_prov)
+        act_mod = repro.get("actual_model") or repro.get("model") or ("deterministic" if mode == "CONTROLLED" else "default")
+        fb_occ = repro.get("fallback_occurred", False)
+        fb_chain = repro.get("fallback_chain", [])
+        fb_reason = repro.get("fallback_reason") or repro.get("prior_error")
         gen_method = getattr(first_prov, "generation_method", "offline") if first_prov else "offline"
         mining_method = getattr(first_prov, "mining_method", "manual_baseline_specification") if first_prov else "manual"
-        oracle_src = "CONTROLLED_ORACLE_SET" if mode == "CONTROLLED" else ("FULL_BEACON_DISCOVERED" if ev_src == "FULL_BEACON_DISCOVERED" else "FULL_BEACON_OFFLINE_FALLBACK")
+
+        if mode == "CONTROLLED":
+            oracle_src = "CONTROLLED_ORACLE_SET"
+        elif act_prov == "offline" or ev_src == "FULL_BEACON_OFFLINE_FALLBACK":
+            oracle_src = "FULL_BEACON_OFFLINE_FALLBACK"
+        else:
+            oracle_src = "FULL_BEACON_DISCOVERED"
 
         context = CertificationContext(
             benchmark_id=request.benchmark_id,
@@ -418,13 +430,18 @@ def run_certification_v1(request: CertificationRunRequest):
             oracle_set_id=oracle_set.oracle_set_id,
             oracle_set_hash=oracle_set.oracle_set_hash,
             oracle_source_type=oracle_src,
-            provider=pref_prov if mode == "FULL_BEACON" else "offline",
-            model="deterministic" if mode == "CONTROLLED" else ("openrouter/auto" if pref_prov == "auto" else pref_prov),
+            provider=act_prov,
+            model=act_mod,
             generation_method=gen_method,
             policy_id=request.policy.policy_id if request.policy else "POL-DEFAULT",
             policy_hash="",
             provider_metadata={
                 "preferred_provider": pref_prov,
+                "actual_provider": act_prov,
+                "actual_model": act_mod,
+                "fallback_occurred": fb_occ,
+                "fallback_chain": fb_chain,
+                "fallback_reason": fb_reason,
                 "generation_method": gen_method,
                 "mining_method": mining_method,
                 "oracle_source_type": oracle_src,
@@ -610,9 +627,17 @@ def export_certification_dossier(
     integrity_report = certification_repository.verify_certification_run_integrity(certification_id)
 
     if format == "json":
+        ctx = artifact.context
+        b_id = ctx.benchmark_id if ctx else (artifact.benchmark_id or artifact.project_id)
         export_payload = {
             "certification_id": artifact.certification_id,
+            "benchmark_id": b_id,
             "artifact_hash": artifact.content_hash,
+            "content_hash": artifact.content_hash,
+            "legacy_implementation_hash": getattr(artifact, "legacy_implementation_hash", "") or (ctx.legacy_implementation_hash if ctx else ""),
+            "modernized_implementation_hash": getattr(artifact, "modernized_implementation_hash", "") or (ctx.modernized_implementation_hash if ctx else ""),
+            "input_set_hash": artifact.input_set_hash,
+            "oracle_set_hash": artifact.oracle_set_hash,
             "status": artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status),
             "score": artifact.score,
             "context": artifact.context.model_dump(mode="json") if artifact.context else {},

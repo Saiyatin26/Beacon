@@ -15,9 +15,11 @@ class LLMResponse(BaseModel):
     parsed_json: Optional[Any] = None
     provider_name: str
     model_name: str
+    requested_provider: str = "auto"
     latency_ms: Optional[float] = None
     fallback_occurred: bool = False
     fallback_chain: list[str] = Field(default_factory=list)
+    fallback_reason: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     success: bool = True

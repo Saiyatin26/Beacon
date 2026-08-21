@@ -90,22 +90,55 @@ BEACON preserves a strict separation of concerns:
 
 > **Methodological Limitation Notice**: BEACON does not mathematically prove universal program equivalence; it certifies oracle-relative behavioral equivalence over the validated oracle set and tested input domain under a versioned certification policy.
 
-## Phase 12 — Real-World / Public Benchmark Integration
+## Phase 12 — Scientific Reproducibility & Benchmark Hardening
 
-BEACON includes a generic benchmark integration layer supporting multi-domain evaluation without application-specific logic in the certification engine.
+BEACON provides a cryptographically auditable, configuration-sensitive certification framework across multi-domain benchmarks.
 
-### Benchmark Provenance Categories
-- **`PUBLIC`**: Publicly sourced statutory/regulatory logic (e.g. `payroll_tax_calculator` progressive tax brackets).
-- **`REALISTIC`**: Realistic enterprise business engines (e.g. `retail_discount_pricing` loyalty, volume pricing, and shipping tariffs).
-- **`REAL_EXTERNAL`**: Authentic external open-source legacy systems.
-- **`CONTROLLED`**: Synthetic controlled experiment benchmarks (e.g. `loan_demo`, `medical_triage`).
+### 1. The Scientific Reproducibility Contract
+Every certification execution generates an immutable, content-addressed `CertificationArtifact` tied to an authoritative `CertificationContext` containing:
+- **`benchmark_id`**, **`benchmark_version`**, **`benchmark_name`**, **`benchmark_provenance`** (e.g. `REALISTIC_SYNTHETIC`, `PUBLIC`, `CONTROLLED`).
+- **`dataset_id`**, **`dataset_version`**, **`dataset_checksum`** (SHA-256 over raw dataset content).
+- **`evaluation_mode`** (`CONTROLLED` vs `FULL_BEACON`).
+- **`modernization_variant_id`**, **`modernization_variant_name`**, **`modernization_provenance`** (`INDEPENDENT_REIMPLEMENTATION`, `CONTROLLED_MUTATION`).
+- **`legacy_implementation_id`**, **`legacy_implementation_hash`** (deterministic SHA-256 AST/directory digest).
+- **`modernized_implementation_id`**, **`modernized_implementation_hash`**.
+- **`oracle_set_id`**, **`oracle_set_hash`**, **`oracle_source_type`** (`CONTROLLED_ORACLE_SET`, `FULL_BEACON_DISCOVERED`, `FULL_BEACON_OFFLINE_FALLBACK`).
+- **`provider`** (actual model provider used, e.g. `openrouter`, `anthropic`, `ollama`, `offline`), **`model`**, **`generation_method`**, **`provider_metadata`** (containing `requested_provider`, `actual_provider`, `actual_model`, `fallback_occurred`, `fallback_chain`, `fallback_reason`).
+- **`policy_id`**, **`policy_hash`**.
 
-### Adding a New External Benchmark
-1. **Create Benchmark Directory**: Create `benchmarks/<benchmark_id>/` with `metadata.json`, `legacy/`, `modernized/`, `dataset/`, and `adapters/`.
-2. **Implement Adapters**: Subclass `LegacyAdapter` and `ModernizedAdapter` in `adapters/adapter.py`.
-3. **Define Datasets**: Provide `dataset/validation.json` (small pre-flight dataset) and evaluation datasets (`.json` or `.csv`).
-4. **Register Specifications**: The `BenchmarkRegistry` (`backend/benchmarks/registry.py`) automatically discovers the benchmark, validates its schemas, resolves its adapters into the global `AdapterRegistry`, and loads its datasets into Phase-11 `CertificationInputSet` instances.
-5. **Run Certification**: Use the dashboard UI or call `POST /api/v1/certification/run` with `benchmark_id`.
+### 2. Disambiguated Evaluation Metrics
+To eliminate all ambiguity, metrics are exposed and asserted independently:
+- **`unique_input_count`**: Number of distinct test inputs in the active dataset.
+- **`certification_case_count`**: Total execution cases evaluated ($N_{inputs} \times N_{oracles}$).
+- **`oracle_count`**: Number of active oracles in the certified `OracleSet`.
+- **`oracle_evaluation_count`**: Number of times oracles were triggered and evaluated.
+- **`matching_case_count`**: Number of cases where both implementations agreed.
+- **`regression_case_count`**: Number of cases where modernized code violated a validated invariant.
+- **`execution_error_count`**: Unhandled runtime exceptions in adapters during evaluation.
+- **`counterexample_count`**: Concrete minimal inputs disproving invariants or modernized equivalence.
+
+### 3. Provider Hierarchy & Truthful Provenance
+The discovery pipeline supports a 4-tier provider hierarchy:
+1. **OpenRouter** (Primary Cloud LLM via configurable models).
+2. **Anthropic** (Secondary Direct Cloud Fallback).
+3. **Ollama** (Local Model Fallback, e.g. Mistral / Qwen).
+4. **Deterministic Offline Fallback** (Static AST + Dynamic Trace candidate generator when models are unavailable).
+
+The actual provider that produced the accepted response is truthfully preserved in `OracleProvenance.reproducibility["actual_provider"]` and `CertificationContext.provider`. Zero secrets, authorization headers, or private keys are ever stored or exposed.
+
+### 4. Canonical Discovery Configuration Hashing
+In `FULL_BEACON` mode, OracleSets are cached and content-addressed by a 18-parameter canonical JSON SHA-256 digest: `SET-{BENCHMARK}-FULL-{config_hash[:12]}`. Mutating any element (model, provider, prompt version, candidate generator version, evidence hash, validator version, or dataset checksum) invalidates the cache and forces fresh execution.
+
+### 5. 8-Point Cryptographic Integrity Verification
+Certificates can be verified via `POST /api/v1/certification/{id}/verify` checking:
+1. `artifact_integrity_valid`: Matches SHA-256 over canonical serialized artifact JSON.
+2. `case_count_valid`: Case count matches recorded dataset inputs $\times$ oracle count.
+3. `input_set_integrity_valid`: Input set hash matches persisted database record.
+4. `oracle_set_integrity_valid`: Oracle set hash matches canonical AST compilation.
+5. `policy_integrity_valid`: Policy rules match configured threshold parameters.
+6. `implementation_hashes_valid`: Legacy and modernized SHA-256 hashes are present and valid.
+7. `dataset_checksum_valid`: Dataset checksum matches benchmark registry specification.
+8. `secret_freedom_valid`: Zero API keys (`sk-ant-`, `sk-or-`, Mongo credentials) in artifact or cases.
 
 ---
 
@@ -114,10 +147,10 @@ BEACON includes a generic benchmark integration layer supporting multi-domain ev
 ```
 beacon/
 ├── benchmarks/            Phase 12 — External & Public Benchmark Suites
-│   ├── loan_demo/                 Core Loan Underwriting Benchmark
-│   ├── medical_triage/            Clinical Triage Decision Benchmark
-│   ├── retail_discount_pricing/   Realistic Multi-Tier Retail & Wholesale Pricing Engine
-│   └── payroll_tax_calculator/    Public Progressive Tax & Social Insurance Calculation Engine
+│   ├── loan_demo/                 Core Loan Underwriting Benchmark (CONTROLLED)
+│   ├── medical_triage/            Clinical Triage Decision Benchmark (CONTROLLED)
+│   ├── retail_discount_pricing/   Multi-Tier Pricing Engine (REALISTIC_SYNTHETIC)
+│   └── payroll_tax_calculator/    Progressive Tax Engine (REALISTIC_SYNTHETIC)
 ├── legacy_sample/         Sample legacy app + synthetic trace generator
 ├── backend/
 │   ├── common/            Shared config, SQLite/Atlas client, Pydantic models
@@ -149,13 +182,13 @@ beacon/
 │   │   ├── evaluator.py           Pure AST evaluator & 5-way status reporter
 │   │   └── registry.py            Versioned immutable oracle & oracle set registry
 │   ├── certification/     Phase 9, 10 & 11 — Equivalence, Certification & Evidence Reproducibility
-│   │   ├── models.py              Observation, Policy, Artifact, CertificationInputSet, CertificationCase, ImmutabilityError
+│   │   ├── models.py              Observation, Policy, Artifact, CertificationInputSet, CertificationCase
 │   │   ├── adapters.py            Generic ImplementationAdapter, LegacyAdapter, ModernizedAdapter
-│   │   ├── adapter_registry.py    Registry resolving application adapters generically without hardcoding
+│   │   ├── adapter_registry.py    Registry resolving application adapters generically
 │   │   ├── input_generator.py     Shared test suite generator & deterministic replay
 │   │   ├── engine.py              Cross-version 4-way comparison engine
 │   │   ├── certification_engine.py Policy-driven certification & atomic evidence synthesis
-│   │   ├── repository.py          Thread-safe immutable certificate, input-set & case storage with integrity verification
+│   │   ├── repository.py          Thread-safe immutable certificate, input-set & case storage with 8-point integrity verification
 │   │   ├── report_generator.py    Human-readable HTML & Markdown audit reports
 │   │   └── runner.py              Backward-compatible certification runner
 │   ├── benchmarks/        Phase 12 — Benchmark Registry, Schema Validator & Dataset Loader
@@ -166,11 +199,11 @@ beacon/
 │   │   ├── models.py              DriftObservation, DriftEvent, DriftPolicy
 │   │   └── evaluator.py           Runtime observation evaluation against frozen OracleSet
 │   ├── cli.py             BEACON Command Line Interface
-│   └── api/               FastAPI REST API wiring all stages together with benchmark & audit endpoints
-├── frontend/              React + Vite + Recharts interactive dashboard with Benchmark Catalog & Audit Trail
+│   └── api/               FastAPI REST API wiring all stages with audit & export endpoints
+├── frontend/              React + Vite + Recharts dashboard with Benchmark Catalog & Audit Trail
 ├── docs/                  Baseline documentation & architectural verification
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (148 passed tests)
+└── tests/                 Comprehensive pytest test suite (171 passed tests)
 ```
 
 ---

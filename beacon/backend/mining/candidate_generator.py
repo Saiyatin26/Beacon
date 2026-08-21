@@ -136,18 +136,25 @@ class LLMCandidateGenerator(CandidateGenerator):
 
             reproducibility = {
                 "provider": llm_resp.provider_name,
+                "actual_provider": llm_resp.provider_name,
                 "model": llm_resp.model_name,
+                "actual_model": llm_resp.model_name,
+                "requested_provider": getattr(llm_resp, "requested_provider", self.provider_name or "auto"),
                 "prompt_version": self.prompt_version,
                 "package_id": evidence_package.package_id,
                 "generator_type": gen_method,
                 "latency_ms": llm_resp.latency_ms,
                 "fallback_occurred": llm_resp.fallback_occurred,
                 "fallback_chain": llm_resp.fallback_chain,
+                "fallback_reason": getattr(llm_resp, "fallback_reason", None),
             }
 
             confidence_components = {
                 "provider": llm_resp.provider_name,
+                "actual_provider": llm_resp.provider_name,
                 "model": llm_resp.model_name,
+                "actual_model": llm_resp.model_name,
+                "requested_provider": getattr(llm_resp, "requested_provider", self.provider_name or "auto"),
                 "prompt_version": self.prompt_version,
             }
 

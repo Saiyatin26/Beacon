@@ -17,6 +17,7 @@ import hashlib
 from certification.adapter_registry import adapter_registry
 from certification.adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter, compute_implementation_hash
 from certification.models import CertificationTestInput
+from common.config import settings
 from oracle.models import (
     OracleDefinition,
     OracleProvenance,
@@ -679,23 +680,6 @@ class BenchmarkRegistry:
         legacy_impl_hash = getattr(legacy_adp, "implementation_hash", "") or compute_implementation_hash(legacy_fn)
         pref_prov = (preferred_provider or model_provider or "auto").lower().strip()
 
-        # Build unique canonical configuration digest for cache keying
-        discovery_config = {
-            "benchmark_id": benchmark_id,
-            "legacy_version": spec.legacy_version,
-            "legacy_implementation_hash": legacy_impl_hash,
-            "use_llm": use_llm,
-            "preferred_provider": pref_prov,
-            "pipeline_version": "1.0.0",
-        }
-        config_canonical_json = json.dumps(discovery_config, sort_keys=True, separators=(",", ":"))
-        config_hash = hashlib.sha256(config_canonical_json.encode("utf-8")).hexdigest()
-        set_id = f"SET-{benchmark_id.upper()}-FULL-{config_hash[:8]}"
-
-        existing = oracle_registry.get_oracle_set(set_id)
-        if existing:
-            return existing
-
         # 1. Locate Legacy Source File
         source_path: Optional[Path] = None
         if benchmark_id == "loan_demo":
@@ -710,6 +694,42 @@ class BenchmarkRegistry:
 
         if not source_path or not source_path.exists():
             raise FileNotFoundError(f"Legacy source file not found for benchmark '{benchmark_id}'")
+
+        legacy_source_code = source_path.read_text(encoding="utf-8")
+        dataset_chk = getattr(spec, "dataset_checksum", "")
+        ev_hash = hashlib.sha256(legacy_source_code.encode("utf-8") + dataset_chk.encode("utf-8")).hexdigest()
+
+        # Build comprehensive canonical discovery configuration object
+        discovery_config = {
+            "benchmark_id": benchmark_id,
+            "benchmark_version": spec.legacy_version,
+            "dataset_id": getattr(spec, "dataset_id", f"DATASET-{benchmark_id}"),
+            "dataset_version": spec.dataset_version,
+            "dataset_checksum": dataset_chk,
+            "legacy_implementation_hash": legacy_impl_hash,
+            "evidence_package_hash": ev_hash,
+            "use_llm": use_llm,
+            "requested_provider": pref_prov,
+            "model_configuration": getattr(settings, "openrouter_model", "") if pref_prov == "openrouter" else (getattr(settings, "anthropic_model", "") if pref_prov == "anthropic" else (getattr(settings, "ollama_model", "") if pref_prov == "ollama" else "deterministic")),
+            "prompt_version": "1.0.0",
+            "candidate_generator_version": "2.0.0",
+            "discovery_pipeline_version": "2.0.0",
+            "validator_version": "2.0.0",
+            "confidence_threshold": settings.confidence_threshold,
+            "field_bounds": {k: list(v) for k, v in sorted(spec.field_bounds.items())} if spec.field_bounds else {},
+            "adversarial_validation_config": {
+                "max_probes_per_candidate": 100,
+                "boundary_pass_rate_min": 0.8,
+            },
+            "oracle_compiler_version": "2.0.0",
+        }
+        config_canonical_json = json.dumps(discovery_config, sort_keys=True, separators=(",", ":"))
+        config_hash = hashlib.sha256(config_canonical_json.encode("utf-8")).hexdigest()
+        set_id = f"SET-{benchmark_id.upper()}-FULL-{config_hash[:12]}"
+
+        existing = oracle_registry.get_oracle_set(set_id)
+        if existing:
+            return existing
 
         # 2. Static AST Parsing
         from ingestion.legacy_parser import extract_ast_structure
@@ -758,27 +778,78 @@ class BenchmarkRegistry:
                 ev = collect_evidence(cand, evidence_pkg)
                 val = validate_candidate(cand, legacy_fn, spec.field_bounds, graduated_invariants)
                 if val.status == "VALIDATED" and val.failed_probes == 0:
-                    cand_grad = cand.model_copy(update={"status": "graduated", "confidence": max(cand.confidence, 0.90)})
+                    cand_grad = cand.model_copy(update={
+                        "status": "graduated",
+                        "confidence": max(cand.confidence, 0.90),
+                        "reproducibility": {
+                            "provider": "offline",
+                            "actual_provider": "offline",
+                            "model": "deterministic-rule-miner",
+                            "actual_model": "deterministic-rule-miner",
+                            "requested_provider": pref_prov,
+                            "fallback_occurred": True,
+                            "fallback_chain": ["openrouter", "anthropic", "ollama", "offline"],
+                            "fallback_reason": "Model path did not produce validated invariants; offline fallback engaged",
+                        }
+                    })
                     graduated_invariants.append(cand_grad)
 
         # 6. Compile Validated Invariants to Language-Independent Oracle DSL
         from oracle.compiler import compile_candidate_to_oracle
         oracles: list[OracleDefinition] = []
+        actual_provider = "offline"
+        actual_model = "deterministic-rule-miner"
+        fb_occurred = False
+        fb_chain: list[str] = []
+        fb_reason: Optional[str] = None
+
         if graduated_invariants:
             for inv in graduated_invariants:
+                repro = getattr(inv, "reproducibility", {})
+                act_prov = repro.get("actual_provider") or repro.get("provider") or ("offline" if not use_llm else "llm")
+                act_mod = repro.get("actual_model") or repro.get("model") or "deterministic"
+                actual_provider = act_prov
+                actual_model = act_mod
+                fb_occurred = repro.get("fallback_occurred", False)
+                fb_chain = repro.get("fallback_chain", [])
+                fb_reason = repro.get("fallback_reason") or repro.get("prior_error")
+
+                if act_prov == "offline" or not use_llm:
+                    ev_src = "FULL_BEACON_OFFLINE_FALLBACK" if use_llm else "FULL_BEACON_DISCOVERED"
+                    min_meth = "deterministic_offline_fallback" if use_llm else "offline_ast_trace_mining"
+                    gen_meth = "offline_fallback" if use_llm else "offline"
+                else:
+                    ev_src = "FULL_BEACON_DISCOVERED"
+                    min_meth = f"llm_evidence_mining_{act_prov}"
+                    gen_meth = f"llm_{act_prov}"
+
+                prov_repro = {
+                    "provider": act_prov,
+                    "actual_provider": act_prov,
+                    "model": act_mod,
+                    "actual_model": act_mod,
+                    "requested_provider": pref_prov,
+                    "fallback_occurred": fb_occurred,
+                    "fallback_chain": fb_chain,
+                    "fallback_reason": fb_reason,
+                    "config_hash": config_hash,
+                    "validator_version": "2.0.0",
+                }
+
                 prov = OracleProvenance(
                     invariant_id=inv.invariant_id,
                     source_file=getattr(inv, "source_file", source_path.name if source_path else "legacy_source.py"),
                     source_lines=getattr(inv, "source_lines", []),
                     evidence_ids=getattr(inv, "evidence_ids", []),
                     execution_ids=getattr(inv, "execution_ids", []),
-                    evidence_source="FULL_BEACON_DISCOVERED",
-                    mining_method="llm_evidence_mining" if use_llm else "offline_ast_trace_mining",
+                    evidence_source=ev_src,
+                    mining_method=min_meth,
                     confidence=inv.confidence,
                     severity=inv.severity,
                     domain=spec.domain,
-                    generation_method="llm" if use_llm else "offline",
+                    generation_method=gen_meth,
                     generation_timestamp=datetime.now(timezone.utc).isoformat(),
+                    reproducibility=prov_repro,
                 )
                 orc = compile_candidate_to_oracle(inv, provenance=prov)
                 registered_orc = oracle_registry.register_oracle(orc)
@@ -786,7 +857,25 @@ class BenchmarkRegistry:
         else:
             # Deterministic offline candidate fallback
             controlled_set = self.get_or_create_oracle_set(benchmark_id, mode="CONTROLLED")
+            actual_provider = "offline"
+            actual_model = "deterministic-rule-miner"
+            fb_occurred = True
+            fb_chain = ["openrouter", "anthropic", "ollama", "offline"]
+            fb_reason = "Model path failed to discover/graduate invariants; deterministic offline fallback engaged"
+
             for c_orc in controlled_set.oracles:
+                prov_repro = {
+                    "provider": "offline",
+                    "actual_provider": "offline",
+                    "model": "deterministic-rule-miner",
+                    "actual_model": "deterministic-rule-miner",
+                    "requested_provider": pref_prov,
+                    "fallback_occurred": True,
+                    "fallback_chain": fb_chain,
+                    "fallback_reason": fb_reason,
+                    "config_hash": config_hash,
+                    "validator_version": "2.0.0",
+                }
                 prov = OracleProvenance(
                     invariant_id=c_orc.oracle_id,
                     source_file=getattr(c_orc.provenance, "source_file", source_path.name if source_path else "legacy_source.py"),
@@ -800,6 +889,7 @@ class BenchmarkRegistry:
                     domain=spec.domain,
                     generation_method="offline_fallback",
                     generation_timestamp=datetime.now(timezone.utc).isoformat(),
+                    reproducibility=prov_repro,
                 )
                 orc = c_orc.model_copy(update={"provenance": prov, "content_hash": c_orc.content_hash})
                 registered_orc = oracle_registry.register_oracle(orc)
@@ -807,6 +897,7 @@ class BenchmarkRegistry:
 
         hashes = [o.content_hash for o in oracles]
         set_hash = compute_oracle_set_hash(hashes)
+        oracle_set_source_type = "FULL_BEACON_DISCOVERED" if actual_provider != "offline" else ("FULL_BEACON_OFFLINE_FALLBACK" if use_llm else "FULL_BEACON_DISCOVERED")
         oracle_set = OracleSet(
             oracle_set_id=set_id,
             name=f"{benchmark_id} Full Pipeline Discovered Oracle Set",
@@ -836,15 +927,26 @@ class BenchmarkRegistry:
         )
 
         metrics = getattr(artifact, "metrics", None)
-        u_inputs = getattr(metrics, "unique_input_count", 0) or getattr(metrics, "total_inputs", 0)
-        c_cases = getattr(metrics, "certification_case_count", 0) or u_inputs
-        o_count = getattr(metrics, "oracle_count", 0) or len(getattr(artifact, "oracle_summaries", []))
-        o_evals = getattr(metrics, "oracle_evaluation_count", 0) or (getattr(metrics, "applicable_inputs", 0) * max(o_count, 1))
-        m_cases = getattr(metrics, "matching_case_count", 0)
-        r_cases = getattr(metrics, "regression_case_count", 0)
-        e_errors = getattr(metrics, "execution_error_count", 0) or getattr(metrics, "execution_errors", 0)
-        c_count = getattr(metrics, "counterexample_count", 0) or len(getattr(artifact, "regressions", []))
-        cov_pct = getattr(metrics, "oracle_coverage_pct", 0.0)
+        if metrics is not None:
+            u_inputs = metrics.unique_input_count
+            c_cases = metrics.certification_case_count
+            o_count = metrics.oracle_count
+            o_evals = metrics.oracle_evaluation_count
+            m_cases = metrics.matching_case_count
+            r_cases = metrics.regression_case_count
+            e_errors = metrics.execution_error_count
+            c_count = metrics.counterexample_count
+            cov_pct = metrics.oracle_coverage_pct
+        else:
+            u_inputs = 0
+            c_cases = 0
+            o_count = 0
+            o_evals = 0
+            m_cases = 0
+            r_cases = 0
+            e_errors = 0
+            c_count = 0
+            cov_pct = 0.0
 
         leg_hash = getattr(artifact, "legacy_implementation_hash", "") or (artifact.context.legacy_implementation_hash if getattr(artifact, "context", None) else "") or spec.legacy_implementation_hash
         mod_hash = getattr(artifact, "modernized_implementation_hash", "") or (artifact.context.modernized_implementation_hash if getattr(artifact, "context", None) else "")

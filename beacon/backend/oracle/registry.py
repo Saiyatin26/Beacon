@@ -36,8 +36,16 @@ class OracleRegistry:
         latest_version_num = max(versions_map.keys())
         latest_oracle = versions_map[latest_version_num]
 
-        # If identical content hash, return existing definition
+        # If identical content hash, preserve updated provenance if provided
         if latest_oracle.content_hash == oracle.content_hash:
+            if oracle.provenance != latest_oracle.provenance:
+                return oracle.model_copy(
+                    update={
+                        "version": latest_oracle.version,
+                        "status": latest_oracle.status,
+                        "created_at": latest_oracle.created_at,
+                    }
+                )
             return latest_oracle
 
         # Different content hash -> Create new immutable version
