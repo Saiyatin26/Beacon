@@ -166,22 +166,25 @@ class CertificationJobTracker:
             return job
 
     def get_job(self, job_id: str, project_id: Optional[str] = None) -> Optional[CertificationJob]:
-        """Retrieves a job by ID, enforcing project isolation."""
+        """Retrieves a job by ID, enforcing strict project isolation.
+        Raises PermissionError if project_id is supplied and does not exactly match the job's project.
+        """
         with self._lock:
             job = self._jobs.get(job_id)
             if not job:
                 return None
-            if project_id and job.project_id != project_id and not job.project_id.startswith("benchmark_"):
-                # Project isolation violation
+            if project_id and job.project_id != project_id:
                 raise PermissionError(f"Access denied: Job belongs to project '{job.project_id}'.")
             return job
 
     def list_jobs(self, project_id: Optional[str] = None, limit: int = 50) -> list[CertificationJob]:
-        """Lists recent jobs with optional project isolation filtering."""
+        """Lists recent jobs with optional project isolation filtering.
+        When project_id is supplied, only jobs belonging to that exact project are returned.
+        """
         with self._lock:
             jobs = list(self._jobs.values())
             if project_id:
-                jobs = [j for j in jobs if j.project_id == project_id or j.project_id.startswith("benchmark_")]
+                jobs = [j for j in jobs if j.project_id == project_id]
             # Sort descending by creation time
             jobs.sort(key=lambda j: j.created_at, reverse=True)
             return jobs[:limit]

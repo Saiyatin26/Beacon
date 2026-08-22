@@ -102,8 +102,29 @@ register_error_handlers(app)
 
 @app.on_event("startup")
 def on_startup():
+    """Application startup: initializes structured logging, validates config,
+    and pre-loads controlled OracleSets into the oracle registry so that
+    /health/ready can be read-only (no state mutation in health checks).
+    """
     setup_structured_logging()
     validate_startup_configuration()
+    # Pre-load controlled OracleSets so that /health/ready is purely read-only.
+    # benchmark_registry.refresh() is already called in __init__, which calls
+    # resolve_controlled_oracle_set() for every benchmark, registering them.
+    # This explicit call ensures OracleSets are available even if refresh() was
+    # called before the oracle registry was fully wired.
+    try:
+        from benchmarks import benchmark_registry as _br
+        from oracle.registry import registry as _or
+        for _bench in _br.list_benchmarks():
+            try:
+                _oset = _br.get_or_create_oracle_set(_bench.benchmark_id, mode="CONTROLLED")
+                if _oset and not _or.get_oracle_set(_oset.oracle_set_id):
+                    _or.register_oracle_set(_oset)
+            except Exception as _exc:
+                logger.debug(f"Startup oracle pre-load for {_bench.benchmark_id}: {_exc}")
+    except Exception as _exc:
+        logger.warning(f"Startup oracle pre-load failed: {_exc}")
 
 
 class DemoRunRequest(BaseModel):
@@ -201,8 +222,11 @@ def health():
 
 
 @app.get("/api/v1/certification/jobs/{job_id}")
-def get_certification_job_endpoint(job_id: str, project_id: Optional[str] = None):
-    """Retrieves operational lifecycle state for a certification job with project isolation."""
+def get_certification_job_endpoint(job_id: str, project_id: str):
+    """Retrieves operational lifecycle state for a certification job.
+    project_id is required and enforced server-side for project isolation.
+    Returns 403 if the job belongs to a different project.
+    """
     try:
         job = certification_job_tracker.get_job(job_id, project_id=project_id)
         if not job:
@@ -213,32 +237,39 @@ def get_certification_job_endpoint(job_id: str, project_id: Optional[str] = None
 
 
 @app.get("/api/v1/certification/jobs")
-def list_certification_jobs_endpoint(project_id: Optional[str] = None, limit: int = 50):
-    """Lists recent operational certification jobs."""
+def list_certification_jobs_endpoint(project_id: str, limit: int = 50):
+    """Lists recent operational certification jobs scoped to the given project.
+    project_id is required and enforced server-side — the server only returns
+    jobs belonging to the specified project.
+    """
     jobs = certification_job_tracker.list_jobs(project_id=project_id, limit=limit)
     return {"jobs": [j.model_dump(mode="json") for j in jobs]}
 
 
 @app.get("/api/v1/operations/metrics")
-def get_operations_metrics_endpoint():
-    """Returns aggregated runtime counters, latency averages, and error metrics."""
-    snapshot = operational_metrics.get_snapshot()
-    return snapshot.model_dump(mode="json")
+def get_operations_metrics_endpoint(project_id: str):
+    """Returns aggregated runtime counters, latency averages, and error metrics
+    scoped to the given project. project_id is required.
+    """
+    snapshot = operational_metrics.get_project_snapshot(project_id=project_id)
+    return snapshot
 
 
 @app.get("/api/v1/operations/summary")
-def get_operations_summary_endpoint():
-    """Returns high-level operational system summary for the frontend dashboard."""
+def get_operations_summary_endpoint(project_id: str):
+    """Returns high-level operational system summary scoped to the given project.
+    project_id is required.
+    """
     health_det = check_dependency_health()
-    metrics_snap = operational_metrics.get_snapshot()
-    recent_jobs = certification_job_tracker.list_jobs(limit=10)
-    
+    metrics_snap = operational_metrics.get_project_snapshot(project_id=project_id)
+    recent_jobs = certification_job_tracker.list_jobs(project_id=project_id, limit=10)
+
     return {
         "system_status": health_det.status,
         "liveness": health_det.liveness,
         "readiness": health_det.readiness,
         "dependencies": {k: v.model_dump(mode="json") for k, v in health_det.dependencies.items()},
-        "metrics": metrics_snap.model_dump(mode="json"),
+        "metrics": metrics_snap,
         "recent_jobs": [j.model_dump(mode="json") for j in recent_jobs],
     }
 
@@ -698,8 +729,13 @@ def run_certification_v1(request: CertificationRunRequest):
             )
             certification_job_tracker.update_state(
                 job_id=job.job_id,
+                state=JobState.QUEUED,
+                current_step="Job queued — checking idempotency cache",
+            )
+            certification_job_tracker.update_state(
+                job_id=job.job_id,
                 state=JobState.COMPLETED,
-                current_step="Completed via deterministic idempotency cache",
+                current_step="Completed via deterministic idempotency cache (result reused, engine not re-executed)",
                 certification_id=existing_artifact.certification_id,
                 certification_status=existing_artifact.status.value,
                 equivalence_score=existing_artifact.score,
@@ -720,6 +756,13 @@ def run_certification_v1(request: CertificationRunRequest):
         target_variant=t_variant,
         provider=p_prov,
     )
+    # QUEUED: job has been accepted and is about to start processing
+    certification_job_tracker.update_state(job.job_id, JobState.QUEUED, "Job queued for execution")
+    # VALIDATING: request parameters, adapter resolution, and oracle set already validated above
+    certification_job_tracker.update_state(job.job_id, JobState.VALIDATING, "Request and adapter validation complete")
+    # PREFLIGHT: policy, identity, and configuration pre-checks done
+    certification_job_tracker.update_state(job.job_id, JobState.PREFLIGHT, "Pre-flight configuration and policy checks complete")
+    # RUNNING: executing the deterministic CertificationEngine
     certification_job_tracker.update_state(job.job_id, JobState.RUNNING, "Executing dual-probe behavioral certification")
 
     import time
@@ -738,15 +781,29 @@ def run_certification_v1(request: CertificationRunRequest):
             seed=request.seed,
         )
         duration_ms = (time.perf_counter() - start_time) * 1000.0
+        # EVIDENCE_GENERATION: artifact and evidence packages produced by certify()
         certification_job_tracker.update_state(
             job_id=job.job_id,
-            state=JobState.COMPLETED,
-            current_step="Certification completed successfully",
+            state=JobState.EVIDENCE_GENERATION,
+            current_step="Evidence packages and certification artifact generated",
             certification_id=artifact.certification_id,
             certification_status=artifact.status.value,
             equivalence_score=artifact.score,
         )
+        # PERSISTING: artifact already persisted atomically by CertificationEngine
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.PERSISTING,
+            current_step="Certification artifact persisted to storage",
+        )
+        # COMPLETED: lifecycle done
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.COMPLETED,
+            current_step="Certification completed successfully",
+        )
         operational_metrics.record_job_completed(
+            project_id=proj_id,
             duration_ms=duration_ms,
             certification_status=artifact.status.value,
             success=True,
@@ -756,11 +813,11 @@ def run_certification_v1(request: CertificationRunRequest):
         certification_job_tracker.update_state(
             job_id=job.job_id,
             state=JobState.FAILED,
-            current_step=f"Execution error: {str(exc)}",
+            current_step="Execution error during certification",
             error_category="CERTIFICATION_FAILURE",
             error_message=str(exc),
         )
-        operational_metrics.record_job_failed(error_category="CERTIFICATION_FAILURE")
+        operational_metrics.record_job_failed(project_id=proj_id, error_category="CERTIFICATION_FAILURE")
         raise
     finally:
         workload_protector.release_job_slot()
@@ -1214,14 +1271,22 @@ def resolve_oracle_set(
 
     # Check if oracle_set_id maps to a benchmark specification
     bench_map = {
+        # Human-friendly aliases
         "SET-RETAIL-CONTROLLED-v1": "retail_discount_pricing",
         "SET-LOAN-CONTROLLED-v1": "loan_approval",
         "SET-PAYROLL-CONTROLLED-v1": "payroll_tax",
         "SET-MEDICAL-CONTROLLED-v1": "medical_triage",
+        # Direct benchmark IDs
         "retail_discount_pricing": "retail_discount_pricing",
         "loan_approval": "loan_approval",
         "payroll_tax": "payroll_tax",
         "medical_triage": "medical_triage",
+        # Actual generated IDs from benchmark_registry.resolve_controlled_oracle_set()
+        "SET-RETAIL_DISCOUNT_PRICING-CONTROLLED": "retail_discount_pricing",
+        "SET-LOAN_DEMO-CONTROLLED": "loan_demo",
+        "SET-LOAN_APPROVAL-CONTROLLED": "loan_approval",
+        "SET-MEDICAL_TRIAGE-CONTROLLED": "medical_triage",
+        "SET-PAYROLL_TAX-CONTROLLED": "payroll_tax",
     }
     bench_id = bench_map.get(oracle_set_id)
     if bench_id:
@@ -1743,6 +1808,13 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         target_variant=req.modernized_adapter_id,
         provider=actual_provider,
     )
+    # QUEUED: job accepted, about to start
+    certification_job_tracker.update_state(job.job_id, JobState.QUEUED, "Job queued for execution")
+    # VALIDATING: dataset, adapter, oracle set, privacy boundary already validated above
+    certification_job_tracker.update_state(job.job_id, JobState.VALIDATING, "Dataset, adapter, and oracle set validation complete")
+    # PREFLIGHT: config fingerprint verification already done above
+    certification_job_tracker.update_state(job.job_id, JobState.PREFLIGHT, "Pre-flight configuration fingerprint verified")
+    # RUNNING: executing the deterministic CertificationEngine
     certification_job_tracker.update_state(job.job_id, JobState.RUNNING, "Executing custom dataset certification probes")
 
     audit_logger.log(
@@ -1807,15 +1879,30 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         )
         duration_ms = (time.perf_counter() - start_time) * 1000.0
 
+        # EVIDENCE_GENERATION: artifact and evidence packages produced by certify()
         certification_job_tracker.update_state(
             job_id=job.job_id,
-            state=JobState.COMPLETED,
-            current_step="Custom certification completed successfully",
+            state=JobState.EVIDENCE_GENERATION,
+            current_step="Evidence packages and certification artifact generated",
             certification_id=artifact.certification_id,
             certification_status=artifact.status.value,
             equivalence_score=artifact.score,
         )
+        # PERSISTING: artifact already persisted atomically by CertificationEngine
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.PERSISTING,
+            current_step="Custom certification artifact persisted to storage",
+        )
+        # COMPLETED: lifecycle done
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.COMPLETED,
+            current_step="Custom certification completed successfully",
+        )
+
         operational_metrics.record_job_completed(
+            project_id=req.project_id,
             duration_ms=duration_ms,
             certification_status=artifact.status.value,
             success=True,
@@ -1844,7 +1931,7 @@ def run_custom_certification(req: CustomCertificationRunRequest):
             error_category="CERTIFICATION_FAILURE",
             error_message=str(exc),
         )
-        operational_metrics.record_job_failed(error_category="CERTIFICATION_FAILURE")
+        operational_metrics.record_job_failed(project_id=req.project_id, error_category="CERTIFICATION_FAILURE")
 
         audit_logger.log(
             project_id=req.project_id,

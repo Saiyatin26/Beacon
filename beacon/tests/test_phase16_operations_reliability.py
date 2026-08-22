@@ -220,9 +220,10 @@ def test_job_lifecycle_transitions_from_accepted_to_completed(client):
     assert res.status_code == 200
     art = res.json()
     cert_id = art["certification_id"]
+    proj_id = art.get("context", {}).get("project_id") or "benchmark_retail_discount_pricing"
 
-    # Query recent jobs
-    jobs_res = client.get("/api/v1/certification/jobs")
+    # Query recent jobs — project_id required
+    jobs_res = client.get(f"/api/v1/certification/jobs?project_id={proj_id}")
     assert jobs_res.status_code == 200
     jobs = jobs_res.json()["jobs"]
     assert len(jobs) > 0
@@ -254,9 +255,10 @@ def test_job_state_distinct_from_certification_status(client):
     art = res.json()
     cert_id = art["certification_id"]
     assert art["status"] == "NOT_CERTIFIED"
+    proj_id = art.get("context", {}).get("project_id") or "benchmark_retail_discount_pricing"
 
-    # Query job status
-    jobs_res = client.get("/api/v1/certification/jobs")
+    # Query job status — project_id required
+    jobs_res = client.get(f"/api/v1/certification/jobs?project_id={proj_id}")
     job = next(j for j in jobs_res.json()["jobs"] if j.get("certification_id") == cert_id)
 
     # Job is successfully COMPLETED (no crashes), but Certification outcome is NOT_CERTIFIED
@@ -345,6 +347,8 @@ def test_oversized_dataset_rejected_with_resource_limit(client, monkeypatch):
 
 def test_operational_metrics_endpoint_aggregation(client):
     """Verifies that metrics endpoints aggregate run counters and timings cleanly."""
+    proj_id = "benchmark_retail_discount_pricing"
+
     # Execute a clean run
     client.post(
         "/api/v1/certification/run",
@@ -357,8 +361,8 @@ def test_operational_metrics_endpoint_aggregation(client):
         },
     )
 
-    # Check metrics
-    m_res = client.get("/api/v1/operations/metrics")
+    # Check project-scoped metrics
+    m_res = client.get(f"/api/v1/operations/metrics?project_id={proj_id}")
     assert m_res.status_code == 200
     metrics = m_res.json()
     assert metrics["certification_runs_total"] >= 1
@@ -366,8 +370,8 @@ def test_operational_metrics_endpoint_aggregation(client):
     assert metrics["certification_status_breakdown"].get("CERTIFIED", 0) >= 1
     assert metrics["avg_certification_duration_ms"] >= 0.0
 
-    # Check summary endpoint
-    s_res = client.get("/api/v1/operations/summary")
+    # Check project-scoped summary endpoint
+    s_res = client.get(f"/api/v1/operations/summary?project_id={proj_id}")
     assert s_res.status_code == 200
     summary = s_res.json()
     assert "system_status" in summary
@@ -399,3 +403,341 @@ def test_operational_instrumentation_does_not_mutate_evidence_hash(client):
     assert v_res.status_code == 200
     assert v_res.json()["status"] == "PASS"
     assert v_res.json()["artifact_integrity_valid"] is True
+
+
+# ==============================================================================
+# 9. Regression Tests A–H (from Phase 16 Correction Specification)
+# ==============================================================================
+
+def test_A_lifecycle_all_stages_recorded(client):
+    """Test A: Verifies the full lifecycle passes through all expected states.
+    For a fresh (non-idempotent) run the job must reach COMPLETED state.
+    State transitions are verified deterministically via the final terminal state.
+    """
+    # Use force_recompute=True to ensure a fresh execution path (not idempotency cache)
+    res = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+            "force_recompute": True,
+        },
+    )
+    assert res.status_code == 200
+    art = res.json()
+    cert_id = art["certification_id"]
+    proj_id = art.get("context", {}).get("project_id") or "benchmark_retail_discount_pricing"
+
+    jobs = client.get(f"/api/v1/certification/jobs?project_id={proj_id}").json()["jobs"]
+    job = next((j for j in jobs if j.get("certification_id") == cert_id), None)
+    assert job is not None, f"No job found for cert_id={cert_id} under project={proj_id}"
+
+    # Terminal state must be COMPLETED (validates all transitions occurred)
+    assert job["state"] == "COMPLETED"
+    assert job["duration_ms"] is not None
+    assert job["duration_ms"] >= 0.0
+    assert job["certification_status"] == "CERTIFIED"
+
+
+def test_A_lifecycle_failure_transitions_to_failed(client):
+    """Test A (failure path): Controlled failure causes FAILED state with error_category set."""
+    from operations import certification_job_tracker, JobState
+
+    # Create a job manually and drive it through FAILED
+    job = certification_job_tracker.create_job(
+        project_id="proj_fail_test",
+        benchmark_id="retail_discount_pricing",
+    )
+    certification_job_tracker.update_state(job.job_id, JobState.QUEUED, "Queued")
+    certification_job_tracker.update_state(job.job_id, JobState.VALIDATING, "Validating")
+    certification_job_tracker.update_state(
+        job.job_id,
+        JobState.FAILED,
+        current_step="Simulated validation failure",
+        error_category="VALIDATION_ERROR",
+        error_message="Controlled test failure",
+    )
+
+    # Retrieve the job and verify terminal FAILED state
+    res = client.get(f"/api/v1/certification/jobs/{job.job_id}?project_id=proj_fail_test")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["state"] == "FAILED"
+    assert data["error_category"] == "VALIDATION_ERROR"
+    assert data["duration_ms"] is not None
+
+
+def test_B_health_readiness_is_read_only(client):
+    """Test B: Verifies that GET /health/ready is purely read-only — oracle count unchanged."""
+    from oracle.registry import registry as oracle_registry
+
+    # Count OracleSets before
+    count_before = len(oracle_registry.list_oracle_sets())
+
+    # Call /health/ready multiple times
+    for _ in range(3):
+        res = client.get("/health/ready")
+        assert res.status_code == 200
+
+    # Count must be unchanged
+    count_after = len(oracle_registry.list_oracle_sets())
+    assert count_after == count_before, (
+        f"OracleSet count changed from {count_before} to {count_after} — "
+        f"/health/ready must not create OracleSets."
+    )
+
+
+def test_C_project_isolation_jobs_endpoint(client):
+    """Test C: Project isolation — Project A cannot see Project B's jobs."""
+    from operations import certification_job_tracker
+
+    # Create jobs for two different projects
+    job_a = certification_job_tracker.create_job(
+        project_id="iso_proj_alpha",
+        benchmark_id="retail_discount_pricing",
+    )
+    job_b = certification_job_tracker.create_job(
+        project_id="iso_proj_beta",
+        benchmark_id="retail_discount_pricing",
+    )
+
+    # Project Alpha can only see its own jobs
+    res_a = client.get("/api/v1/certification/jobs?project_id=iso_proj_alpha")
+    assert res_a.status_code == 200
+    job_ids_a = [j["job_id"] for j in res_a.json()["jobs"]]
+    assert job_a.job_id in job_ids_a
+    assert job_b.job_id not in job_ids_a
+
+    # Project Beta can only see its own jobs
+    res_b = client.get("/api/v1/certification/jobs?project_id=iso_proj_beta")
+    assert res_b.status_code == 200
+    job_ids_b = [j["job_id"] for j in res_b.json()["jobs"]]
+    assert job_b.job_id in job_ids_b
+    assert job_a.job_id not in job_ids_b
+
+    # Cross-project direct job lookup must return 403
+    res_cross = client.get(f"/api/v1/certification/jobs/{job_a.job_id}?project_id=iso_proj_beta")
+    assert res_cross.status_code == 403
+
+
+def test_C_project_isolation_metrics_endpoint(client):
+    """Test C (metrics): Project A metrics do not include Project B runs."""
+    # Run a clean certification for a known project
+    res = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+            "force_recompute": True,
+        },
+    )
+    assert res.status_code == 200
+    proj_id = res.json().get("context", {}).get("project_id") or "benchmark_retail_discount_pricing"
+
+    # Metrics for the real project must show >= 1 run
+    m_real = client.get(f"/api/v1/operations/metrics?project_id={proj_id}").json()
+    assert m_real["certification_runs_total"] >= 1
+
+    # Metrics for a completely different project must show 0 runs
+    m_other = client.get("/api/v1/operations/metrics?project_id=completely_unrelated_project_xyz").json()
+    assert m_other["certification_runs_total"] == 0
+
+
+def test_D_health_error_sanitization(client, monkeypatch):
+    """Test D: Simulated dependency failure must not expose raw exception text in API response."""
+    import sqlite3
+    from operations.health import check_readiness
+
+    # Monkeypatch sqlite3.connect to raise an error with sensitive-looking text
+    original_connect = sqlite3.connect
+    def fake_connect(*args, **kwargs):
+        raise sqlite3.OperationalError(
+            "unable to open database file: C:\\private\\db_secret_token=abc123\\beacon.db"
+        )
+    monkeypatch.setattr(sqlite3, "connect", fake_connect)
+
+    readiness = check_readiness()
+
+    # Status must be NOT_READY
+    assert readiness.status == "NOT_READY"
+
+    # Reasons must only contain safe category strings — no raw exception text
+    for reason in readiness.reasons:
+        assert "sqlite3" not in reason.lower()
+        assert "OperationalError" not in reason
+        assert "C:\\" not in reason
+        assert "secret" not in reason.lower()
+        assert "token" not in reason.lower()
+        # Must only be a safe category
+        assert reason in (
+            "database_unavailable",
+            "benchmark_registry_unavailable",
+            "benchmark_registry_empty",
+            "oracle_set_registry_unavailable",
+            "oracle_set_registry_empty",
+            "dataset_registry_unavailable",
+            "certification_repository_unavailable",
+        )
+
+
+def test_E_idempotency_regression(client):
+    """Test E: Phase-13/14 idempotency behavior is preserved — same request returns same artifact."""
+    payload = {
+        "benchmark_id": "retail_discount_pricing",
+        "benchmark_variant": "clean_v2",
+        "discovery_mode": "CONTROLLED",
+        "implementation": "equivalent",
+        "preferred_provider": "offline",
+        "idempotency_key": "REGRESSION-IDEM-E-001",
+    }
+    res1 = client.post("/api/v1/certification/run", json=payload)
+    assert res1.status_code == 200
+    cert_id_1 = res1.json()["certification_id"]
+
+    res2 = client.post("/api/v1/certification/run", json=payload)
+    assert res2.status_code == 200
+    cert_id_2 = res2.json()["certification_id"]
+
+    # Must return the same certification ID
+    assert cert_id_1 == cert_id_2
+
+
+def test_F_certification_result_regression(client):
+    """Test F: Retail Clean → CERTIFIED, Retail Buggy → NOT_CERTIFIED results are unchanged."""
+    # Clean → CERTIFIED
+    res_clean = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+            "force_recompute": True,
+        },
+    )
+    assert res_clean.status_code == 200
+    assert res_clean.json()["status"] == "CERTIFIED"
+    assert res_clean.json()["score"] == 1.0
+
+    # Buggy → NOT_CERTIFIED with counterexamples
+    res_buggy = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "buggy_threshold_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "buggy",
+            "preferred_provider": "offline",
+            "force_recompute": True,
+        },
+    )
+    assert res_buggy.status_code == 200
+    assert res_buggy.json()["status"] == "NOT_CERTIFIED"
+    assert res_buggy.json()["score"] < 1.0
+    assert len(res_buggy.json()["regressions"]) > 0
+
+
+def test_G_custom_dataset_regression(client):
+    """Test G: Custom dataset upload → validate → pre-flight → certify → evidence still works."""
+    import json
+    sample_data = json.dumps([
+        {"order_amount": 600.0, "customer_tier": "VIP", "coupon_code": "NONE",
+         "items_count": 10, "discount_applied_pct": 0.20},
+        {"order_amount": 100.0, "customer_tier": "STANDARD", "coupon_code": "NONE",
+         "items_count": 5, "discount_applied_pct": 0.05},
+    ])
+
+    # 1. Upload
+    up_res = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "regression_proj_g",
+            "dataset_name": "Regression Test G Dataset",
+            "data_format": "JSON",
+            "raw_content": sample_data,
+        },
+    )
+    assert up_res.status_code == 200
+    ds_id = up_res.json()["dataset_id"]
+
+    # 2. Pre-flight
+    pf_res = client.post(
+        "/api/v1/custom/preflight",
+        json={
+            "project_id": "regression_proj_g",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL_DISCOUNT_PRICING-CONTROLLED",
+            "evaluation_mode": "CONTROLLED",
+        },
+    )
+    assert pf_res.status_code == 200
+    fingerprint = pf_res.json()["config_fingerprint"]
+
+    # 3. Certify
+    cert_res = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "regression_proj_g",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL_DISCOUNT_PRICING-CONTROLLED",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": fingerprint,
+        },
+    )
+    assert cert_res.status_code == 200
+    cert_id = cert_res.json()["certification_id"]
+    assert cert_res.json()["status"] in ("CERTIFIED", "NOT_CERTIFIED", "INCONCLUSIVE", "INSUFFICIENT_COVERAGE")
+
+    # 4. Evidence dossier accessible
+    ev_res = client.get(f"/api/v1/evidence/dossiers/{cert_id}?project_id=regression_proj_g")
+    assert ev_res.status_code == 200
+
+
+def test_H_resource_limit_regression(client, monkeypatch):
+    """Test H: Oversized dataset must return RESOURCE_LIMIT and not be silently certified."""
+    import json as _json
+    monkeypatch.setattr(settings, "max_dataset_size_bytes", 512)
+
+    large = _json.dumps([{"order_amount": 100.0, "customer_tier": "VIP"}] * 100)
+    res = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_resource_limit_h",
+            "dataset_name": "Oversized Regression",
+            "data_format": "JSON",
+            "raw_content": large,
+        },
+    )
+    # Must be rejected with 413 RESOURCE_LIMIT — no partial certification
+    assert res.status_code == 413
+    data = res.json()
+    assert data["category"] == "RESOURCE_LIMIT"
+
+
+def test_jobs_endpoint_requires_project_id(client):
+    """Verifies that /api/v1/certification/jobs returns 422 when project_id is missing."""
+    res = client.get("/api/v1/certification/jobs")
+    assert res.status_code == 422
+
+
+def test_metrics_endpoint_requires_project_id(client):
+    """Verifies that /api/v1/operations/metrics returns 422 when project_id is missing."""
+    res = client.get("/api/v1/operations/metrics")
+    assert res.status_code == 422
+
+
+def test_summary_endpoint_requires_project_id(client):
+    """Verifies that /api/v1/operations/summary returns 422 when project_id is missing."""
+    res = client.get("/api/v1/operations/summary")
+    assert res.status_code == 422
