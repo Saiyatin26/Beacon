@@ -35,6 +35,7 @@ from .models import (
     verify_input_set_integrity,
 )
 from .repository import certification_repository
+from ingestion.audit import audit_logger, AuditAction
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +66,54 @@ class CertificationEngine:
         timestamp = datetime.now(timezone.utc).isoformat()
         cert_id = f"CERT-{uuid.uuid4().hex[:8]}"
 
+        audit_logger.log(
+            project_id=project_id,
+            action=AuditAction.CERTIFICATION_START,
+            status="INFO",
+            certification_id=cert_id,
+            details={
+                "legacy_version": getattr(legacy_adapter, "version", "1.0.0"),
+                "modernized_version": getattr(modern_adapter, "version", "2.0.0"),
+                "oracle_set_id": getattr(oracle_set, "oracle_set_id", ""),
+                "policy_id": cert_policy.policy_id,
+                "min_equivalence_score": cert_policy.min_equivalence_score,
+                "min_oracle_coverage": cert_policy.min_oracle_coverage,
+            },
+        )
+
         # 1. OracleSet Integrity and Content Hash Verification
         if not oracle_set.oracles:
             logger.warning(
                 f"OracleSet #{oracle_set.oracle_set_id} contains no oracles. "
                 "Behavioral equivalence coverage is insufficient to certify."
             )
-            empty_cert_id = f"CERT-IC-{uuid.uuid4().hex[:8]}"
+            empty_cert_id = cert_id
+            ic_context = context or CertificationContext(
+                benchmark_id=project_id,
+                benchmark_version="1.0.0",
+                benchmark_name=project_id,
+                benchmark_provenance="CONTROLLED",
+                evaluation_mode="CONTROLLED",
+                modernization_variant_id=getattr(modern_adapter, "name", "modern_equiv"),
+                modernization_variant_name=getattr(modern_adapter, "name", "Modernized Implementation"),
+                legacy_implementation_id=getattr(legacy_adapter, "name", "legacy"),
+                modernized_implementation_id=getattr(modern_adapter, "name", "modern"),
+            )
+            ic_context.policy_id = cert_policy.policy_id
+            ic_context.policy_version = getattr(cert_policy, "version", 1)
+            ic_context.policy_hash = pol_hash
+            ic_context.policy_min_equivalence_score = cert_policy.min_equivalence_score
+            ic_context.policy_min_oracle_coverage = cert_policy.min_oracle_coverage
+            ic_context.policy_min_applicable_probes_per_oracle = cert_policy.min_applicable_probes_per_oracle
+            ic_context.policy_allow_warnings = cert_policy.allow_warnings
+            ic_context.policy_block_on_critical_regression = cert_policy.block_on_critical_regression
+            ic_context.policy_block_on_reference_inconsistent = cert_policy.block_on_reference_inconsistent
+            ic_context.policy_block_on_mutual_violation = cert_policy.block_on_mutual_violation
+            ic_context.policy_rules = cert_policy.model_dump(mode="json")
+            ic_context.certification_run_id = empty_cert_id
+            ic_context.run_timestamp = timestamp
+            ic_context.run_status = "INSUFFICIENT_COVERAGE"
+
             temp_ic = CertificationArtifact(
                 certification_id=empty_cert_id,
                 project_id=project_id,
@@ -102,8 +144,23 @@ class CertificationEngine:
                 warnings=[],
                 blocking_reasons=["Insufficient oracle coverage: 0 oracles available to evaluate behavioral equivalence"],
                 content_hash="",
+                context=ic_context,
             )
-            ic_artifact = temp_ic.model_copy(update={"content_hash": compute_artifact_content_hash(temp_ic)})
+            ic_hash = compute_artifact_content_hash(temp_ic)
+            ic_context.certification_artifact_hash = ic_hash
+            ic_artifact = temp_ic.model_copy(update={"content_hash": ic_hash, "context": ic_context})
+
+            audit_logger.log(
+                project_id=project_id,
+                action=AuditAction.CERTIFICATION_COMPLETE,
+                status="INFO",
+                certification_id=empty_cert_id,
+                details={
+                    "status": "INSUFFICIENT_COVERAGE",
+                    "score": 0.0,
+                    "reason": "0 oracles available",
+                },
+            )
             return certification_repository.save_artifact(ic_artifact)
 
         content_hashes = [o.content_hash for o in oracle_set.oracles]
@@ -524,7 +581,16 @@ class CertificationEngine:
         final_context.oracle_set_id = oracle_set.oracle_set_id
         final_context.oracle_set_hash = oracle_set.oracle_set_hash
         final_context.policy_id = cert_policy.policy_id
+        final_context.policy_version = getattr(cert_policy, "version", 1)
         final_context.policy_hash = pol_hash
+        final_context.policy_min_equivalence_score = cert_policy.min_equivalence_score
+        final_context.policy_min_oracle_coverage = cert_policy.min_oracle_coverage
+        final_context.policy_min_applicable_probes_per_oracle = cert_policy.min_applicable_probes_per_oracle
+        final_context.policy_allow_warnings = cert_policy.allow_warnings
+        final_context.policy_block_on_critical_regression = cert_policy.block_on_critical_regression
+        final_context.policy_block_on_reference_inconsistent = cert_policy.block_on_reference_inconsistent
+        final_context.policy_block_on_mutual_violation = cert_policy.block_on_mutual_violation
+        final_context.policy_rules = cert_policy.model_dump(mode="json")
         final_context.run_timestamp = timestamp
         final_context.run_status = final_status.value
         # Assign disambiguated metrics to context
@@ -581,7 +647,23 @@ class CertificationEngine:
         final_context.certification_artifact_hash = cert_content_hash
         artifact = temp_artifact.model_copy(update={"content_hash": cert_content_hash, "context": final_context})
 
-        return certification_repository.save_certification_run_atomic(input_set, cases_to_save, artifact)
+        saved_artifact = certification_repository.save_certification_run_atomic(input_set, cases_to_save, artifact)
+
+        audit_logger.log(
+            project_id=project_id,
+            action=AuditAction.CERTIFICATION_COMPLETE,
+            status="SUCCESS" if is_certified else "INFO",
+            certification_id=cert_id,
+            details={
+                "status": final_status.value,
+                "score": metrics.overall_equivalence_score,
+                "matching_cases": m_cases,
+                "regressions": r_cases,
+                "coverage_pct": coverage_pct,
+            },
+        )
+
+        return saved_artifact
 
 
 # Module-level default certification engine singleton

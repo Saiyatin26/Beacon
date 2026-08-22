@@ -87,7 +87,7 @@ class AuditorNotesStore:
         # Log audit trail event (read-only audit event, does NOT alter certification artifact)
         audit_logger.log(
             project_id=project_id,
-            action=AuditAction.INTEGRITY_VERIFY,  # or recorded review action
+            action=AuditAction.AUDITOR_NOTE_CREATED,
             status="INFO",
             certification_id=certification_id,
             details={"note_id": note.note_id, "author": note.author, "note_length": len(note.content)},

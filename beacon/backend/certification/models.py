@@ -188,7 +188,16 @@ class CertificationContext(BaseModel):
     model: str = "deterministic"
     generation_method: str = "offline"
     policy_id: str = "POL-DEFAULT"
+    policy_version: int = 1
     policy_hash: str = ""
+    policy_min_equivalence_score: float = 0.80
+    policy_min_oracle_coverage: float = 0.80
+    policy_min_applicable_probes_per_oracle: int = 1
+    policy_allow_warnings: bool = False
+    policy_block_on_critical_regression: bool = True
+    policy_block_on_reference_inconsistent: bool = True
+    policy_block_on_mutual_violation: bool = True
+    policy_rules: dict[str, Any] = Field(default_factory=dict)
     input_set_id: str = ""
     input_set_hash: str = ""
     certification_run_id: str = ""

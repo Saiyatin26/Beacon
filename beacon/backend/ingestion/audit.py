@@ -29,6 +29,7 @@ class AuditAction(str, Enum):
     CERTIFICATION_FAIL = "CERTIFICATION_FAIL"
     EXPORT = "EXPORT"
     INTEGRITY_VERIFY = "INTEGRITY_VERIFY"
+    AUDITOR_NOTE_CREATED = "AUDITOR_NOTE_CREATED"
 
 
 class AuditEvent(BaseModel):
@@ -85,6 +86,7 @@ class AuditLogger:
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_proj ON audit_events(project_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_dataset ON audit_events(dataset_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_cert ON audit_events(certification_id)")
                 conn.commit()
         except Exception as exc:
             logger.warning(f"Failed to initialize SQLite audit_events table: {exc}")
@@ -154,9 +156,10 @@ class AuditLogger:
         self,
         project_id: Optional[str] = None,
         dataset_id: Optional[str] = None,
+        certification_id: Optional[str] = None,
         limit: int = 50,
     ) -> list[AuditEvent]:
-        """Lists audit events filtered by project_id or dataset_id."""
+        """Lists audit events filtered by project_id, dataset_id, or certification_id."""
         results: list[AuditEvent] = []
         try:
             with sqlite3.connect(self._db_path) as conn:
@@ -169,6 +172,9 @@ class AuditLogger:
                 if dataset_id:
                     query += " AND dataset_id = ?"
                     params.append(dataset_id)
+                if certification_id:
+                    query += " AND certification_id = ?"
+                    params.append(certification_id)
                 query += " ORDER BY timestamp DESC LIMIT ?"
                 params.append(limit)
 
@@ -193,7 +199,9 @@ class AuditLogger:
         if not results and self._memory_events:
             filtered = [
                 e for e in self._memory_events
-                if (not project_id or e.project_id == project_id) and (not dataset_id or e.dataset_id == dataset_id)
+                if (not project_id or e.project_id == project_id)
+                and (not dataset_id or e.dataset_id == dataset_id)
+                and (not certification_id or e.certification_id == certification_id)
             ]
             return list(reversed(filtered[-limit:]))
 

@@ -34,7 +34,19 @@ from evidence import (
     check_evidence_completeness,
 )
 from certification.repository import certification_repository
+from certification.models import CertificationPolicy
 from ingestion.audit import audit_logger, AuditAction
+
+
+@pytest.fixture(autouse=True)
+def clean_db():
+    certification_repository.clear()
+    audit_logger.clear()
+    auditor_notes_store._memory_notes.clear()
+    yield
+    certification_repository.clear()
+    audit_logger.clear()
+    auditor_notes_store._memory_notes.clear()
 
 
 @pytest.fixture
@@ -317,6 +329,12 @@ def test_auditor_notes_isolation_and_hash_invariance(client):
     assert notes_list_res.status_code == 200
     notes = notes_list_res.json()["notes"]
     assert any(n["note_id"] == note_data["note_id"] for n in notes)
+
+    # Verify audit event action is strictly AUDITOR_NOTE_CREATED and NOT INTEGRITY_VERIFY
+    cert_events = audit_logger.list_events(certification_id=cert_id)
+    note_events = [e for e in cert_events if e.action == AuditAction.AUDITOR_NOTE_CREATED]
+    assert len(note_events) > 0
+    assert any(e.details.get("note_id") == note_data["note_id"] for e in note_events)
 
     # Verify original artifact content hash remains 100% untouched
     art_after = certification_repository.get_artifact(cert_id)
@@ -619,3 +637,218 @@ def test_tampered_evidence_verification_failure(client):
     v2 = client.post(f"/api/v1/evidence/verify/{cert_id}")
     assert v2.json()["status"] == "FAIL"
     assert v2.json()["artifact_integrity_valid"] is False
+
+
+# ==============================================================================
+# 10. Phase 15 Final Corrections: Policy Exactness, Timeline Scoping & CSV Privacy
+# ==============================================================================
+
+def test_policy_thresholds_exactness_and_historical_invariance(client):
+    """Verifies Evidence Dossier reports exact non-default policy thresholds and remains historically invariant."""
+    # Policy A: Strict Policy (95% Equivalence, 90% Coverage)
+    policy_a = CertificationPolicy(
+        policy_id="POL-STRICT-A",
+        min_equivalence_score=0.95,
+        min_oracle_coverage=0.90,
+    )
+
+    run_res_a = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+            "policy": policy_a.model_dump(mode="json"),
+        },
+    )
+    assert run_res_a.status_code == 200
+    art_a = run_res_a.json()
+    cert_id_a = art_a["certification_id"]
+
+    # Dossier A must reflect exact Policy A thresholds (0.95 and 0.90), NOT default 0.80/0.0
+    dossier_a = build_evidence_dossier(cert_id_a)
+    assert dossier_a.policy_evidence.policy_id == "POL-STRICT-A"
+    assert dossier_a.policy_evidence.min_equivalence_score == 0.95
+    assert dossier_a.policy_evidence.min_oracle_coverage == 0.90
+
+    # Policy B: Relaxed Policy (75% Equivalence, 50% Coverage)
+    policy_b = CertificationPolicy(
+        policy_id="POL-RELAXED-B",
+        min_equivalence_score=0.75,
+        min_oracle_coverage=0.50,
+    )
+
+    run_res_b = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "payroll_tax_calculator",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+            "policy": policy_b.model_dump(mode="json"),
+        },
+    )
+    assert run_res_b.status_code == 200
+    cert_id_b = run_res_b.json()["certification_id"]
+
+    dossier_b = build_evidence_dossier(cert_id_b)
+    assert dossier_b.policy_evidence.policy_id == "POL-RELAXED-B"
+    assert dossier_b.policy_evidence.min_equivalence_score == 0.75
+    assert dossier_b.policy_evidence.min_oracle_coverage == 0.50
+
+    # Historical Invariance Check: Dossier A must still report Policy A thresholds (0.95/0.90)
+    dossier_a_reloaded = build_evidence_dossier(cert_id_a)
+    assert dossier_a_reloaded.policy_evidence.policy_id == "POL-STRICT-A"
+    assert dossier_a_reloaded.policy_evidence.min_equivalence_score == 0.95
+    assert dossier_a_reloaded.policy_evidence.min_oracle_coverage == 0.90
+
+
+def test_timeline_strict_run_isolation_and_chronological_order(client):
+    """Verifies that Evidence Timeline only contains events for the selected run and is chronologically ordered."""
+    # Create Run A
+    res_a = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+        },
+    )
+    cert_id_a = res_a.json()["certification_id"]
+
+    # Create Run B
+    res_b = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "payroll_tax_calculator",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+        },
+    )
+    cert_id_b = res_b.json()["certification_id"]
+
+    # Add Run-B-only note
+    client.post(
+        f"/api/v1/evidence/dossiers/{cert_id_b}/notes",
+        json={"author": "Auditor B", "content": "Exclusive note for Run B only."},
+    )
+
+    # Fetch Timeline for Run A
+    tl_res_a = client.get(f"/api/v1/evidence/dossiers/{cert_id_a}/timeline")
+    assert tl_res_a.status_code == 200
+    timeline_a = tl_res_a.json()["timeline"]
+
+    # Must contain Run A events
+    assert len(timeline_a) > 0
+    # Must NOT contain Run-B note content or event
+    for event in timeline_a:
+        details_str = json.dumps(event.get("details", {}))
+        assert "Exclusive note for Run B only" not in details_str
+        assert cert_id_b not in details_str
+
+    # Verify strictly ascending chronological ordering
+    timestamps = [ev["timestamp"] for ev in timeline_a]
+    assert timestamps == sorted(timestamps)
+
+
+def test_privacy_safe_custom_dataset_csv_export_no_secret_leak(client):
+    """Verifies that default CSV export for custom/private datasets strips raw secrets, emails, and credentials."""
+    sensitive_payload = json.dumps([
+        {
+            "order_amount": 120.0,
+            "customer_tier": "VIP",
+            "items_count": 2,
+            "coupon_code": "NONE",
+            "is_express_shipping": False,
+            "customer_email": "confidential_ceo@enterprise.com",
+            "salary": 185000,
+            "internal_id": "EMP-SECRET-8888",
+        }
+    ])
+
+    up_res = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_strict_csv_privacy",
+            "dataset_name": "Executive Payroll & Orders",
+            "data_format": "JSON",
+            "raw_content": sensitive_payload,
+            "declared_provenance": "PRIVATE_ENTERPRISE",
+        },
+    )
+    assert up_res.status_code == 200
+    ds_id = up_res.json()["dataset_id"]
+
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_strict_csv_privacy",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+        },
+    )
+    assert val_res.status_code == 200
+    fp = val_res.json()["config_fingerprint"]
+
+    cert_res = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_strict_csv_privacy",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+            "config_fingerprint": fp,
+        },
+    )
+    assert cert_res.status_code == 200
+    cert_id = cert_res.json()["certification_id"]
+
+    # 1. Custom Dataset CSV Export
+    csv_res = client.get(f"/api/v1/evidence/dossiers/{cert_id}/export?format=csv&project_id=proj_strict_csv_privacy")
+    assert csv_res.status_code == 200
+    csv_text = csv_res.text
+
+    # Verify raw secrets and private customer values NEVER appear in the custom CSV export
+    assert "confidential_ceo@enterprise.com" not in csv_text
+    assert "EMP-SECRET-8888" not in csv_text
+    assert "185000" not in csv_text
+
+    # Verify sanitized evidence fields are present
+    assert "case_id" in csv_text
+    assert "input_hash" in csv_text
+    assert "evidence_reference" in csv_text
+
+    # 2. Built-in Benchmark CSV Export continues to include standard columns
+    bench_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "implementation": "equivalent",
+            "preferred_provider": "offline",
+        },
+    )
+    bench_cert_id = bench_run.json()["certification_id"]
+    bench_csv_res = client.get(f"/api/v1/evidence/dossiers/{bench_cert_id}/export?format=csv")
+    assert bench_csv_res.status_code == 200
+    bench_csv_text = bench_csv_res.text
+    assert "input_json" in bench_csv_text
+    assert "legacy_output_json" in bench_csv_text
+    assert "modern_output_json" in bench_csv_text

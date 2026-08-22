@@ -226,12 +226,33 @@ def build_evidence_dossier(
         )
 
     # 6. Policy Evidence
+    p_min_equiv = getattr(ctx, "policy_min_equivalence_score", None) if ctx else None
+    p_min_cov = getattr(ctx, "policy_min_oracle_coverage", None) if ctx else None
+    p_block_crit = getattr(ctx, "policy_block_on_critical_regression", True) if ctx else True
+    p_block_ref = getattr(ctx, "policy_block_on_reference_inconsistent", True) if ctx else True
+    p_block_mut = getattr(ctx, "policy_block_on_mutual_violation", True) if ctx else True
+
+    if ctx and hasattr(ctx, "policy_rules") and isinstance(ctx.policy_rules, dict) and ctx.policy_rules:
+        p_min_equiv = ctx.policy_rules.get("min_equivalence_score", p_min_equiv)
+        p_min_cov = ctx.policy_rules.get("min_oracle_coverage", p_min_cov)
+        p_block_crit = ctx.policy_rules.get("block_on_critical_regression", p_block_crit)
+        p_block_ref = ctx.policy_rules.get("block_on_reference_inconsistent", p_block_ref)
+        p_block_mut = ctx.policy_rules.get("block_on_mutual_violation", p_block_mut)
+
+    if p_min_equiv is None:
+        p_min_equiv = 0.80
+    if p_min_cov is None:
+        p_min_cov = 0.80
+
     pol_ev = PolicyEvidence(
         policy_id=artifact.certification_policy_id,
         version=artifact.certification_policy_version,
         policy_hash=artifact.certification_policy_hash,
-        min_equivalence_score=0.80,
-        min_oracle_coverage=0.0,
+        min_equivalence_score=float(p_min_equiv),
+        min_oracle_coverage=float(p_min_cov),
+        block_on_critical_regression=bool(p_block_crit),
+        block_on_reference_inconsistent=bool(p_block_ref),
+        block_on_mutual_violation=bool(p_block_mut),
         satisfied=artifact.certified,
         blocking_reasons=artifact.blocking_reasons,
         warnings=artifact.warnings,
@@ -272,8 +293,14 @@ def build_evidence_dossier(
         verification_report=integrity_report,
     )
 
-    # 9. Audit Timeline (Query real audit events)
-    timeline_events = audit_logger.list_events(project_id=artifact.project_id, limit=20)
+    # 9. Audit Timeline (Query run-specific audit events strictly scoped to this certification_id)
+    timeline_events = audit_logger.list_events(
+        project_id=artifact.project_id,
+        certification_id=certification_id,
+        limit=100,
+    )
+    # Order chronologically (ascending by authoritative server timestamp)
+    timeline_events_sorted = sorted(timeline_events, key=lambda ev: ev.timestamp)
     timeline_list = [
         {
             "event_id": ev.event_id,
@@ -282,7 +309,7 @@ def build_evidence_dossier(
             "status": ev.status,
             "details": ev.details,
         }
-        for ev in reversed(timeline_events)
+        for ev in timeline_events_sorted
     ]
 
     # 10. Completeness Report

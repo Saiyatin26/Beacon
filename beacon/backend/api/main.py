@@ -1734,9 +1734,21 @@ def get_evidence_timeline_endpoint(
 @app.post("/api/v1/evidence/verify/{certification_id}")
 def verify_evidence_endpoint(certification_id: str):
     """Authoritatively reconstructs cryptographic hashes and verifies artifact integrity."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
+
     report = certification_repository.verify_certification_run_integrity(certification_id)
     if report.get("status") == "FAIL" and any("not found" in e for e in report.get("errors", [])):
         raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
+
+    audit_logger.log(
+        project_id=artifact.project_id,
+        action=AuditAction.INTEGRITY_VERIFY,
+        status="SUCCESS" if report.get("status") == "PASS" else "FAIL",
+        certification_id=certification_id,
+        details={"status": report.get("status"), "reasons": report.get("reasons", [])},
+    )
     return report
 
 
@@ -1768,31 +1780,26 @@ def list_auditor_notes_endpoint(
     certification_id: str,
     project_id: Optional[str] = None,
 ):
-    """Lists human reviewer notes for a certification run."""
+    """Lists human reviewer notes with project isolation."""
     artifact = certification_repository.get_artifact(certification_id)
     if not artifact:
         raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
-    if project_id and artifact.project_id != project_id:
-        raise HTTPException(status_code=403, detail=f"Project scope mismatch: Certificate belongs to '{artifact.project_id}'.")
+    
+    if project_id and project_id != artifact.project_id:
+        raise HTTPException(status_code=403, detail=f"Access denied: Certification belongs to project '{artifact.project_id}'.")
 
-    notes = auditor_notes_store.list_notes(certification_id=certification_id, project_id=project_id)
+    notes = auditor_notes_store.list_notes(certification_id=certification_id, project_id=artifact.project_id)
     return {"notes": [n.model_dump(mode="json") for n in notes]}
 
 
 @app.post("/api/v1/evidence/compare")
 def compare_runs_endpoint(req: RunCompareRequest):
-    """Performs side-by-side comparison of two certification runs."""
+    """Performs side-by-side differential analysis between two certification runs."""
     try:
-        diff_report = compare_certification_runs(
-            run_id_a=req.run_id_a,
-            run_id_b=req.run_id_b,
-            project_id=req.project_id,
-        )
-        return diff_report
+        comparison = compare_certification_runs(req.run_id_a, req.run_id_b)
+        return comparison
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
 
 
 @app.get("/api/v1/evidence/dossiers/{certification_id}/export")
@@ -1871,14 +1878,69 @@ def export_evidence_dossier_endpoint(
         cases = certification_repository.list_cases_for_input_set(dossier.execution_evidence.input_set_id, run_id=certification_id)
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["case_id", "case_index", "input_id", "input_hash", "classification", "severity", "oracle_result", "input_json", "legacy_output_json", "modern_output_json"])
-        for c in cases:
-            writer.writerow([c.case_id, c.case_index, c.input_id, c.input_hash, c.classification, c.severity, c.oracle_result, c.input_json, c.legacy_output_json, c.modern_output_json])
+        
+        is_custom = dossier.source_evidence.is_custom_dataset or dossier.project_id.startswith("proj_")
+        if is_custom:
+            # Sanitized/minimized columns for user-supplied/private datasets (NO raw input JSON or secret credentials)
+            writer.writerow([
+                "case_id",
+                "case_index",
+                "input_id",
+                "input_hash",
+                "classification",
+                "severity",
+                "oracle_result",
+                "violated_oracle_ids",
+                "legacy_output",
+                "modern_output",
+                "evidence_reference",
+            ])
+            for c in cases:
+                leg_out = sanitize_details({"out": c.legacy_output_json}).get("out", c.legacy_output_json) if isinstance(c.legacy_output_json, dict) else c.legacy_output_json
+                mod_out = sanitize_details({"out": c.modern_output_json}).get("out", c.modern_output_json) if isinstance(c.modern_output_json, dict) else c.modern_output_json
+                writer.writerow([
+                    c.case_id,
+                    c.case_index,
+                    c.input_id,
+                    c.input_hash,
+                    c.classification,
+                    c.severity,
+                    c.oracle_result,
+                    ";".join(c.violated_oracle_ids) if c.violated_oracle_ids else "",
+                    leg_out,
+                    mod_out,
+                    f"artifact://{certification_id}/cases/{c.case_index}",
+                ])
+        else:
+            # Built-in benchmark datasets: full standard case evidence columns
+            writer.writerow([
+                "case_id",
+                "case_index",
+                "input_id",
+                "input_hash",
+                "classification",
+                "severity",
+                "oracle_result",
+                "input_json",
+                "legacy_output_json",
+                "modern_output_json",
+            ])
+            for c in cases:
+                writer.writerow([
+                    c.case_id,
+                    c.case_index,
+                    c.input_id,
+                    c.input_hash,
+                    c.classification,
+                    c.severity,
+                    c.oracle_result,
+                    c.input_json,
+                    c.legacy_output_json,
+                    c.modern_output_json,
+                ])
+
         return Response(
             content=output.getvalue(),
             media_type="text/csv",
             headers={"Content-Disposition": f"attachment; filename=evidence_cases_{certification_id}.csv"}
         )
-
-
-
