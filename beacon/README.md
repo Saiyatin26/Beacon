@@ -129,16 +129,17 @@ The actual provider that produced the accepted response is truthfully preserved 
 ### 4. Canonical Discovery Configuration Hashing
 In `FULL_BEACON` mode, OracleSets are cached and content-addressed by a 18-parameter canonical JSON SHA-256 digest: `SET-{BENCHMARK}-FULL-{config_hash[:12]}`. Mutating any element (model, provider, prompt version, candidate generator version, evidence hash, validator version, or dataset checksum) invalidates the cache and forces fresh execution.
 
-### 5. 8-Point Cryptographic Integrity Verification
-Certificates can be verified via `POST /api/v1/certification/{id}/verify` checking:
-1. `artifact_integrity_valid`: Matches SHA-256 over canonical serialized artifact JSON.
-2. `case_count_valid`: Case count matches recorded dataset inputs $\times$ oracle count.
-3. `input_set_integrity_valid`: Input set hash matches persisted database record.
-4. `oracle_set_integrity_valid`: Oracle set hash matches canonical AST compilation.
-5. `policy_integrity_valid`: Policy rules match configured threshold parameters.
-6. `implementation_hashes_valid`: Legacy and modernized SHA-256 hashes are present and valid.
-7. `dataset_checksum_valid`: Dataset checksum matches benchmark registry specification.
-8. `secret_freedom_valid`: Zero API keys (`sk-ant-`, `sk-or-`, Mongo credentials) in artifact or cases.
+### 6. Phase 13 — Production-Grade 9-Step Certification Workflow
+Phase 13 establishes a production-grade, step-by-step guided certification interface:
+- **Step 1:** Target Benchmark Selection (Retail, Payroll, Medical, Loan Demo).
+- **Step 2:** Real-Time Dataset Specifications & Provenance Inspection.
+- **Step 3:** Evaluation Mode Selection (`CONTROLLED` vs `FULL_BEACON`).
+- **Step 4:** Multi-Tier Provider Hierarchy Configuration (`OpenRouter → Anthropic → Ollama → Offline`).
+- **Step 5:** Target Modernization Variant Selection (`Clean` vs `Buggy`).
+- **Step 6:** Pre-Flight Validation with Dataset Record & Adapter Verification.
+- **Step 7:** Execution with Atomic State Clearing & Duplicate Protection.
+- **Step 8:** Authoritative Status Outcome (`CERTIFIED`, `NOT_CERTIFIED`, `INSUFFICIENT_COVERAGE`) with Plain-Language Summaries.
+- **Step 9:** Interactive Evidence Drill-Down, Expandable Per-Oracle Verification, Case Explorer, Cryptographic Audit Verification, and JSON/Markdown/CSV Dossier Exports.
 
 ---
 
@@ -200,10 +201,10 @@ beacon/
 │   │   └── evaluator.py           Runtime observation evaluation against frozen OracleSet
 │   ├── cli.py             BEACON Command Line Interface
 │   └── api/               FastAPI REST API wiring all stages with audit & export endpoints
-├── frontend/              React + Vite + Recharts dashboard with Benchmark Catalog & Audit Trail
+├── frontend/              React + Vite + Recharts dashboard with 9-Step Production Workflow & Audit Trail
 ├── docs/                  Baseline documentation & architectural verification
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (176 passed tests)
+└── tests/                 Comprehensive pytest test suite (186 passed tests)
 ```
 
 ---

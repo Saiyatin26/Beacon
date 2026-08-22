@@ -3,20 +3,21 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 const API_BASE = "http://localhost:8000";
 
+// Reusable Design Tokens & Styles
 const cardStyle = {
   background: "#ffffff",
-  border: "1px solid #e5e7eb",
+  border: "1px solid #e2e8f0",
   borderRadius: "12px",
   padding: "20px",
-  boxShadow: "0 1px 3px rgba(0,0,0,0.05)",
+  boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
   marginBottom: "20px",
 };
 
 const badgeStyle = (bg, color, border) => ({
   display: "inline-flex",
   alignItems: "center",
-  gap: "6px",
-  padding: "4px 10px",
+  gap: "5px",
+  padding: "3px 10px",
   borderRadius: "9999px",
   fontSize: "12px",
   fontWeight: "600",
@@ -38,7 +39,7 @@ export default function App() {
   // Navigation Tabs
   const [activeTab, setActiveTab] = useState("benchmark"); // benchmark, history, audit, drift, loan_demo
 
-  // Benchmark Selection & Workflow State
+  // Benchmark Selection & Step Workflow State
   const [benchmarks, setBenchmarks] = useState([]);
   const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("retail_discount_pricing");
   const [selectedVariant, setSelectedVariant] = useState("clean_v2");
@@ -46,18 +47,18 @@ export default function App() {
   const [preferredProvider, setPreferredProvider] = useState("auto");
   const [benchmarkValidation, setBenchmarkValidation] = useState(null);
 
-  // Authoritative Active Certification Result (Single Source of Truth)
+  // Authoritative Active Certification Result
   const [activeResult, setActiveResult] = useState(null);
   const [activeCases, setActiveCases] = useState([]);
   const [caseFilter, setCaseFilter] = useState("ALL");
   const [expandedOracleId, setExpandedOracleId] = useState(null);
   const [cryptographicProof, setCryptographicProof] = useState(null);
 
-  // Historical Viewing State (explicitly labeled when viewing historical artifact)
+  // Historical Viewing State
   const [historicalArtifacts, setHistoricalArtifacts] = useState([]);
   const [viewingHistoricalArtifact, setViewingHistoricalArtifact] = useState(null);
 
-  // Continuous Drift State (benchmark-aware)
+  // Continuous Drift State
   const [driftSamples, setDriftSamples] = useState([]);
 
   // Legacy Loan Demo Sandbox State (strictly isolated)
@@ -157,7 +158,6 @@ export default function App() {
     setNotice(null);
     setError(null);
 
-    // Auto-select clean variant for new benchmark
     const spec = benchmarks.find((b) => b.benchmark_id === newBenchmarkId);
     if (spec && spec.modernized_adapters) {
       setSelectedVariant(Object.keys(spec.modernized_adapters)[0] || "clean_v2");
@@ -198,7 +198,7 @@ export default function App() {
     }
   }, [targetArtifact, caseFilter]);
 
-  // Pre-Flight Validation
+  // Step 6: Pre-Flight Validation Action
   const validateBenchmark = async () => {
     if (!selectedBenchmarkId) return;
     setBusy(true);
@@ -211,10 +211,10 @@ export default function App() {
       const data = await res.json();
       setBenchmarkValidation(data);
       if (data.is_valid) {
-        const cs = data.dataset_checksum ? ` (Checksum: ${data.dataset_checksum.slice(0, 12)}...)` : "";
-        setNotice(`Pre-flight validation passed for '${selectedBenchmarkId}': ${data.dataset_record_count} dataset inputs verified${cs}.`);
+        const cs = data.dataset_checksum ? ` (SHA-256: ${data.dataset_checksum.slice(0, 16)}...)` : "";
+        setNotice(`Pre-flight validation passed: ${data.dataset_record_count} dataset inputs verified${cs}. Ready to certify.`);
       } else {
-        setError(`Pre-flight validation failed: ${data.errors?.join(", ") || "Errors found."}`);
+        setError(`Pre-flight validation failed: ${data.errors?.join("; ") || "Adapter or dataset mismatch."}`);
       }
     } catch (e) {
       setError(`Pre-flight validation request failed: ${e.message}`);
@@ -223,7 +223,7 @@ export default function App() {
     }
   };
 
-  // Run Benchmark Equivalence Certification
+  // Step 7: Run Benchmark Equivalence Certification
   const runBenchmarkCertification = async () => {
     setBusy(true);
     setError(null);
@@ -255,7 +255,7 @@ export default function App() {
       if (isPass) {
         setNotice(`CERTIFIED: Equivalence established for ${selectedBenchmarkId} [${discoveryMode} • ${selectedVariant}].`);
       } else {
-        setNotice(`NOT CERTIFIED: Regressions detected for ${selectedBenchmarkId} [${discoveryMode} • ${selectedVariant}].`);
+        setNotice(`NOT CERTIFIED: Behavioral regressions detected for ${selectedBenchmarkId} [${discoveryMode} • ${selectedVariant}].`);
       }
     } catch (e) {
       setError(e.message);
@@ -264,7 +264,7 @@ export default function App() {
     }
   };
 
-  // Cryptographic Verification Action
+  // Cryptographic Verification Action (8-Point Integrity Check)
   const verifyArtifactIntegrity = async (certId) => {
     if (!certId) return;
     try {
@@ -317,7 +317,7 @@ export default function App() {
     <div style={{ minHeight: "100vh", background: "#f8fafc", color: "#1e293b", fontFamily: "'Inter', sans-serif" }}>
       {/* Top Header */}
       <header style={{ background: "#0f172a", color: "#f8fafc", padding: "16px 28px", borderBottom: "1px solid #1e293b" }}>
-        <div style={{ maxWidth: "1400px", margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ maxWidth: "1440px", margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <span style={{ fontSize: "24px" }}>🛡️</span>
             <div>
@@ -328,7 +328,7 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={badgeStyle("#1e293b", "#38bdf8", "#334155")}>Phase 12 Real-World Ready</span>
+            <span style={badgeStyle("#1e293b", "#38bdf8", "#334155")}>Phase 13 Production-Grade</span>
             <span style={badgeStyle("#1e293b", "#a7f3d0", "#334155")}>Deterministic Reproducibility</span>
           </div>
         </div>
@@ -336,7 +336,7 @@ export default function App() {
 
       {/* Main Navigation Bar */}
       <nav style={{ background: "#ffffff", borderBottom: "1px solid #e2e8f0", padding: "0 28px" }}>
-        <div style={{ maxWidth: "1400px", margin: "0 auto", display: "flex", gap: "24px" }}>
+        <div style={{ maxWidth: "1440px", margin: "0 auto", display: "flex", gap: "24px" }}>
           {[
             { id: "benchmark", label: "🎯 Benchmark Certification", desc: "Select & Certify Applications" },
             { id: "history", label: "📜 Certification History", desc: "Benchmark Runs & Fingerprints" },
@@ -371,7 +371,7 @@ export default function App() {
       </nav>
 
       {/* Main Container */}
-      <main style={{ maxWidth: "1400px", margin: "24px auto", padding: "0 28px" }}>
+      <main style={{ maxWidth: "1440px", margin: "24px auto", padding: "0 28px" }}>
         {/* Global Notifications */}
         {error && (
           <div style={{ background: "#fef2f2", border: "1px solid #f87171", color: "#991b1b", padding: "14px 18px", borderRadius: "8px", marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -387,19 +387,39 @@ export default function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 1: BENCHMARK CERTIFICATION WORKFLOW                                    */}
+        {/* TAB 1: PRODUCTION-GRADE 9-STEP CERTIFICATION WORKFLOW                     */}
         {/* ========================================================================= */}
         {activeTab === "benchmark" && (
           <div>
-            {/* Step 1 to 4 Configuration Panel */}
+            {/* Top Persistent Active Configuration Summary Bar */}
+            <div style={{ background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "10px", padding: "12px 18px", marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "16px", fontSize: "13px" }}>
+                <span><strong>Target:</strong> <span style={{ color: "#2563eb", fontWeight: "600" }}>{currentSpec?.name || selectedBenchmarkId}</span></span>
+                <span>•</span>
+                <span><strong>Mode:</strong> <span style={badgeStyle("#eff6ff", "#1e40af")}>{discoveryMode}</span></span>
+                <span>•</span>
+                <span><strong>Variant:</strong> <span style={{ fontWeight: "600" }}>{selectedVariant}</span></span>
+                <span>•</span>
+                <span><strong>Provider:</strong> <span style={{ color: "#475569" }}>{preferredProvider}</span></span>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                {benchmarkValidation?.is_valid ? (
+                  <span style={badgeStyle("#dcfce7", "#15803d", "#86efac")}>✅ Pre-Flight: Ready ({benchmarkValidation.dataset_record_count} cases)</span>
+                ) : (
+                  <span style={badgeStyle("#fef3c7", "#92400e", "#fde68a")}>⚠️ Pre-Flight: Validation Required</span>
+                )}
+              </div>
+            </div>
+
+            {/* Workflow Configuration Panel (Steps 1 - 7) */}
             <section style={cardStyle}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "14px", marginBottom: "18px" }}>
                 <div>
                   <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#0f172a" }}>
-                    Benchmark Equivalence Configuration
+                    Production-Grade Certification Workflow
                   </h2>
                   <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#64748b" }}>
-                    Select target benchmark application, inspect truthful provenance, choose evaluation mode and modernization variant.
+                    Follow Steps 1 through 7 to configure target application, inspect dataset provenance, validate adapters, and execute certification.
                   </p>
                 </div>
                 <div style={{ display: "flex", gap: "10px" }}>
@@ -417,34 +437,34 @@ export default function App() {
                       cursor: busy ? "not-allowed" : "pointer",
                     }}
                   >
-                    🔍 Pre-Flight Validate
+                    {busy ? "Validating..." : "Step 6: 🔍 Pre-Flight Validate"}
                   </button>
                   <button
                     onClick={runBenchmarkCertification}
-                    disabled={busy}
+                    disabled={busy || !benchmarkValidation?.is_valid}
                     style={{
-                      background: "#2563eb",
+                      background: benchmarkValidation?.is_valid ? "#2563eb" : "#94a3b8",
                       color: "#ffffff",
                       border: "none",
                       padding: "8px 20px",
                       borderRadius: "6px",
                       fontWeight: "600",
                       fontSize: "13px",
-                      cursor: busy ? "not-allowed" : "pointer",
-                      boxShadow: "0 1px 2px rgba(37,99,235,0.2)",
+                      cursor: busy || !benchmarkValidation?.is_valid ? "not-allowed" : "pointer",
+                      boxShadow: benchmarkValidation?.is_valid ? "0 1px 2px rgba(37,99,235,0.2)" : "none",
                     }}
                   >
-                    {busy ? "Running Certification..." : "⚡ Run Equivalence Certification"}
+                    {busy ? "Executing Certification..." : "Step 7: ⚡ Run Equivalence Certification"}
                   </button>
                 </div>
               </div>
 
-              {/* Grid of Controls */}
+              {/* Grid of Steps 1 to 5 Controls */}
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1.2fr 1fr", gap: "14px" }}>
-                {/* 1. Benchmark Selector */}
+                {/* Step 1: Benchmark Selector */}
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
-                    1. Target Benchmark
+                    Step 1 — Select Benchmark
                   </label>
                   <select
                     value={selectedBenchmarkId}
@@ -467,10 +487,10 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* 2. Evaluation Mode */}
+                {/* Step 3: Evaluation Mode */}
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
-                    2. Evaluation Mode
+                    Step 3 — Evaluation Mode
                   </label>
                   <div style={{ display: "flex", gap: "6px" }}>
                     <button
@@ -488,7 +508,7 @@ export default function App() {
                       }}
                     >
                       CONTROLLED<br />
-                      <span style={{ fontSize: "9px", fontWeight: "400", color: "#64748b" }}>Baseline</span>
+                      <span style={{ fontSize: "9px", fontWeight: "400", color: "#64748b" }}>Baseline Oracles</span>
                     </button>
                     <button
                       onClick={() => handleModeChange("FULL_BEACON")}
@@ -505,15 +525,15 @@ export default function App() {
                       }}
                     >
                       FULL_BEACON<br />
-                      <span style={{ fontSize: "9px", fontWeight: "400", color: "#64748b" }}>Discovered</span>
+                      <span style={{ fontSize: "9px", fontWeight: "400", color: "#64748b" }}>Discovered Oracles</span>
                     </button>
                   </div>
                 </div>
 
-                {/* 3. Model Provider Hierarchy */}
+                {/* Step 4: Provider Hierarchy */}
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
-                    3. Provider Hierarchy
+                    Step 4 — Provider Hierarchy
                   </label>
                   <select
                     value={preferredProvider}
@@ -536,10 +556,10 @@ export default function App() {
                   </select>
                 </div>
 
-                {/* 4. Modernization Variant */}
+                {/* Step 5: Modernization Variant */}
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
-                    4. Target Variant
+                    Step 5 — Target Variant
                   </label>
                   <select
                     value={selectedVariant}
@@ -568,13 +588,13 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Provenance & Specifications Deep-Dive Banner */}
+              {/* Step 2: Detailed Dataset & Provenance Inspection Card */}
               {currentSpec && (
                 <div style={{ marginTop: "16px", background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px 18px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                       <span style={{ fontWeight: "700", fontSize: "13px", color: "#0f172a" }}>
-                        Truthful Provenance Metadata
+                        Step 2 — Dataset Specifications & Provenance
                       </span>
                       <span style={badgeStyle("#dbeafe", "#1e40af", "#93c5fd")}>
                         {currentSpec.provenance_category || "REALISTIC_SYNTHETIC"}
@@ -585,7 +605,7 @@ export default function App() {
                     </div>
                     {currentSpec.dataset_checksum && (
                       <div style={{ fontSize: "12px", color: "#475569", fontFamily: "monospace" }}>
-                        Dataset SHA-256: <strong>{currentSpec.dataset_checksum.slice(0, 16)}...</strong>
+                        Dataset SHA-256: <strong>{currentSpec.dataset_checksum.slice(0, 24)}...</strong>
                       </div>
                     )}
                   </div>
@@ -605,20 +625,25 @@ export default function App() {
                 </div>
               )}
 
-              {/* Pre-Flight Validation Output */}
+              {/* Step 6 Pre-Flight Validation Banner */}
               {benchmarkValidation && (
                 <div style={{ marginTop: "14px", padding: "12px 16px", borderRadius: "8px", background: benchmarkValidation.is_valid ? "#f0fdf4" : "#fef2f2", border: `1px solid ${benchmarkValidation.is_valid ? "#86efac" : "#fca5a5"}` }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span style={{ fontSize: "13px", fontWeight: "600", color: benchmarkValidation.is_valid ? "#166534" : "#991b1b" }}>
-                      {benchmarkValidation.is_valid ? "✅ Pre-Flight Validation Passed" : "❌ Pre-Flight Validation Failed"}
+                      {benchmarkValidation.is_valid ? "✅ Step 6: Pre-Flight Validation Passed" : "❌ Step 6: Pre-Flight Validation Failed"}
                     </span>
                     <span style={{ fontSize: "12px", color: "#475569" }}>
-                      Dataset Record Count: <strong>{benchmarkValidation.dataset_record_count}</strong> | Legacy Adapter: <strong>{benchmarkValidation.legacy_adapter_status || "OK"}</strong>
+                      Verified Dataset Inputs: <strong>{benchmarkValidation.dataset_record_count}</strong> | Legacy Adapter: <strong>{benchmarkValidation.legacy_adapter_status || "OK"}</strong>
                     </span>
                   </div>
                   {benchmarkValidation.dataset_checksum && (
                     <div style={{ fontSize: "11px", color: "#166534", marginTop: "4px", fontFamily: "monospace" }}>
                       Propagated Checksum: {benchmarkValidation.dataset_checksum}
+                    </div>
+                  )}
+                  {benchmarkValidation.errors?.length > 0 && (
+                    <div style={{ fontSize: "12px", color: "#991b1b", marginTop: "4px" }}>
+                      Errors: {benchmarkValidation.errors.join("; ")}
                     </div>
                   )}
                 </div>
@@ -646,7 +671,7 @@ export default function App() {
             )}
 
             {/* ========================================================================= */}
-            {/* AUTHORITATIVE CERTIFICATION RESULT PRESENTATION                           */}
+            {/* STEP 8: AUTHORITATIVE CERTIFICATION RESULT PRESENTATION                   */}
             {/* ========================================================================= */}
             {targetArtifact ? (
               <div>
@@ -667,7 +692,7 @@ export default function App() {
                   <div>
                     <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "6px" }}>
                       <span style={{ fontSize: "20px", fontWeight: "800", letterSpacing: "-0.5px" }}>
-                        {targetArtifact.status === "CERTIFIED"
+                        Step 8 — Outcome: {targetArtifact.status === "CERTIFIED"
                           ? "CERTIFIED: Quantified Behavioral Equivalence Established"
                           : targetArtifact.status === "CERTIFIED_WITH_WARNINGS"
                           ? "CERTIFIED WITH WARNINGS: Non-Critical Discrepancies Permitted"
@@ -675,7 +700,7 @@ export default function App() {
                           ? "CERTIFICATION BLOCKED: Inadequate Oracle Coverage across Tested Input Domain"
                           : targetArtifact.status === "REFERENCE_INCONSISTENT"
                           ? "CERTIFICATION BLOCKED: Reference Inconsistency Detected in Legacy Implementation"
-                          : "NOT CERTIFIED: BEACON Detected Behavioral Regressions Across Target Implementation"}
+                          : "NOT CERTIFIED: Behavioral Regressions Detected Across Target Implementation"}
                       </span>
                       <span
                         style={badgeStyle(
@@ -733,6 +758,27 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* Plain-Language Outcome Explanation */}
+                <div style={{ ...cardStyle, background: targetArtifact.status === "CERTIFIED" ? "#f0fdf4" : (targetArtifact.status === "NOT_CERTIFIED" ? "#fef2f2" : "#f8fafc"), border: `1px solid ${targetArtifact.status === "CERTIFIED" ? "#86efac" : (targetArtifact.status === "NOT_CERTIFIED" ? "#fca5a5" : "#cbd5e1")}` }}>
+                  <h4 style={{ margin: "0 0 6px 0", fontSize: "14px", fontWeight: "700", color: targetArtifact.status === "CERTIFIED" ? "#166534" : (targetArtifact.status === "NOT_CERTIFIED" ? "#991b1b" : "#334155") }}>
+                    Plain-Language Certification Summary
+                  </h4>
+                  <p style={{ margin: 0, fontSize: "13px", color: targetArtifact.status === "CERTIFIED" ? "#14532d" : (targetArtifact.status === "NOT_CERTIFIED" ? "#7f1d1d" : "#475569"), lineHeight: "1.5" }}>
+                    {targetArtifact.status === "CERTIFIED" && (
+                      <>All <strong>{targetArtifact.metrics?.oracle_count || targetArtifact.oracle_summaries?.length || 0}</strong> evaluated behavioral invariants matched legacy behavior perfectly across all <strong>{targetArtifact.metrics?.unique_input_count || 0}</strong> canonical test inputs with zero regressions. Behavioral equivalence is certified under policy <code>{targetArtifact.certification_policy_id}</code>.</>
+                    )}
+                    {targetArtifact.status === "NOT_CERTIFIED" && (
+                      <>Modernized implementation produced <strong>{targetArtifact.metrics?.regression_case_count || targetArtifact.regressions?.length || 0} behavioral regressions</strong> violating <strong>{targetArtifact.regressions?.length > 0 ? targetArtifact.regressions.map(r => r.oracle_id).filter((v, i, a) => a.indexOf(v) === i).join(", ") : "invariant rules"}</strong>. Exact counterexamples are pinpointed below.</>
+                    )}
+                    {targetArtifact.status === "INSUFFICIENT_COVERAGE" && (
+                      <>Oracle coverage ({((targetArtifact.metrics?.oracle_coverage_pct || 0) * 100).toFixed(0)}%) or tested probe density did not satisfy the minimum policy threshold (80%). Certification cannot be established.</>
+                    )}
+                    {targetArtifact.status === "REFERENCE_INCONSISTENT" && (
+                      <>Legacy reference implementation itself contradicted one or more validated invariant oracles. Equivalence certification is blocked.</>
+                    )}
+                  </p>
+                </div>
+
                 {/* 8-Point Cryptographic Proof Verification Result */}
                 {cryptographicProof && (
                   <div style={{ background: cryptographicProof.status === "PASS" ? "#f0fdf4" : "#fef2f2", border: `1px solid ${cryptographicProof.status === "PASS" ? "#86efac" : "#fca5a5"}`, borderRadius: "8px", padding: "16px 20px", marginBottom: "20px" }}>
@@ -760,17 +806,10 @@ export default function App() {
                         <strong>Integrity Errors:</strong> {cryptographicProof.errors.join("; ")}
                       </div>
                     )}
-
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginTop: "12px", paddingTop: "10px", borderTop: "1px solid #e2e8f0", fontSize: "11px", color: "#475569", fontFamily: "monospace" }}>
-                      <div>Artifact Hash: {cryptographicProof.artifact_hash?.slice(0, 24)}...</div>
-                      <div>Input Set Hash: {cryptographicProof.input_set_hash?.slice(0, 24)}...</div>
-                      <div>Legacy Adapter Hash: {cryptographicProof.legacy_implementation_hash?.slice(0, 24) || "—"}</div>
-                      <div>Modern Adapter Hash: {cryptographicProof.modernized_implementation_hash?.slice(0, 24) || "—"}</div>
-                    </div>
                   </div>
                 )}
 
-                {/* 2. Authoritative Disambiguated Summary Metrics */}
+                {/* 2. Disambiguated Metric KPI Cards */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gap: "10px", marginBottom: "20px" }}>
                   {[
                     { label: "Score", val: `${((targetArtifact.score || 0) * 100).toFixed(1)}%`, color: targetArtifact.score >= 0.8 ? "#059669" : "#dc2626" },
@@ -791,12 +830,16 @@ export default function App() {
                   ))}
                 </div>
 
-                {/* 3. Oracle Provenance & Source Card */}
+                {/* ========================================================================= */}
+                {/* STEP 9: EVIDENCE INSPECTION AND DETAILED AUDIT DRILL-DOWN                 */}
+                {/* ========================================================================= */}
+
+                {/* Oracle Provenance & Discovery Pipeline Card */}
                 <div style={cardStyle}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <div>
                       <span style={{ fontSize: "12px", fontWeight: "600", color: "#64748b", textTransform: "uppercase" }}>
-                        Oracle Set Provenance & Discovery Pipeline
+                        Step 9 — Oracle Set Provenance & Discovery Pipeline
                       </span>
                       <div style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "4px" }}>
                         <span style={badgeStyle("#eff6ff", "#1e40af", "#bfdbfe")}>
@@ -819,7 +862,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 4. Per-Oracle Verification Table */}
+                {/* Per-Oracle Verification Breakdown Table */}
                 <div style={cardStyle}>
                   <h3 style={{ margin: "0 0 14px 0", fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
                     Per-Oracle Verification Breakdown ({targetArtifact.oracle_summaries?.length || 0} Evaluated Oracles)
@@ -876,7 +919,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 5. Concrete Counterexamples / Behavioral Regressions Explorer */}
+                {/* Concrete Counterexamples / Behavioral Regressions Explorer */}
                 {targetArtifact.regressions?.length > 0 && (
                   <div style={cardStyle}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
@@ -902,7 +945,7 @@ export default function App() {
                           {targetArtifact.regressions.map((reg, idx) => (
                             <tr key={idx} style={{ borderBottom: "1px solid #fee2e2" }}>
                               <td style={{ padding: "8px 10px", fontWeight: "600", fontFamily: "monospace" }}>{reg.input_id}</td>
-                              <td style={{ padding: "8px 10px", color: "#64748b", fontFamily: "monospace" }}>{reg.input_hash || "—"}</td>
+                              <td style={{ padding: "8px 10px", color: "#64748b", fontFamily: "monospace" }}>{reg.input_hash ? reg.input_hash.slice(0, 16) + "..." : "—"}</td>
                               <td style={{ padding: "8px 10px", fontFamily: "monospace" }}>
                                 {JSON.stringify(reg.input_values)}
                               </td>
@@ -924,7 +967,7 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 6. Case-Level Audit Trail Explorer */}
+                {/* Execution Case Explorer */}
                 <div style={cardStyle}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
                     <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
@@ -984,7 +1027,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 7. Cryptographic Fingerprints & Hashes */}
+                {/* Cryptographic Audit Fingerprints & Hashes */}
                 <div style={cardStyle}>
                   <h3 style={{ margin: "0 0 12px 0", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
                     Cryptographic Audit Fingerprints & Hashes
@@ -1018,7 +1061,7 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              /* No Active Run / Prompt to Execute */
+              /* Ready / Empty State Prompt to Validate & Execute */
               <div style={{ ...cardStyle, textAlign: "center", padding: "48px 24px" }}>
                 <span style={{ fontSize: "40px" }}>🎯</span>
                 <h3 style={{ margin: "12px 0 6px", fontSize: "18px", fontWeight: "700", color: "#0f172a" }}>
@@ -1026,7 +1069,7 @@ export default function App() {
                 </h3>
                 <p style={{ margin: "0 auto 20px", maxWidth: "600px", fontSize: "14px", color: "#64748b" }}>
                   Selected Configuration: <strong>{discoveryMode}</strong> mode with <strong>{selectedVariant}</strong>.
-                  Click below to execute pre-flight checks or run equivalence certification.
+                  Run Step 6 Pre-Flight Validation to verify dataset inputs and adapter bindings before executing certification.
                 </p>
                 <div style={{ display: "flex", justifyContent: "center", gap: "12px" }}>
                   <button
@@ -1043,23 +1086,23 @@ export default function App() {
                       cursor: "pointer",
                     }}
                   >
-                    🔍 Pre-Flight Validate
+                    Step 6: 🔍 Pre-Flight Validate
                   </button>
                   <button
                     onClick={runBenchmarkCertification}
-                    disabled={busy}
+                    disabled={busy || !benchmarkValidation?.is_valid}
                     style={{
-                      background: "#2563eb",
+                      background: benchmarkValidation?.is_valid ? "#2563eb" : "#94a3b8",
                       color: "#ffffff",
                       border: "none",
                       padding: "10px 24px",
                       borderRadius: "6px",
                       fontWeight: "600",
                       fontSize: "14px",
-                      cursor: "pointer",
+                      cursor: busy || !benchmarkValidation?.is_valid ? "not-allowed" : "pointer",
                     }}
                   >
-                    {busy ? "Executing Certification..." : "⚡ Run Equivalence Certification"}
+                    {busy ? "Executing Certification..." : "Step 7: ⚡ Run Equivalence Certification"}
                   </button>
                 </div>
               </div>
@@ -1206,8 +1249,8 @@ export default function App() {
                     <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "16px" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
                         <span style={{ fontSize: "18px" }}>🛡️</span>
-                        <span style={{ fontWeight: "700", fontSize: "14px", color: "#166534" }}>
-                          Verification Result: VALID
+                        <span style={{ fontWeight: "700", fontSize: "14px", color: cryptographicProof.status === "PASS" ? "#166534" : "#991b1b" }}>
+                          Verification Result: {cryptographicProof.status}
                         </span>
                       </div>
                       <div style={{ display: "flex", flexDirection: "column", gap: "10px", fontSize: "12px", fontFamily: "monospace" }}>
@@ -1217,11 +1260,15 @@ export default function App() {
                         </div>
                         <div>
                           <span style={{ color: "#64748b" }}>Artifact Integrity:</span>
-                          <div style={{ color: "#166534", fontWeight: "600" }}>{cryptographicProof.artifact_integrity_valid ? "VALID (SHA-256 Confirmed)" : "FAIL"}</div>
+                          <div style={{ color: cryptographicProof.artifact_integrity_valid ? "#166534" : "#991b1b", fontWeight: "600" }}>
+                            {cryptographicProof.artifact_integrity_valid ? "VALID (SHA-256 Confirmed)" : "FAIL"}
+                          </div>
                         </div>
                         <div>
                           <span style={{ color: "#64748b" }}>Input Set Integrity:</span>
-                          <div style={{ color: "#166534", fontWeight: "600" }}>{cryptographicProof.input_set_integrity_valid ? "VALID (Canonical Inputs Match)" : "FAIL"}</div>
+                          <div style={{ color: cryptographicProof.input_set_integrity_valid ? "#166534" : "#991b1b", fontWeight: "600" }}>
+                            {cryptographicProof.input_set_integrity_valid ? "VALID (Canonical Inputs Match)" : "FAIL"}
+                          </div>
                         </div>
                         <div>
                           <span style={{ color: "#64748b" }}>Content Hash:</span>
