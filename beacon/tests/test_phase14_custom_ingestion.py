@@ -1164,3 +1164,134 @@ def test_acceptance_test_j_and_k_idempotency_and_force_recompute(client):
     )
     art3 = res3.json()
     assert art3["certification_id"] != art1["certification_id"]
+
+
+# ==============================================================================
+# 7. Arbitrary Custom Dataset & Discovered OracleSet Isolation
+# ==============================================================================
+
+def test_arbitrary_custom_dataset_cannot_receive_retail_oracleset(client):
+    """Verifies that an arbitrary custom dataset without an OracleSet cannot automatically receive Retail OracleSet,
+    and returns INSUFFICIENT_COVERAGE outcome without silently binding Retail oracles.
+    """
+    arbitrary_payload = json.dumps([
+        {"sensor_reading": 12.5, "pressure_psi": 101.3, "device_id": "DEV-01"},
+        {"sensor_reading": 45.0, "pressure_psi": 88.0, "device_id": "DEV-02"},
+    ])
+
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_arbitrary",
+            "dataset_name": "Arbitrary IoT Sensor Dataset",
+            "data_format": "JSON",
+            "raw_content": arbitrary_payload,
+            "declared_provenance": "USER_SUPPLIED",
+        },
+    )
+    assert res_up.status_code == 200
+    ds_id = res_up.json()["dataset_id"]
+
+    # Pre-flight in FULL_BEACON mode WITHOUT explicit oracle_set_id
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_arbitrary",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "FULL_BEACON",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+        },
+    )
+    assert val_res.status_code == 200
+    val_data = val_res.json()
+    
+    # Must NOT have received Retail OracleSet
+    assert val_data["oracle_set_id"] != "SET-RETAIL-CONTROLLED-v1"
+    assert "SET-RETAIL" not in val_data["oracle_set_id"]
+    assert val_data["oracle_set_id"] == "SET-EMPTY"
+    assert any("INSUFFICIENT_COVERAGE" in w or "No compatible validated OracleSet" in w for w in val_data["warnings"])
+    
+    fp = val_data["config_fingerprint"]
+
+    # Certify in FULL_BEACON mode WITHOUT explicit oracle_set_id
+    res_cert = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_arbitrary",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "FULL_BEACON",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+            "config_fingerprint": fp,
+        },
+    )
+    assert res_cert.status_code == 200
+    art = res_cert.json()
+    
+    # Authoritative outcome must be INSUFFICIENT_COVERAGE
+    assert art["status"] == "INSUFFICIENT_COVERAGE"
+    assert art["oracle_set_id"] == "SET-EMPTY"
+    assert art["metrics"]["oracle_count"] == 0
+    assert art["metrics"]["oracle_coverage_pct"] == 0.0
+    assert art["certified"] is False
+
+
+def test_full_beacon_discovery_without_explicit_oracleset_on_compatible_data(client):
+    """Verifies that FULL_BEACON discovery without explicit oracle_set_id on a compatible dataset
+    successfully discovers and binds the compatible OracleSet via the discovery pipeline.
+    """
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_disc_compat",
+            "dataset_name": "Retail Compatible Dataset",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+            "declared_provenance": "USER_SUPPLIED",
+        },
+    )
+    assert res_up.status_code == 200
+    ds_id = res_up.json()["dataset_id"]
+
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_disc_compat",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "FULL_BEACON",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+        },
+    )
+    assert val_res.status_code == 200
+    val_data = val_res.json()
+    assert val_data["oracle_set_id"] != "SET-EMPTY"
+    assert "FULL" in val_data["oracle_set_id"]
+    fp = val_data["config_fingerprint"]
+
+    res_cert = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_disc_compat",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "FULL_BEACON",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+            "config_fingerprint": fp,
+        },
+    )
+    assert res_cert.status_code == 200
+    art = res_cert.json()
+    assert art["status"] == "CERTIFIED"
+    assert art["metrics"]["oracle_count"] > 0
+    assert art["certified"] is True
+

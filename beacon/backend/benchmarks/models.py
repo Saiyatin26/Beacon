@@ -123,6 +123,8 @@ class BenchmarkValidationResult(BaseModel):
     legacy_implementation_hash: str = ""
     modernized_implementation_hash: str = ""
     metadata_provenance_valid: bool = True
+    oracle_set_id: str = ""
+    oracle_set_hash: str = ""
 
 
 class BenchmarkExecutionManifest(BaseModel):

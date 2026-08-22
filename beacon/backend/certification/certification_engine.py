@@ -67,7 +67,44 @@ class CertificationEngine:
 
         # 1. OracleSet Integrity and Content Hash Verification
         if not oracle_set.oracles:
-            raise ValueError(f"OracleSet #{oracle_set.oracle_set_id} contains no oracles.")
+            logger.warning(
+                f"OracleSet #{oracle_set.oracle_set_id} contains no oracles. "
+                "Behavioral equivalence coverage is insufficient to certify."
+            )
+            empty_cert_id = f"CERT-IC-{uuid.uuid4().hex[:8]}"
+            temp_ic = CertificationArtifact(
+                certification_id=empty_cert_id,
+                project_id=project_id,
+                legacy_version=legacy_adapter.version,
+                modernized_version=modern_adapter.version,
+                oracle_set_id=oracle_set.oracle_set_id,
+                oracle_set_version=getattr(oracle_set, "version", "1.0.0"),
+                oracle_set_hash=oracle_set.oracle_set_hash,
+                input_set_id="",
+                input_set_hash="",
+                certification_policy_id=cert_policy.policy_id,
+                certification_policy_version=cert_policy.version,
+                certification_policy_hash=pol_hash,
+                certification_engine_version="1.0.0",
+                timestamp=timestamp,
+                status=CertificationStatus.INSUFFICIENT_COVERAGE,
+                certified=False,
+                score=0.0,
+                metrics=CertificationMetrics(
+                    unique_input_count=len(test_inputs) if test_inputs else 0,
+                    oracle_count=0,
+                    oracle_coverage_pct=0.0,
+                ),
+                domain_scores={},
+                oracle_summaries=[],
+                regressions=[],
+                reference_inconsistencies=[],
+                warnings=[],
+                blocking_reasons=["Insufficient oracle coverage: 0 oracles available to evaluate behavioral equivalence"],
+                content_hash="",
+            )
+            ic_artifact = temp_ic.model_copy(update={"content_hash": compute_artifact_content_hash(temp_ic)})
+            return certification_repository.save_artifact(ic_artifact)
 
         content_hashes = [o.content_hash for o in oracle_set.oracles]
         expected_set_hash = compute_oracle_set_hash(content_hashes)
@@ -395,7 +432,12 @@ class CertificationEngine:
         final_status: CertificationStatus = CertificationStatus.CERTIFIED
 
         # Flow Step 1: Coverage Check
-        if coverage_pct < cert_policy.min_oracle_coverage:
+        if oracle_count == 0:
+            blocking_reasons.append(
+                "Insufficient oracle coverage: 0 oracles available to evaluate behavioral equivalence"
+            )
+            final_status = CertificationStatus.INSUFFICIENT_COVERAGE
+        elif coverage_pct < cert_policy.min_oracle_coverage:
             blocking_reasons.append(
                 f"Insufficient oracle coverage: {oracles_exercised_count}/{oracle_count} oracles exercised "
                 f"({coverage_pct * 100:.1f}% vs required {cert_policy.min_oracle_coverage * 100:.1f}%)"
