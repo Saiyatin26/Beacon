@@ -45,6 +45,13 @@ class Settings:
     # Architecture doc Section 7.5
     drift_alert_delta_pct: float = float(os.getenv("DRIFT_ALERT_DELTA_PCT", "2.0"))
 
+    # Phase 16 Workload & Resource Limits
+    max_dataset_size_bytes: int = int(os.getenv("MAX_DATASET_SIZE_BYTES", str(10 * 1024 * 1024)))
+    max_input_records: int = int(os.getenv("MAX_INPUT_RECORDS", "5000"))
+    max_request_body_bytes: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(15 * 1024 * 1024)))
+    max_concurrent_jobs: int = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))
+    beacon_env: str = os.getenv("BEACON_ENV", "production")
+
     # CORS Allowed Origins
     cors_origins: list[str] = [
         origin.strip()

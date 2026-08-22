@@ -122,6 +122,47 @@ export default function App() {
   const [comparisonResult, setComparisonResult] = useState(null);
   const [comparingRuns, setComparingRuns] = useState(false);
 
+  // =========================================================================
+  // Phase 16: Operations, Health & Reliability State
+  // =========================================================================
+  const [operationsSummary, setOperationsSummary] = useState(null);
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [operationsProjectFilter, setOperationsProjectFilter] = useState("");
+  const [autoRefreshOperations, setAutoRefreshOperations] = useState(false);
+
+  const loadOperationsSummary = async () => {
+    setOperationsLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/operations/summary`);
+      if (res.ok) {
+        const data = await res.json();
+        setOperationsSummary(data);
+      }
+    } catch (e) {
+      console.error("Operations summary fetch error:", e);
+    } finally {
+      setOperationsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === "operations") {
+      loadOperationsSummary();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    let interval = null;
+    if (activeTab === "operations" && autoRefreshOperations) {
+      interval = setInterval(() => {
+        loadOperationsSummary();
+      }, 3000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [activeTab, autoRefreshOperations]);
+
   // Clear previous validation and active result whenever ANY certification-affecting config changes
   const invalidateValidationAndActiveState = () => {
     setBenchmarkValidation(null);
@@ -691,6 +732,7 @@ export default function App() {
             { id: "benchmark", label: "🎯 Benchmark Certification", desc: "Select & Certify Applications" },
             { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },
             { id: "dossier", label: "📑 Evidence Dossier", desc: "Explainability & Traceability" },
+            { id: "operations", label: "⚙️ Operations & Reliability", desc: "System Health, Metrics & Jobs" },
             { id: "history", label: "📜 Certification History", desc: "Benchmark Runs & Fingerprints" },
             { id: "audit", label: "🔒 Audit Trail & Proofs", desc: "Cryptographic Verification" },
             { id: "drift", label: "📈 Drift Monitoring", desc: "Post-Migration Live Drift" },
@@ -700,6 +742,7 @@ export default function App() {
               key={tab.id}
               onClick={() => {
                 setActiveTab(tab.id);
+                if (tab.id === "operations") loadOperationsSummary();
                 if (tab.id === "loan_demo" && loanRuns.length === 0) loadLoanDemoData();
                 if (tab.id === "dossier" && !dossierData) {
                   const targetId = activeResult?.certification_id || customActiveResult?.certification_id || (historicalArtifacts.length > 0 ? historicalArtifacts[0].certification_id : "");
@@ -2483,6 +2526,283 @@ export default function App() {
                 </p>
               </div>
             )}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: OPERATIONS, HEALTH & RELIABILITY DASHBOARD                          */}
+        {/* ========================================================================= */}
+        {activeTab === "operations" && (
+          <div>
+            {/* 1. TOP SYSTEM HEALTH & CONTROLS BANNER */}
+            <div style={{ ...cardStyle, background: "#0f172a", color: "#f8fafc", border: "1px solid #1e293b" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "16px" }}>
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "4px" }}>
+                    <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#f8fafc" }}>
+                      ⚙️ Operational Diagnostics & Health Matrix
+                    </h2>
+                    <span style={badgeStyle(
+                      operationsSummary?.system_status === "HEALTHY" ? "#064e3b" : "#78350f",
+                      operationsSummary?.system_status === "HEALTHY" ? "#a7f3d0" : "#fde68a",
+                      operationsSummary?.system_status === "HEALTHY" ? "#059669" : "#d97706"
+                    )}>
+                      {operationsSummary?.system_status || "CHECKING"}
+                    </span>
+                  </div>
+                  <p style={{ margin: 0, fontSize: "13px", color: "#94a3b8" }}>
+                    Continuous observability, liveness/readiness probes, non-sensitive diagnostics, and lifecycle telemetry.
+                  </p>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#cbd5e1", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={autoRefreshOperations}
+                      onChange={(e) => setAutoRefreshOperations(e.target.checked)}
+                    />
+                    Auto-refresh (3s)
+                  </label>
+                  <button
+                    onClick={loadOperationsSummary}
+                    disabled={operationsLoading}
+                    style={{
+                      background: "#3b82f6",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "8px 14px",
+                      borderRadius: "6px",
+                      fontWeight: "600",
+                      fontSize: "13px",
+                      cursor: operationsLoading ? "not-allowed" : "pointer",
+                    }}
+                  >
+                    {operationsLoading ? "Refreshing..." : "🔄 Refresh Metrics"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status Pills Grid */}
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "14px", marginTop: "18px" }}>
+                <div style={{ background: "#1e293b", padding: "12px 14px", borderRadius: "8px", border: "1px solid #334155" }}>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", textTransform: "uppercase", fontWeight: "600" }}>Liveness Probe (/health/live)</div>
+                  <div style={{ fontSize: "16px", fontWeight: "700", color: operationsSummary?.liveness === "UP" ? "#34d399" : "#f87171", marginTop: "4px" }}>
+                    ● {operationsSummary?.liveness || "UP"}
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>Process vital & responsive</div>
+                </div>
+
+                <div style={{ background: "#1e293b", padding: "12px 14px", borderRadius: "8px", border: "1px solid #334155" }}>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", textTransform: "uppercase", fontWeight: "600" }}>Readiness Probe (/health/ready)</div>
+                  <div style={{ fontSize: "16px", fontWeight: "700", color: operationsSummary?.readiness === "READY" ? "#34d399" : "#f87171", marginTop: "4px" }}>
+                    ● {operationsSummary?.readiness || "READY"}
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>Accepting certification workloads</div>
+                </div>
+
+                <div style={{ background: "#1e293b", padding: "12px 14px", borderRadius: "8px", border: "1px solid #334155" }}>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", textTransform: "uppercase", fontWeight: "600" }}>Total Jobs Executed</div>
+                  <div style={{ fontSize: "16px", fontWeight: "700", color: "#38bdf8", marginTop: "4px" }}>
+                    {operationsSummary?.metrics?.certification_runs_total ?? 0}
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>Success Rate: {(((operationsSummary?.metrics?.certification_runs_successful || 0) / Math.max(operationsSummary?.metrics?.certification_runs_total || 1, 1)) * 100).toFixed(0)}%</div>
+                </div>
+
+                <div style={{ background: "#1e293b", padding: "12px 14px", borderRadius: "8px", border: "1px solid #334155" }}>
+                  <div style={{ fontSize: "11px", color: "#94a3b8", textTransform: "uppercase", fontWeight: "600" }}>Avg Certification Latency</div>
+                  <div style={{ fontSize: "16px", fontWeight: "700", color: "#fbbf24", marginTop: "4px" }}>
+                    {(operationsSummary?.metrics?.avg_certification_duration_ms || 0).toFixed(1)} ms
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>Preflight avg: {(operationsSummary?.metrics?.avg_preflight_duration_ms || 0).toFixed(1)} ms</div>
+                </div>
+              </div>
+            </div>
+
+            {/* 2. DEPENDENCY HEALTH MATRIX */}
+            <div style={cardStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
+                  🔌 Subsystem & Dependency Status
+                </h3>
+                <span style={{ fontSize: "12px", color: "#64748b" }}>Zero secret/credential exposure guaranteed</span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "14px" }}>
+                {operationsSummary?.dependencies && Object.entries(operationsSummary.dependencies).map(([key, dep]) => {
+                  const isHealthy = dep.status === "healthy";
+                  const isDegraded = dep.status === "degraded" || dep.status === "not_configured";
+                  const statusBg = isHealthy ? "#ecfdf5" : (isDegraded ? "#fffbeb" : "#fef2f2");
+                  const statusColor = isHealthy ? "#065f46" : (isDegraded ? "#92400e" : "#991b1b");
+                  const statusBorder = isHealthy ? "#10b981" : (isDegraded ? "#f59e0b" : "#ef4444");
+
+                  return (
+                    <div key={key} style={{ padding: "14px", borderRadius: "8px", border: `1px solid ${statusBorder}`, background: statusBg }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <strong style={{ fontSize: "13px", color: "#0f172a" }}>{dep.name}</strong>
+                        <span style={badgeStyle(statusBg, statusColor, statusBorder)}>
+                          {dep.status.toUpperCase()}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#475569", textTransform: "capitalize", marginBottom: "6px" }}>
+                        Category: <strong>{dep.category}</strong>
+                      </div>
+                      {dep.details && (
+                        <div style={{ fontSize: "11px", color: "#64748b", fontFamily: "monospace", background: "#ffffff", padding: "6px 8px", borderRadius: "4px", border: "1px solid #e2e8f0" }}>
+                          {Object.entries(dep.details).map(([dk, dv]) => (
+                            <div key={dk}>{dk}: {String(dv)}</div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 3. OPERATIONAL METRICS & BREAKDOWNS */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "18px", marginBottom: "20px" }}>
+              {/* Metrics Breakdown */}
+              <div style={cardStyle}>
+                <h3 style={{ margin: "0 0 12px 0", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                  📊 Certification Outcome Breakdown
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {operationsSummary?.metrics?.certification_status_breakdown && Object.entries(operationsSummary.metrics.certification_status_breakdown).length > 0 ? (
+                    Object.entries(operationsSummary.metrics.certification_status_breakdown).map(([st, cnt]) => {
+                      const badgeInfo = statusBadgeStyles[st] || { bg: "#f1f5f9", border: "#cbd5e1", color: "#334155" };
+                      return (
+                        <div key={st} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                          <span style={badgeStyle(badgeInfo.bg, badgeInfo.color, badgeInfo.border)}>{st}</span>
+                          <strong style={{ fontSize: "13px", color: "#0f172a" }}>{cnt} runs</strong>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div style={{ padding: "16px", textAlign: "center", color: "#94a3b8", fontSize: "12px" }}>No certification run outcomes recorded yet.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Workload & Failure Diagnostics */}
+              <div style={cardStyle}>
+                <h3 style={{ margin: "0 0 12px 0", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                  🛡️ Workload Protection & Error Diagnostics
+                </h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <span>Active Concurrent Jobs:</span>
+                    <strong>{operationsSummary?.metrics?.active_jobs_count ?? 0} / 10 max</strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <span>Provider Fallback Count:</span>
+                    <strong style={{ color: (operationsSummary?.metrics?.provider_fallback_count || 0) > 0 ? "#d97706" : "#059669" }}>
+                      {operationsSummary?.metrics?.provider_fallback_count ?? 0}
+                    </strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <span>Ingestion Failures:</span>
+                    <strong style={{ color: (operationsSummary?.metrics?.ingestion_failures_total || 0) > 0 ? "#dc2626" : "#059669" }}>
+                      {operationsSummary?.metrics?.ingestion_failures_total ?? 0}
+                    </strong>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <span>Preflight Validations Total:</span>
+                    <strong>{operationsSummary?.metrics?.preflight_requests_total ?? 0}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* 4. REAL-TIME CERTIFICATION JOB LIFECYCLE TRACKER */}
+            <div style={cardStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
+                    📋 Certification Job Lifecycle Monitor
+                  </h3>
+                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
+                    Live execution state machine: ACCEPTED → VALIDATING → RUNNING → COMPLETED
+                  </p>
+                </div>
+
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <input
+                    type="text"
+                    placeholder="Filter by project..."
+                    value={operationsProjectFilter}
+                    onChange={(e) => setOperationsProjectFilter(e.target.value)}
+                    style={{ padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", width: "160px" }}
+                  />
+                </div>
+              </div>
+
+              {operationsSummary?.recent_jobs && operationsSummary.recent_jobs.length > 0 ? (
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", borderBottom: "2px solid #e2e8f0", textAlign: "left" }}>
+                        <th style={{ padding: "8px 10px" }}>Job ID</th>
+                        <th style={{ padding: "8px 10px" }}>Project</th>
+                        <th style={{ padding: "8px 10px" }}>Target</th>
+                        <th style={{ padding: "8px 10px" }}>Job State</th>
+                        <th style={{ padding: "8px 10px" }}>Outcome</th>
+                        <th style={{ padding: "8px 10px" }}>Score</th>
+                        <th style={{ padding: "8px 10px" }}>Latency</th>
+                        <th style={{ padding: "8px 10px" }}>Created At</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {operationsSummary.recent_jobs
+                        .filter((j) => !operationsProjectFilter || j.project_id.toLowerCase().includes(operationsProjectFilter.toLowerCase()))
+                        .map((job) => {
+                          const isComplete = job.state === "COMPLETED";
+                          const isFailed = job.state === "FAILED";
+                          const stateBg = isComplete ? "#ecfdf5" : (isFailed ? "#fef2f2" : "#eff6ff");
+                          const stateColor = isComplete ? "#065f46" : (isFailed ? "#991b1b" : "#1e40af");
+                          const stateBorder = isComplete ? "#10b981" : (isFailed ? "#ef4444" : "#3b82f6");
+
+                          return (
+                            <tr key={job.job_id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "8px 10px", fontFamily: "monospace", fontWeight: "600", color: "#2563eb" }}>
+                                {job.job_id}
+                              </td>
+                              <td style={{ padding: "8px 10px", color: "#475569" }}>{job.project_id}</td>
+                              <td style={{ padding: "8px 10px", fontWeight: "500" }}>{job.benchmark_id || job.dataset_id}</td>
+                              <td style={{ padding: "8px 10px" }}>
+                                <span style={badgeStyle(stateBg, stateColor, stateBorder)}>{job.state}</span>
+                              </td>
+                              <td style={{ padding: "8px 10px" }}>
+                                {job.certification_status ? (
+                                  <span style={badgeStyle(
+                                    job.certification_status === "CERTIFIED" ? "#ecfdf5" : "#fef2f2",
+                                    job.certification_status === "CERTIFIED" ? "#065f46" : "#991b1b"
+                                  )}>
+                                    {job.certification_status}
+                                  </span>
+                                ) : "—"}
+                              </td>
+                              <td style={{ padding: "8px 10px", fontWeight: "600" }}>
+                                {job.equivalence_score !== null && job.equivalence_score !== undefined ? `${(job.equivalence_score * 100).toFixed(1)}%` : "—"}
+                              </td>
+                              <td style={{ padding: "8px 10px", color: "#64748b" }}>
+                                {job.duration_ms !== null && job.duration_ms !== undefined ? `${job.duration_ms.toFixed(1)} ms` : "—"}
+                              </td>
+                              <td style={{ padding: "8px 10px", color: "#94a3b8", fontSize: "11px" }}>
+                                {job.created_at ? job.created_at.slice(0, 19).replace("T", " ") : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ padding: "24px", textAlign: "center", color: "#94a3b8", fontSize: "13px" }}>
+                  No certification jobs recorded in the current session.
+                </div>
+              )}
+            </div>
           </div>
         )}
 

@@ -79,6 +79,13 @@ class BenchmarkRegistry:
                 if bench_path.is_dir() and (bench_path / "metadata.json").exists():
                     self._load_external_benchmark(bench_path)
 
+        # 4. Pre-load Controlled Baseline OracleSets into Oracle Registry
+        for b_id in list(self._specs.keys()):
+            try:
+                self.resolve_controlled_oracle_set(b_id)
+            except Exception as exc:
+                logger.debug(f"Controlled oracle set pre-load note for {b_id}: {exc}")
+
     def _register_builtin_loan_benchmark(self):
         spec = BenchmarkSpec(
             benchmark_id="loan_demo",

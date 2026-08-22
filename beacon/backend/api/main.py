@@ -12,8 +12,9 @@ logger = logging.getLogger(__name__)
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 sys.path.append(str(Path(__file__).resolve().parents[2] / "legacy_sample"))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from certification.runner import certify
@@ -52,6 +53,23 @@ from oracle import registry, compile_candidate_to_oracle, OracleCompilationError
 from oracle.models import OracleSet
 from benchmarks.models import BenchmarkValidationResult
 
+from operations import (
+    check_liveness,
+    check_readiness,
+    check_dependency_health,
+    validate_startup_configuration,
+    setup_structured_logging,
+    RequestCorrelationMiddleware,
+    WorkloadLimiterMiddleware,
+    register_error_handlers,
+    JobState,
+    certification_job_tracker,
+    operational_metrics,
+    workload_protector,
+    log_operational_event,
+    ResourceLimitError,
+)
+
 import legacy_loan_approval
 import modern_loan_approval
 from generate_traces import generate_traces
@@ -66,6 +84,8 @@ FIELD_BOUNDS = {
 }
 
 app = FastAPI(title="BEACON API", version="0.2.0")
+
+# Phase 16 Middlewares
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -73,6 +93,17 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=True,
 )
+app.add_middleware(RequestCorrelationMiddleware)
+app.add_middleware(WorkloadLimiterMiddleware)
+
+# Phase 16 Error Handlers
+register_error_handlers(app)
+
+
+@app.on_event("startup")
+def on_startup():
+    setup_structured_logging()
+    validate_startup_configuration()
 
 
 class DemoRunRequest(BaseModel):
@@ -124,15 +155,95 @@ def root():
         "storage": "local SQLite",
         "docs": "/docs",
         "health": "/health",
+        "live": "/health/live",
+        "ready": "/health/ready",
+        "details": "/health/details",
     }
 
 
-from llm.manager import get_provider_manager
+# ==============================================================================
+# Phase 16: Operational Health & Metrics Endpoints
+# ==============================================================================
+
+@app.get("/health/live")
+def liveness_endpoint():
+    """Liveness probe: answers if BEACON process is running and responsive."""
+    res = check_liveness()
+    return res.model_dump(mode="json")
+
+
+@app.get("/health/ready")
+def readiness_endpoint():
+    """Readiness probe: answers if BEACON is currently able to accept certification work."""
+    res = check_readiness()
+    if res.status != "READY":
+        return JSONResponse(status_code=503, content=res.model_dump(mode="json"))
+    return res.model_dump(mode="json")
+
+
+@app.get("/health/details")
+def health_details_endpoint():
+    """Granular dependency health inspection without secret exposure."""
+    res = check_dependency_health()
+    return res.model_dump(mode="json")
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "storage": "local SQLite"}
+    """Legacy health endpoint for backwards compatibility."""
+    readiness = check_readiness()
+    return {
+        "status": "ok" if readiness.status == "READY" else "degraded",
+        "liveness": "UP",
+        "readiness": readiness.status,
+        "storage": "local SQLite",
+    }
+
+
+@app.get("/api/v1/certification/jobs/{job_id}")
+def get_certification_job_endpoint(job_id: str, project_id: Optional[str] = None):
+    """Retrieves operational lifecycle state for a certification job with project isolation."""
+    try:
+        job = certification_job_tracker.get_job(job_id, project_id=project_id)
+        if not job:
+            raise HTTPException(status_code=404, detail=f"Certification job '{job_id}' not found.")
+        return job.model_dump(mode="json")
+    except PermissionError as pe:
+        raise HTTPException(status_code=403, detail=str(pe))
+
+
+@app.get("/api/v1/certification/jobs")
+def list_certification_jobs_endpoint(project_id: Optional[str] = None, limit: int = 50):
+    """Lists recent operational certification jobs."""
+    jobs = certification_job_tracker.list_jobs(project_id=project_id, limit=limit)
+    return {"jobs": [j.model_dump(mode="json") for j in jobs]}
+
+
+@app.get("/api/v1/operations/metrics")
+def get_operations_metrics_endpoint():
+    """Returns aggregated runtime counters, latency averages, and error metrics."""
+    snapshot = operational_metrics.get_snapshot()
+    return snapshot.model_dump(mode="json")
+
+
+@app.get("/api/v1/operations/summary")
+def get_operations_summary_endpoint():
+    """Returns high-level operational system summary for the frontend dashboard."""
+    health_det = check_dependency_health()
+    metrics_snap = operational_metrics.get_snapshot()
+    recent_jobs = certification_job_tracker.list_jobs(limit=10)
+    
+    return {
+        "system_status": health_det.status,
+        "liveness": health_det.liveness,
+        "readiness": health_det.readiness,
+        "dependencies": {k: v.model_dump(mode="json") for k, v in health_det.dependencies.items()},
+        "metrics": metrics_snap.model_dump(mode="json"),
+        "recent_jobs": [j.model_dump(mode="json") for j in recent_jobs],
+    }
+
+
+from llm.manager import get_provider_manager
 
 
 @app.get("/api/llm/status")
@@ -577,6 +688,22 @@ def run_certification_v1(request: CertificationRunRequest):
                 f"Returning existing completed artifact '{existing_artifact.certification_id}' "
                 f"for deterministic request identity '{request_identity[:16]}...'."
             )
+            # Register idempotent job record
+            job = certification_job_tracker.create_job(
+                project_id=proj_id,
+                benchmark_id=request.benchmark_id,
+                evaluation_mode=e_mode,
+                target_variant=t_variant,
+                provider=p_prov,
+            )
+            certification_job_tracker.update_state(
+                job_id=job.job_id,
+                state=JobState.COMPLETED,
+                current_step="Completed via deterministic idempotency cache",
+                certification_id=existing_artifact.certification_id,
+                certification_status=existing_artifact.status.value,
+                equivalence_score=existing_artifact.score,
+            )
             return existing_artifact.model_dump(mode="json")
     else:
         logger.info(
@@ -584,20 +711,59 @@ def run_certification_v1(request: CertificationRunRequest):
             f"Bypassing cache reuse and executing fresh certification run."
         )
 
-    artifact = certification_engine.certify(
+    # 5. Workload Protection & Job Lifecycle Tracking
+    workload_protector.acquire_job_slot(project_id=proj_id)
+    job = certification_job_tracker.create_job(
         project_id=proj_id,
-        legacy_adapter=legacy_adp,
-        modern_adapter=modern_adp,
-        oracle_set=oracle_set,
-        policy=request.policy,
-        test_inputs=test_inputs,
-        field_bounds=field_bounds,
-        context=context,
-        n_samples=request.n_samples,
-        seed=request.seed,
+        benchmark_id=request.benchmark_id,
+        evaluation_mode=e_mode,
+        target_variant=t_variant,
+        provider=p_prov,
     )
+    certification_job_tracker.update_state(job.job_id, JobState.RUNNING, "Executing dual-probe behavioral certification")
 
-    return artifact.model_dump(mode="json")
+    import time
+    start_time = time.perf_counter()
+    try:
+        artifact = certification_engine.certify(
+            project_id=proj_id,
+            legacy_adapter=legacy_adp,
+            modern_adapter=modern_adp,
+            oracle_set=oracle_set,
+            policy=request.policy,
+            test_inputs=test_inputs,
+            field_bounds=field_bounds,
+            context=context,
+            n_samples=request.n_samples,
+            seed=request.seed,
+        )
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.COMPLETED,
+            current_step="Certification completed successfully",
+            certification_id=artifact.certification_id,
+            certification_status=artifact.status.value,
+            equivalence_score=artifact.score,
+        )
+        operational_metrics.record_job_completed(
+            duration_ms=duration_ms,
+            certification_status=artifact.status.value,
+            success=True,
+        )
+        return artifact.model_dump(mode="json")
+    except Exception as exc:
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.FAILED,
+            current_step=f"Execution error: {str(exc)}",
+            error_category="CERTIFICATION_FAILURE",
+            error_message=str(exc),
+        )
+        operational_metrics.record_job_failed(error_category="CERTIFICATION_FAILURE")
+        raise
+    finally:
+        workload_protector.release_job_slot()
 
 
 @app.get("/api/v1/certification/artifacts")
@@ -918,9 +1084,22 @@ def preview_custom_dataset(request: DatasetIngestionRequest):
 @app.post("/api/v1/custom/datasets/upload")
 def upload_custom_dataset(request: DatasetIngestionRequest):
     """Authoritatively validates, canonicalizes, registers, and manifests a user-supplied dataset."""
+    raw_bytes_len = len(request.raw_content.encode("utf-8")) if isinstance(request.raw_content, str) else 0
+    workload_protector.validate_dataset_upload(raw_bytes_len)
+
     try:
         manifest, records, test_inputs = dataset_validator.validate_for_ingestion(request)
+    except ResourceLimitError as rle:
+        operational_metrics.record_ingestion_failure()
+        audit_logger.log(
+            project_id=request.project_id,
+            action=AuditAction.DATASET_UPLOAD,
+            status="FAIL",
+            details={"dataset_name": request.dataset_name, "error": str(rle)},
+        )
+        raise
     except ValueError as ve:
+        operational_metrics.record_ingestion_failure()
         audit_logger.log(
             project_id=request.project_id,
             action=AuditAction.DATASET_UPLOAD,
@@ -1181,6 +1360,8 @@ def validate_custom_certification(req: CustomPreflightRequest):
     """Performs authoritative pre-flight validation on user dataset, schema, allowlisted adapters,
     explicit OracleSet binding, compatibility, policy, and privacy boundaries.
     """
+    import time
+    start_time = time.perf_counter()
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -1341,6 +1522,9 @@ def validate_custom_certification(req: CustomPreflightRequest):
     )
 
     is_valid = len(errors) == 0
+
+    duration_ms = (time.perf_counter() - start_time) * 1000.0
+    operational_metrics.record_preflight_event(duration_ms=duration_ms, success=is_valid)
 
     return BenchmarkValidationResult(
         is_valid=is_valid,
@@ -1523,6 +1707,21 @@ def run_custom_certification(req: CustomCertificationRunRequest):
                 f"Returning existing completed custom artifact '{existing_artifact.certification_id}' "
                 f"for request identity '{request_identity[:16]}...'."
             )
+            job = certification_job_tracker.create_job(
+                project_id=req.project_id,
+                dataset_id=req.dataset_id,
+                evaluation_mode=req.evaluation_mode,
+                target_variant=req.modernized_adapter_id,
+                provider=actual_provider,
+            )
+            certification_job_tracker.update_state(
+                job_id=job.job_id,
+                state=JobState.COMPLETED,
+                current_step="Completed via deterministic idempotency cache",
+                certification_id=existing_artifact.certification_id,
+                certification_status=existing_artifact.status.value,
+                equivalence_score=existing_artifact.score,
+            )
             audit_logger.log(
                 project_id=req.project_id,
                 action=AuditAction.CERTIFICATION_COMPLETE,
@@ -1532,6 +1731,19 @@ def run_custom_certification(req: CustomCertificationRunRequest):
                 details={"reuse": True, "request_identity": request_identity},
             )
             return existing_artifact.model_dump(mode="json")
+
+    # Workload Protection & Concurrency Limits
+    workload_protector.validate_certification_records(len(test_inputs), project_id=req.project_id)
+    workload_protector.acquire_job_slot(project_id=req.project_id)
+
+    job = certification_job_tracker.create_job(
+        project_id=req.project_id,
+        dataset_id=req.dataset_id,
+        evaluation_mode=req.evaluation_mode,
+        target_variant=req.modernized_adapter_id,
+        provider=actual_provider,
+    )
+    certification_job_tracker.update_state(job.job_id, JobState.RUNNING, "Executing custom dataset certification probes")
 
     audit_logger.log(
         project_id=req.project_id,
@@ -1579,6 +1791,8 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         },
     )
 
+    import time
+    start_time = time.perf_counter()
     try:
         artifact = certification_engine.certify(
             project_id=req.project_id,
@@ -1590,6 +1804,21 @@ def run_custom_certification(req: CustomCertificationRunRequest):
             field_bounds={},
             context=context,
             n_samples=len(test_inputs),
+        )
+        duration_ms = (time.perf_counter() - start_time) * 1000.0
+
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.COMPLETED,
+            current_step="Custom certification completed successfully",
+            certification_id=artifact.certification_id,
+            certification_status=artifact.status.value,
+            equivalence_score=artifact.score,
+        )
+        operational_metrics.record_job_completed(
+            duration_ms=duration_ms,
+            certification_status=artifact.status.value,
+            success=True,
         )
 
         audit_logger.log(
@@ -1608,6 +1837,15 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         return artifact.model_dump(mode="json")
 
     except Exception as exc:
+        certification_job_tracker.update_state(
+            job_id=job.job_id,
+            state=JobState.FAILED,
+            current_step=f"Custom certification error: {str(exc)}",
+            error_category="CERTIFICATION_FAILURE",
+            error_message=str(exc),
+        )
+        operational_metrics.record_job_failed(error_category="CERTIFICATION_FAILURE")
+
         audit_logger.log(
             project_id=req.project_id,
             action=AuditAction.CERTIFICATION_FAIL,
@@ -1616,6 +1854,8 @@ def run_custom_certification(req: CustomCertificationRunRequest):
             details={"error": str(exc)},
         )
         raise HTTPException(status_code=500, detail=f"Custom certification failed: {str(exc)}")
+    finally:
+        workload_protector.release_job_slot()
 
 
 @app.get("/api/v1/custom/audit")
