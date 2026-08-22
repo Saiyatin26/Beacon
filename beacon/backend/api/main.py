@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -1626,5 +1627,258 @@ def list_custom_audit_events(
     """Lists audit events for custom dataset ingestion and certification."""
     events = audit_logger.list_events(project_id=project_id, dataset_id=dataset_id, limit=limit)
     return {"events": [e.model_dump(mode="json") for e in events]}
+
+
+# ==============================================================================
+# Phase 15 — Advanced Evidence, Explainability, and Auditability Endpoints
+# ==============================================================================
+
+from evidence import (
+    build_evidence_dossier,
+    generate_structured_explanation,
+    build_traceability_graph,
+    auditor_notes_store,
+    compare_certification_runs,
+)
+
+
+class AuditorNoteCreateRequest(BaseModel):
+    """Request payload for creating an isolated human auditor note."""
+    content: str
+    author: Optional[str] = "Auditor"
+    project_id: Optional[str] = None
+
+
+class RunCompareRequest(BaseModel):
+    """Request payload for comparing two certification runs side-by-side."""
+    run_id_a: str
+    run_id_b: str
+    project_id: Optional[str] = None
+
+
+@app.get("/api/v1/evidence/dossiers/{certification_id}")
+def get_evidence_dossier_endpoint(
+    certification_id: str,
+    project_id: Optional[str] = None,
+):
+    """Retrieves a unified, immutable Evidence Dossier for a specific certification run."""
+    try:
+        dossier = build_evidence_dossier(certification_id, project_id=project_id)
+        return dossier.model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/api/v1/evidence/dossiers/{certification_id}/explain")
+def explain_certification_endpoint(
+    certification_id: str,
+    project_id: Optional[str] = None,
+    use_llm: bool = False,
+    preferred_provider: str = "offline",
+    allow_external_llm: bool = False,
+):
+    """Generates an authoritative, structured explanation directly from the Evidence Dossier.
+    The certification decision is strictly determined by the deterministic CertificationEngine;
+    this endpoint articulates and proves why the decision was made.
+    """
+    try:
+        dossier = build_evidence_dossier(certification_id, project_id=project_id)
+        explanation = generate_structured_explanation(
+            dossier=dossier,
+            use_llm=use_llm,
+            preferred_provider=preferred_provider,
+            allow_external_llm=allow_external_llm,
+        )
+        return explanation.model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/api/v1/evidence/dossiers/{certification_id}/graph")
+def get_traceability_graph_endpoint(
+    certification_id: str,
+    project_id: Optional[str] = None,
+):
+    """Returns a directed traceability graph connecting Dataset -> Input Set -> Implementations
+    -> OracleSet -> Evaluations -> Counterexamples -> Policy -> Artifact -> Hash.
+    """
+    try:
+        dossier = build_evidence_dossier(certification_id, project_id=project_id)
+        nodes = build_traceability_graph(dossier)
+        return {"nodes": [n.model_dump(mode="json") for n in nodes]}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/api/v1/evidence/dossiers/{certification_id}/timeline")
+def get_evidence_timeline_endpoint(
+    certification_id: str,
+    project_id: Optional[str] = None,
+):
+    """Returns the immutable chronological audit timeline for a certification run."""
+    try:
+        dossier = build_evidence_dossier(certification_id, project_id=project_id)
+        return {"timeline": dossier.audit_timeline}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.post("/api/v1/evidence/verify/{certification_id}")
+def verify_evidence_endpoint(certification_id: str):
+    """Authoritatively reconstructs cryptographic hashes and verifies artifact integrity."""
+    report = certification_repository.verify_certification_run_integrity(certification_id)
+    if report.get("status") == "FAIL" and any("not found" in e for e in report.get("errors", [])):
+        raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
+    return report
+
+
+@app.post("/api/v1/evidence/dossiers/{certification_id}/notes")
+def add_auditor_note_endpoint(
+    certification_id: str,
+    req: AuditorNoteCreateRequest,
+):
+    """Appends an isolated human auditor note without altering artifact hashes or certification status."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
+    
+    proj_id = req.project_id or artifact.project_id
+    if req.project_id and req.project_id != artifact.project_id:
+        raise HTTPException(status_code=403, detail=f"Project scope mismatch: Certificate belongs to '{artifact.project_id}'.")
+
+    note = auditor_notes_store.add_note(
+        certification_id=certification_id,
+        project_id=proj_id,
+        content=req.content,
+        author=req.author or "Auditor",
+    )
+    return note.model_dump(mode="json")
+
+
+@app.get("/api/v1/evidence/dossiers/{certification_id}/notes")
+def list_auditor_notes_endpoint(
+    certification_id: str,
+    project_id: Optional[str] = None,
+):
+    """Lists human reviewer notes for a certification run."""
+    artifact = certification_repository.get_artifact(certification_id)
+    if not artifact:
+        raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
+    if project_id and artifact.project_id != project_id:
+        raise HTTPException(status_code=403, detail=f"Project scope mismatch: Certificate belongs to '{artifact.project_id}'.")
+
+    notes = auditor_notes_store.list_notes(certification_id=certification_id, project_id=project_id)
+    return {"notes": [n.model_dump(mode="json") for n in notes]}
+
+
+@app.post("/api/v1/evidence/compare")
+def compare_runs_endpoint(req: RunCompareRequest):
+    """Performs side-by-side comparison of two certification runs."""
+    try:
+        diff_report = compare_certification_runs(
+            run_id_a=req.run_id_a,
+            run_id_b=req.run_id_b,
+            project_id=req.project_id,
+        )
+        return diff_report
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+
+@app.get("/api/v1/evidence/dossiers/{certification_id}/export")
+def export_evidence_dossier_endpoint(
+    certification_id: str,
+    format: Literal["json", "markdown", "csv"] = "json",
+    project_id: Optional[str] = None,
+):
+    """Exports complete, auditable Evidence Dossier with export audit logging and zero secrets."""
+    try:
+        dossier = build_evidence_dossier(certification_id, project_id=project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc))
+
+    now_str = datetime.now(timezone.utc).isoformat()
+    export_id = f"EXP-{uuid.uuid4().hex[:8]}"
+
+    audit_logger.log(
+        project_id=dossier.project_id,
+        action=AuditAction.EXPORT,
+        status="SUCCESS",
+        certification_id=certification_id,
+        details={
+            "export_id": export_id,
+            "format": format,
+            "dossier_hash": dossier.dossier_hash,
+            "timestamp": now_str,
+        },
+    )
+
+    if format == "json":
+        return JSONResponse(
+            content=dossier.model_dump(mode="json"),
+            headers={"Content-Disposition": f"attachment; filename=evidence_dossier_{certification_id}.json"}
+        )
+    elif format == "markdown":
+        explanation = generate_structured_explanation(dossier)
+        md_text = f"""# BEACON Evidence Dossier Audit Report
+
+- **Dossier ID:** `{dossier.dossier_id}`
+- **Certification ID:** `{dossier.certification_id}`
+- **Export ID:** `{export_id}`
+- **Generated At:** `{now_str}`
+- **Dossier Hash:** `{dossier.dossier_hash}`
+- **Evidence Completeness:** **`{dossier.completeness.status}`** (Score: {dossier.completeness.completeness_score * 100.0:.1f}%)
+- **Cryptographic Verification:** **`{dossier.cryptographic_evidence.integrity_status}`**
+
+---
+
+{explanation.natural_language_explanation}
+
+---
+
+## Complete Cryptographic Receipts
+- **Artifact Hash:** `{dossier.cryptographic_evidence.artifact_hash}`
+- **Dataset Checksum:** `{dossier.cryptographic_evidence.dataset_checksum}`
+- **Legacy Implementation Hash:** `{dossier.cryptographic_evidence.legacy_implementation_hash}`
+- **Modernized Implementation Hash:** `{dossier.cryptographic_evidence.modernized_implementation_hash}`
+- **OracleSet Hash:** `{dossier.cryptographic_evidence.oracle_set_hash}`
+- **Policy Hash:** `{dossier.cryptographic_evidence.policy_hash}`
+
+## Audit Notes ({len(dossier.notes)})
+"""
+        for n in dossier.notes:
+            md_text += f"- **{n.author}** ({n.timestamp}): {n.content}\n"
+
+        return Response(
+            content=md_text,
+            media_type="text/markdown",
+            headers={"Content-Disposition": f"attachment; filename=evidence_dossier_{certification_id}.md"}
+        )
+    elif format == "csv":
+        import io, csv
+        cases = certification_repository.list_cases_for_input_set(dossier.execution_evidence.input_set_id, run_id=certification_id)
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["case_id", "case_index", "input_id", "input_hash", "classification", "severity", "oracle_result", "input_json", "legacy_output_json", "modern_output_json"])
+        for c in cases:
+            writer.writerow([c.case_id, c.case_index, c.input_id, c.input_hash, c.classification, c.severity, c.oracle_result, c.input_json, c.legacy_output_json, c.modern_output_json])
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=evidence_cases_{certification_id}.csv"}
+        )
+
 
 

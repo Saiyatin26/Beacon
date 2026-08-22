@@ -106,6 +106,22 @@ export default function App() {
   const [customActiveResult, setCustomActiveResult] = useState(null);
   const [customCryptographicProof, setCustomCryptographicProof] = useState(null);
 
+  // =========================================================================
+  // Phase 15 Evidence Dossier & Explainability State
+  // =========================================================================
+  const [dossierCertId, setDossierCertId] = useState("");
+  const [dossierData, setDossierData] = useState(null);
+  const [dossierExplanation, setDossierExplanation] = useState(null);
+  const [dossierGraph, setDossierGraph] = useState([]);
+  const [dossierNotes, setDossierNotes] = useState([]);
+  const [newNoteAuthor, setNewNoteAuthor] = useState("Auditor");
+  const [newNoteContent, setNewNoteContent] = useState("");
+  const [dossierLoading, setDossierLoading] = useState(false);
+  const [compareRunA, setCompareRunA] = useState("");
+  const [compareRunB, setCompareRunB] = useState("");
+  const [comparisonResult, setComparisonResult] = useState(null);
+  const [comparingRuns, setComparingRuns] = useState(false);
+
   // Clear previous validation and active result whenever ANY certification-affecting config changes
   const invalidateValidationAndActiveState = () => {
     setBenchmarkValidation(null);
@@ -122,6 +138,85 @@ export default function App() {
     setCustomCryptographicProof(null);
     setError(null);
     setNotice(null);
+  };
+
+  // Phase 15: Evidence Dossier Loaders & Actions
+  const loadDossier = async (certId) => {
+    if (!certId) return;
+    setDossierLoading(true);
+    setDossierCertId(certId);
+    try {
+      const [dRes, eRes, gRes, nRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}`),
+        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/explain`),
+        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/graph`),
+        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/notes`),
+      ]);
+      if (dRes.ok) setDossierData(await dRes.json());
+      if (eRes.ok) setDossierExplanation(await eRes.json());
+      if (gRes.ok) {
+        const gData = await gRes.json();
+        setDossierGraph(gData.nodes || []);
+      }
+      if (nRes.ok) {
+        const nData = await nRes.json();
+        setDossierNotes(nData.notes || []);
+      }
+    } catch (e) {
+      console.error("Failed to load dossier", e);
+    } finally {
+      setDossierLoading(false);
+    }
+  };
+
+  const handleAddAuditorNote = async () => {
+    if (!dossierCertId || !newNoteContent.trim()) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/evidence/dossiers/${dossierCertId}/notes`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          author: newNoteAuthor.trim() || "Auditor",
+          content: newNoteContent.trim(),
+        }),
+      });
+      if (res.ok) {
+        const note = await res.json();
+        setDossierNotes((prev) => [...prev, note]);
+        setNewNoteContent("");
+        setNotice("Auditor note saved successfully (stored in isolated review layer).");
+      }
+    } catch (e) {
+      setError("Failed to save auditor note: " + e.message);
+    }
+  };
+
+  const handleCompareRuns = async () => {
+    if (!compareRunA || !compareRunB) return;
+    setComparingRuns(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/evidence/compare`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ run_id_a: compareRunA, run_id_b: compareRunB }),
+      });
+      if (res.ok) {
+        setComparisonResult(await res.json());
+      } else {
+        const err = await res.json();
+        setError(err.detail || "Comparison failed.");
+      }
+    } catch (e) {
+      setError("Comparison request failed: " + e.message);
+    } finally {
+      setComparingRuns(false);
+    }
+  };
+
+  const exportEvidenceDossier = (certId, format) => {
+    if (!certId) return;
+    window.open(`${API_BASE}/api/v1/evidence/dossiers/${certId}/export?format=${format}`, "_blank");
   };
 
   // Phase 14: Dry-Run Preview
@@ -595,6 +690,7 @@ export default function App() {
           {[
             { id: "benchmark", label: "🎯 Benchmark Certification", desc: "Select & Certify Applications" },
             { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },
+            { id: "dossier", label: "📑 Evidence Dossier", desc: "Explainability & Traceability" },
             { id: "history", label: "📜 Certification History", desc: "Benchmark Runs & Fingerprints" },
             { id: "audit", label: "🔒 Audit Trail & Proofs", desc: "Cryptographic Verification" },
             { id: "drift", label: "📈 Drift Monitoring", desc: "Post-Migration Live Drift" },
@@ -605,6 +701,10 @@ export default function App() {
               onClick={() => {
                 setActiveTab(tab.id);
                 if (tab.id === "loan_demo" && loanRuns.length === 0) loadLoanDemoData();
+                if (tab.id === "dossier" && !dossierData) {
+                  const targetId = activeResult?.certification_id || customActiveResult?.certification_id || (historicalArtifacts.length > 0 ? historicalArtifacts[0].certification_id : "");
+                  if (targetId) loadDossier(targetId);
+                }
               }}
               style={{
                 background: "transparent",
@@ -1017,6 +1117,15 @@ export default function App() {
                       style={{ background: "#ffffff", border: "1px solid #cbd5e1", color: "#0f172a", padding: "6px 12px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
                     >
                       ⬇️ CSV Cases
+                    </button>
+                    <button
+                      onClick={() => {
+                        loadDossier(targetArtifact.certification_id);
+                        setActiveTab("dossier");
+                      }}
+                      style={{ background: "#0f172a", color: "#ffffff", border: "none", padding: "6px 14px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                    >
+                      📑 Inspect Evidence Dossier
                     </button>
                     <button
                       onClick={() => verifyArtifactIntegrity(targetArtifact.certification_id)}
@@ -1878,6 +1987,15 @@ export default function App() {
                     🔐 Step 9: Verify 8-Point Cryptographic Proof
                   </button>
                   <button
+                    onClick={() => {
+                      loadDossier(customActiveResult.certification_id);
+                      setActiveTab("dossier");
+                    }}
+                    style={{ background: "#2563eb", color: "#ffffff", border: "none", padding: "8px 14px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}
+                  >
+                    📑 Inspect Evidence Dossier
+                  </button>
+                  <button
                     onClick={() => exportDossier(customActiveResult.certification_id, "markdown")}
                     style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 14px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}
                   >
@@ -1902,6 +2020,467 @@ export default function App() {
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: EVIDENCE DOSSIER, EXPLAINABILITY & AUDITABILITY (PHASE 15)           */}
+        {/* ========================================================================= */}
+        {activeTab === "dossier" && (
+          <div>
+            {/* Dossier Header & Run Selector Bar */}
+            <div style={cardStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "14px", marginBottom: "16px" }}>
+                <div>
+                  <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#0f172a" }}>
+                    📑 Evidence Dossier & Explainability Engine
+                  </h2>
+                  <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#64748b" }}>
+                    Deterministic explainability, full chain-of-custody evidence tracing, completeness verification, and human audit review.
+                  </p>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  {dossierCertId && (
+                    <>
+                      <button
+                        onClick={() => exportEvidenceDossier(dossierCertId, "markdown")}
+                        style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 12px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                      >
+                        📄 Markdown Report
+                      </button>
+                      <button
+                        onClick={() => exportEvidenceDossier(dossierCertId, "json")}
+                        style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 12px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                      >
+                        📦 JSON Dossier
+                      </button>
+                      <button
+                        onClick={() => exportEvidenceDossier(dossierCertId, "csv")}
+                        style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 12px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                      >
+                        📊 CSV Cases
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Run Selection & Re-verify bar */}
+              <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", flex: 1 }}>
+                  <label style={{ fontSize: "13px", fontWeight: "600", color: "#334155" }}>Select Certification Run:</label>
+                  <select
+                    value={dossierCertId}
+                    onChange={(e) => loadDossier(e.target.value)}
+                    style={{ padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", fontFamily: "monospace", flex: 1 }}
+                  >
+                    <option value="">-- Choose a Certification Run --</option>
+                    {activeResult && <option value={activeResult.certification_id}>Active Run: {activeResult.certification_id} ({activeResult.benchmark_id || "benchmark"})</option>}
+                    {customActiveResult && <option value={customActiveResult.certification_id}>Custom Run: {customActiveResult.certification_id} ({customProjectId})</option>}
+                    {historicalArtifacts.map((a) => (
+                      <option key={a.certification_id} value={a.certification_id}>
+                        {a.certification_id} • {a.benchmark_id || a.project_id} • {a.status} ({a.timestamp?.slice(0, 16)})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  onClick={() => loadDossier(dossierCertId)}
+                  disabled={!dossierCertId || dossierLoading}
+                  style={{ background: "#f1f5f9", border: "1px solid #cbd5e1", padding: "8px 14px", borderRadius: "6px", fontSize: "13px", fontWeight: "600", cursor: !dossierCertId ? "not-allowed" : "pointer" }}
+                >
+                  {dossierLoading ? "Loading..." : "🔄 Reload Dossier"}
+                </button>
+              </div>
+            </div>
+
+            {dossierData && dossierExplanation ? (
+              <>
+                {/* Idempotency & Reuse Banner */}
+                {dossierData.is_reused_artifact && (
+                  <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: "8px", padding: "10px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px", fontSize: "13px", color: "#166534" }}>
+                    <span>♻️</span>
+                    <span><strong>Deterministic Reuse:</strong> This run utilized the authoritative cached certification artifact matching identical request fingerprint. No duplicate compute was performed.</span>
+                  </div>
+                )}
+                {dossierData.is_forced_recompute && (
+                  <div style={{ background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "8px", padding: "10px 16px", marginBottom: "16px", display: "flex", alignItems: "center", gap: "10px", fontSize: "13px", color: "#1e40af" }}>
+                    <span>⚡</span>
+                    <span><strong>Forced Recompute:</strong> This run executed a fresh, distinct certification run bypassing idempotency cache reuse.</span>
+                  </div>
+                )}
+
+                {/* 1. WHY CERTIFIED / WHY NOT CERTIFIED / WHY INCONCLUSIVE HERO CARD */}
+                <div style={{
+                  ...cardStyle,
+                  borderLeft: `6px solid ${
+                    dossierExplanation.authoritative_status === "CERTIFIED" ? "#10b981" :
+                    dossierExplanation.authoritative_status === "INSUFFICIENT_COVERAGE" ? "#f97316" : "#ef4444"
+                  }`
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "14px" }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                        <span style={{ fontSize: "20px" }}>
+                          {dossierExplanation.authoritative_status === "CERTIFIED" ? "✅" :
+                           dossierExplanation.authoritative_status === "INSUFFICIENT_COVERAGE" ? "⚠️" : "❌"}
+                        </span>
+                        <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "800", color: "#0f172a" }}>
+                          {dossierExplanation.headline}
+                        </h3>
+                      </div>
+                      <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#475569", lineHeight: "1.5" }}>
+                        {dossierExplanation.status_rationale}
+                      </p>
+                    </div>
+                    <span style={badgeStyle(
+                      statusBadgeStyles[dossierExplanation.authoritative_status]?.bg || "#f1f5f9",
+                      statusBadgeStyles[dossierExplanation.authoritative_status]?.color || "#334155",
+                      statusBadgeStyles[dossierExplanation.authoritative_status]?.border || "#cbd5e1"
+                    )}>
+                      {dossierExplanation.authoritative_status}
+                    </span>
+                  </div>
+
+                  {/* Quick Metrics Grid */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: "10px", marginTop: "16px" }}>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>Equivalence Score</div>
+                      <div style={{ fontSize: "18px", fontWeight: "800", color: dossierData.execution_evidence.equivalence_score >= 0.8 ? "#059669" : "#dc2626" }}>
+                        {(dossierData.execution_evidence.equivalence_score * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>Oracle Coverage</div>
+                      <div style={{ fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
+                        {(dossierData.execution_evidence.oracle_coverage_pct * 100).toFixed(1)}%
+                      </div>
+                    </div>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>Unique Inputs</div>
+                      <div style={{ fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
+                        {dossierData.execution_evidence.total_inputs}
+                      </div>
+                    </div>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>Matching Cases</div>
+                      <div style={{ fontSize: "18px", fontWeight: "800", color: "#059669" }}>
+                        {dossierData.execution_evidence.matching_cases}
+                      </div>
+                    </div>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>Regressions</div>
+                      <div style={{ fontSize: "18px", fontWeight: "800", color: dossierData.execution_evidence.regression_cases > 0 ? "#dc2626" : "#059669" }}>
+                        {dossierData.execution_evidence.regression_cases}
+                      </div>
+                    </div>
+                    <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>Active Oracles</div>
+                      <div style={{ fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
+                        {dossierData.oracle_evidence.oracle_count}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Highest Severity Behavioral Regressions (if NOT CERTIFIED) */}
+                  {dossierExplanation.highest_severity_failures?.length > 0 && (
+                    <div style={{ marginTop: "18px" }}>
+                      <h4 style={{ margin: "0 0 10px 0", fontSize: "14px", fontWeight: "700", color: "#991b1b" }}>
+                        ⚠️ Pinpointed Behavioral Regressions ({dossierExplanation.highest_severity_failures.length})
+                      </h4>
+                      <div style={{ overflowX: "auto" }}>
+                        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                          <thead>
+                            <tr style={{ background: "#fef2f2", borderBottom: "1px solid #fecaca", textAlign: "left" }}>
+                              <th style={{ padding: "8px 10px" }}>Oracle ID</th>
+                              <th style={{ padding: "8px 10px" }}>Severity</th>
+                              <th style={{ padding: "8px 10px" }}>Input Probe ID</th>
+                              <th style={{ padding: "8px 10px" }}>Expected (Legacy)</th>
+                              <th style={{ padding: "8px 10px" }}>Actual (Modern)</th>
+                              <th style={{ padding: "8px 10px" }}>Invariant Violated</th>
+                              <th style={{ padding: "8px 10px" }}>Sanitized Input Values</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {dossierExplanation.highest_severity_failures.map((f, idx) => (
+                              <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                                <td style={{ padding: "8px 10px", fontFamily: "monospace", fontWeight: "700", color: "#2563eb" }}>{f.oracle_id}</td>
+                                <td style={{ padding: "8px 10px" }}><span style={badgeStyle("#fee2e2", "#991b1b")}>{f.severity}</span></td>
+                                <td style={{ padding: "8px 10px", fontFamily: "monospace" }}>{f.input_id}</td>
+                                <td style={{ padding: "8px 10px", color: "#059669", fontFamily: "monospace" }}>{JSON.stringify(f.legacy_output)}</td>
+                                <td style={{ padding: "8px 10px", color: "#dc2626", fontFamily: "monospace", fontWeight: "700" }}>{JSON.stringify(f.modern_output)}</td>
+                                <td style={{ padding: "8px 10px", color: "#475569" }}><em>{f.invariant_violated}</em></td>
+                                <td style={{ padding: "8px 10px", fontFamily: "monospace", fontSize: "11px", color: "#64748b" }}>{JSON.stringify(f.sanitized_inputs)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. EVIDENCE COMPLETENESS & CRYPTOGRAPHIC PROOF CARD */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
+                  {/* Completeness Card */}
+                  <div style={cardStyle}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "18px" }}>📋</span>
+                        <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                          Evidence Completeness Audit
+                        </h3>
+                      </div>
+                      <span style={badgeStyle(
+                        dossierData.completeness.status === "COMPLETE" ? "#dcfce7" : "#fee2e2",
+                        dossierData.completeness.status === "COMPLETE" ? "#166534" : "#991b1b"
+                      )}>
+                        {dossierData.completeness.status} ({(dossierData.completeness.completeness_score * 100).toFixed(0)}%)
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "12px" }}>
+                      {Object.entries(dossierData.completeness.checks || {}).map(([chk, passed]) => (
+                        <div key={chk} style={{ display: "flex", justifyContent: "space-between", padding: "4px 8px", background: passed ? "#f8fafc" : "#fef2f2", borderRadius: "4px" }}>
+                          <span style={{ fontFamily: "monospace", color: "#334155" }}>{chk}</span>
+                          <span style={{ fontWeight: "700", color: passed ? "#166534" : "#991b1b" }}>{passed ? "PASSED" : "MISSING"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Cryptographic Hashes Card */}
+                  <div style={cardStyle}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <span style={{ fontSize: "18px" }}>🛡️</span>
+                        <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                          8-Point Cryptographic Integrity
+                        </h3>
+                      </div>
+                      <span style={badgeStyle(
+                        dossierData.cryptographic_evidence.integrity_status === "VERIFIED" ? "#dcfce7" : "#fee2e2",
+                        dossierData.cryptographic_evidence.integrity_status === "VERIFIED" ? "#166534" : "#991b1b"
+                      )}>
+                        {dossierData.cryptographic_evidence.integrity_status}
+                      </span>
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px", fontSize: "11px", fontFamily: "monospace" }}>
+                      <div style={{ background: "#f8fafc", padding: "6px 8px", borderRadius: "4px" }}>
+                        <span style={{ color: "#64748b" }}>Artifact Hash:</span> {dossierData.cryptographic_evidence.artifact_hash}
+                      </div>
+                      <div style={{ background: "#f8fafc", padding: "6px 8px", borderRadius: "4px" }}>
+                        <span style={{ color: "#64748b" }}>Dataset Checksum:</span> {dossierData.cryptographic_evidence.dataset_checksum}
+                      </div>
+                      <div style={{ background: "#f8fafc", padding: "6px 8px", borderRadius: "4px" }}>
+                        <span style={{ color: "#64748b" }}>OracleSet Hash:</span> {dossierData.cryptographic_evidence.oracle_set_hash}
+                      </div>
+                      <div style={{ background: "#f8fafc", padding: "6px 8px", borderRadius: "4px" }}>
+                        <span style={{ color: "#64748b" }}>Input-Set Hash:</span> {dossierData.cryptographic_evidence.input_set_hash}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. TRACEABILITY GRAPH / CHAIN OF CUSTODY (DAG) */}
+                <div style={cardStyle}>
+                  <h3 style={{ margin: "0 0 12px 0", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                    🔗 Evidence Traceability Graph / Chain of Custody
+                  </h3>
+                  <p style={{ margin: "0 0 16px 0", fontSize: "12px", color: "#64748b" }}>
+                    Follow the chain of evidence from originating dataset to immutable cryptographic verification.
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "10px" }}>
+                    {dossierGraph.map((node) => (
+                      <div key={node.node_id} style={{
+                        background: node.status === "AVAILABLE" || node.status === "PASSED" ? "#ffffff" : (node.status === "WARNING" ? "#fffbeb" : "#fef2f2"),
+                        border: `1px solid ${node.status === "AVAILABLE" || node.status === "PASSED" ? "#cbd5e1" : (node.status === "WARNING" ? "#fde68a" : "#fca5a5")}`,
+                        borderRadius: "8px",
+                        padding: "12px",
+                        fontSize: "12px",
+                      }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                          <span style={{ fontWeight: "700", color: "#0f172a", fontSize: "11px", textTransform: "uppercase" }}>{node.node_type}</span>
+                          <span style={badgeStyle(
+                            node.status === "PASSED" || node.status === "AVAILABLE" ? "#dcfce7" : (node.status === "WARNING" ? "#fef3c7" : "#fee2e2"),
+                            node.status === "PASSED" || node.status === "AVAILABLE" ? "#166534" : (node.status === "WARNING" ? "#92400e" : "#991b1b")
+                          )}>
+                            {node.status}
+                          </span>
+                        </div>
+                        <div style={{ fontWeight: "600", color: "#2563eb", marginBottom: "4px" }}>{node.label}</div>
+                        {node.entity_id && <div style={{ fontSize: "10px", fontFamily: "monospace", color: "#64748b", wordBreak: "break-all" }}>ID: {node.entity_id}</div>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* 4. CHRONOLOGICAL AUDIT TIMELINE & AUDITOR NOTES GRID */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "20px" }}>
+                  {/* Audit Timeline */}
+                  <div style={cardStyle}>
+                    <h3 style={{ margin: "0 0 12px 0", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                      ⏱️ Chronological Audit Timeline
+                    </h3>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "10px", maxHeight: "300px", overflowY: "auto" }}>
+                      {dossierData.audit_timeline?.map((ev, idx) => (
+                        <div key={idx} style={{ padding: "10px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px" }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                            <span style={{ fontWeight: "700", color: "#2563eb", fontFamily: "monospace" }}>{ev.action}</span>
+                            <span style={{ fontSize: "11px", color: "#64748b" }}>{ev.timestamp}</span>
+                          </div>
+                          <div style={{ fontSize: "11px", color: "#475569", marginTop: "4px" }}>
+                            Status: <strong>{ev.status}</strong> • {JSON.stringify(ev.details)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Human Review / Auditor Notes */}
+                  <div style={cardStyle}>
+                    <h3 style={{ margin: "0 0 12px 0", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                      📝 Human Review & Auditor Notes
+                    </h3>
+                    <p style={{ margin: "0 0 10px 0", fontSize: "12px", color: "#64748b" }}>
+                      Notes are stored in an isolated annotation layer and do NOT alter cryptographic artifact hashes.
+                    </p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "180px", overflowY: "auto", marginBottom: "12px" }}>
+                      {dossierNotes.length === 0 ? (
+                        <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", padding: "12px" }}>No auditor notes recorded for this run.</div>
+                      ) : (
+                        dossierNotes.map((n) => (
+                          <div key={n.note_id} style={{ padding: "8px 10px", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0", fontSize: "12px" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", fontWeight: "600", color: "#334155" }}>
+                              <span>{n.author}</span>
+                              <span style={{ fontSize: "10px", color: "#64748b" }}>{n.timestamp?.slice(0, 19)}</span>
+                            </div>
+                            <div style={{ marginTop: "2px", color: "#0f172a" }}>{n.content}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    {/* Add note form */}
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <input
+                        type="text"
+                        placeholder="Author"
+                        value={newNoteAuthor}
+                        onChange={(e) => setNewNoteAuthor(e.target.value)}
+                        style={{ width: "110px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px" }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Add audit sign-off or observation..."
+                        value={newNoteContent}
+                        onChange={(e) => setNewNoteContent(e.target.value)}
+                        style={{ flex: 1, padding: "6px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px" }}
+                      />
+                      <button
+                        onClick={handleAddAuditorNote}
+                        style={{ background: "#2563eb", color: "#ffffff", border: "none", padding: "6px 14px", borderRadius: "6px", fontWeight: "600", fontSize: "12px", cursor: "pointer" }}
+                      >
+                        Add Note
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 5. MULTI-RUN EVIDENCE COMPARATOR PANEL */}
+                <div style={cardStyle}>
+                  <h3 style={{ margin: "0 0 12px 0", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                    ⚖️ Side-by-Side Run Evidence Comparator
+                  </h3>
+                  <p style={{ margin: "0 0 14px 0", fontSize: "12px", color: "#64748b" }}>
+                    Compare two historical runs to verify context equivalence, differential score deltas, and regression status.
+                  </p>
+                  <div style={{ display: "flex", gap: "12px", alignItems: "center", marginBottom: "16px" }}>
+                    <select
+                      value={compareRunA}
+                      onChange={(e) => setCompareRunA(e.target.value)}
+                      style={{ padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", fontFamily: "monospace", flex: 1 }}
+                    >
+                      <option value="">-- Select Run A (Baseline) --</option>
+                      {historicalArtifacts.map((a) => (
+                        <option key={`a-${a.certification_id}`} value={a.certification_id}>{a.certification_id} ({a.status})</option>
+                      ))}
+                    </select>
+                    <span style={{ fontWeight: "700", color: "#64748b" }}>vs</span>
+                    <select
+                      value={compareRunB}
+                      onChange={(e) => setCompareRunB(e.target.value)}
+                      style={{ padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", fontFamily: "monospace", flex: 1 }}
+                    >
+                      <option value="">-- Select Run B (Candidate) --</option>
+                      {historicalArtifacts.map((a) => (
+                        <option key={`b-${a.certification_id}`} value={a.certification_id}>{a.certification_id} ({a.status})</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={handleCompareRuns}
+                      disabled={!compareRunA || !compareRunB || comparingRuns}
+                      style={{ background: "#0f172a", color: "#ffffff", border: "none", padding: "8px 18px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: !compareRunA || !compareRunB ? "not-allowed" : "pointer" }}
+                    >
+                      {comparingRuns ? "Comparing..." : "Compare Runs"}
+                    </button>
+                  </div>
+
+                  {comparisonResult && (
+                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "16px", fontSize: "12px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                        <span style={{ fontWeight: "700", fontSize: "14px", color: "#0f172a" }}>Comparison Report: {comparisonResult.run_id_a} vs {comparisonResult.run_id_b}</span>
+                        <span style={badgeStyle(
+                          comparisonResult.is_equivalent_context ? "#dcfce7" : "#fffbeb",
+                          comparisonResult.is_equivalent_context ? "#166534" : "#92400e"
+                        )}>
+                          {comparisonResult.is_equivalent_context ? "EQUIVALENT CONTEXT" : "NON-EQUIVALENT CONTEXT"}
+                        </span>
+                      </div>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px", marginBottom: "12px" }}>
+                        <div style={{ background: "#ffffff", padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                          <span style={{ color: "#64748b" }}>Score Delta:</span>
+                          <div style={{ fontWeight: "700", fontSize: "14px", color: comparisonResult.metrics_comparison.score_delta >= 0 ? "#059669" : "#dc2626" }}>
+                            {comparisonResult.metrics_comparison.score_delta > 0 ? `+${(comparisonResult.metrics_comparison.score_delta * 100).toFixed(1)}%` : `${(comparisonResult.metrics_comparison.score_delta * 100).toFixed(1)}%`}
+                          </div>
+                        </div>
+                        <div style={{ background: "#ffffff", padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                          <span style={{ color: "#64748b" }}>Coverage Delta:</span>
+                          <div style={{ fontWeight: "700", fontSize: "14px", color: "#0f172a" }}>
+                            {comparisonResult.metrics_comparison.coverage_delta > 0 ? `+${(comparisonResult.metrics_comparison.coverage_delta * 100).toFixed(1)}%` : `${(comparisonResult.metrics_comparison.coverage_delta * 100).toFixed(1)}%`}
+                          </div>
+                        </div>
+                        <div style={{ background: "#ffffff", padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                          <span style={{ color: "#64748b" }}>Fixed Regressions:</span>
+                          <div style={{ fontWeight: "700", fontSize: "14px", color: "#059669" }}>
+                            {comparisonResult.differential_regressions.fixed_count}
+                          </div>
+                        </div>
+                        <div style={{ background: "#ffffff", padding: "8px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                          <span style={{ color: "#64748b" }}>New Regressions:</span>
+                          <div style={{ fontWeight: "700", fontSize: "14px", color: comparisonResult.differential_regressions.new_count > 0 ? "#dc2626" : "#059669" }}>
+                            {comparisonResult.differential_regressions.new_count}
+                          </div>
+                        </div>
+                      </div>
+                      {comparisonResult.context_divergence_reasons?.length > 0 && (
+                        <div style={{ color: "#92400e", background: "#fffbeb", padding: "8px", borderRadius: "6px", border: "1px solid #fde68a" }}>
+                          <strong>Context Divergences:</strong> {comparisonResult.context_divergence_reasons.join("; ")}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <div style={{ ...cardStyle, textAlign: "center", padding: "48px 24px" }}>
+                <span style={{ fontSize: "40px" }}>📑</span>
+                <h3 style={{ margin: "12px 0 6px", fontSize: "18px", fontWeight: "700", color: "#0f172a" }}>
+                  Select a Certification Run to Open Evidence Dossier
+                </h3>
+                <p style={{ margin: "0 auto 20px", maxWidth: "600px", fontSize: "14px", color: "#64748b" }}>
+                  Choose an active or historical certification run above to inspect the authoritative deterministic explanation, completeness report, traceability graph, and audit trail.
+                </p>
               </div>
             )}
           </div>

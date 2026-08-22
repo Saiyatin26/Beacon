@@ -138,7 +138,18 @@ class FunctionAdapter(ImplementationAdapter):
 
         start_time = time.perf_counter()
         try:
-            raw_output = self.target_fn(**norm_inputs)
+            import inspect
+            try:
+                sig = inspect.signature(self.target_fn)
+                has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                if has_varkw:
+                    call_kwargs = norm_inputs
+                else:
+                    call_kwargs = {k: v for k, v in norm_inputs.items() if k in sig.parameters}
+            except Exception:
+                call_kwargs = norm_inputs
+
+            raw_output = self.target_fn(**call_kwargs)
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
 
             raw_out_dict = raw_output if isinstance(raw_output, dict) else {"decision": raw_output}
