@@ -1,18 +1,11 @@
 """Phase 14 — User-Supplied Dataset Ingestion & Custom Certification Test Suite.
 
-Verifies:
-1. Multi-format parsing (JSON, JSONL, CSV) & schema inference.
-2. Configurable file size and row limits.
-3. Secret and credential scanning (prohibits API keys, tokens, and private keys).
-4. Deterministic SHA-256 dataset checksumming and schema fingerprinting.
-5. Ingestion manifests, duplicate upload idempotency, and project namespace isolation.
-6. Dataset deletion and comprehensive audit logging.
-7. Allowlisted adapter sandboxing (rejection of arbitrary/unregistered adapters).
-8. Privacy boundary enforcement (gating external cloud LLMs).
-9. Custom pre-flight validation and configuration fingerprint invalidation.
-10. Definitive Phase 14 Acceptance Tests A through H.
+Validates the complete custom data ingestion, schema fingerprinting, secret scanning,
+metadata privacy boundaries, explicit OracleSet binding/compatibility, authoritative
+pre-flight configuration fingerprint enforcement, and deterministic certification pipeline.
 """
 
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -24,15 +17,13 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_DIR))
 sys.path.insert(0, str(ROOT_DIR / "legacy_sample"))
 
-from api.main import app
-from ingestion import (
-    DataFormat,
-    DatasetProvenanceCategory,
-    dataset_validator,
-    user_dataset_registry,
-    audit_logger,
-)
+from api.main import app, compute_custom_config_fingerprint
 from certification.repository import certification_repository
+from ingestion.dataset_registry import user_dataset_registry
+from ingestion.dataset_validator import dataset_validator
+from ingestion.audit import audit_logger
+from oracle.registry import registry as oracle_registry
+from certification.adapter_registry import adapter_registry
 
 
 @pytest.fixture(autouse=True)
@@ -52,7 +43,7 @@ def client():
     return TestClient(app)
 
 
-# Sample Valid Payloads
+# Sample Valid Payloads for Retail Domain
 SAMPLE_RETAIL_JSON = json.dumps([
     {"order_amount": 45.0, "customer_tier": "STANDARD", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": False},
     {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": False},
@@ -142,8 +133,8 @@ def test_preview_valid_csv_dataset(client):
 
 
 def test_rejection_of_empty_and_oversized_datasets(client):
-    """Verifies rejection of empty datasets and size limit violations."""
-    # Empty
+    """Verifies that empty datasets and payloads exceeding row/byte limits are rejected."""
+    # Preview empty
     res_empty = client.post(
         "/api/v1/custom/datasets/preview",
         json={
@@ -173,8 +164,8 @@ def test_rejection_of_empty_and_oversized_datasets(client):
 def test_security_secret_scanning_and_blocking(client):
     """Verifies that uploaded datasets with embedded credentials or API keys are rejected with zero secret echoing."""
     secret_payload = json.dumps([
-        {"order_total": 50.0, "api_token": "sk-ant-api03-verysecrettoken12345678901234567890"},
-        {"order_total": 100.0, "api_token": "normal_val"},
+        {"order_amount": 50.0, "api_token": "sk-ant-api03-verysecrettoken12345678901234567890"},
+        {"order_amount": 100.0, "api_token": "normal_val"},
     ])
 
     res = client.post(
@@ -193,26 +184,422 @@ def test_security_secret_scanning_and_blocking(client):
 
 
 # ==============================================================================
-# 2. Hashing, Idempotency & Project Isolation Tests
+# 2. Correction 4: Precise Semantic Hashing & Schema Fingerprint Tests
 # ==============================================================================
 
-def test_deterministic_checksum_and_whitespace_key_order_invariance():
-    """Verifies that different key order produces the exact same canonical SHA-256 checksum."""
+def test_schema_fingerprint_invariance():
+    """Verifies that harmless dictionary key-order differences produce identical schema fingerprints."""
     data_a = [
-        {"order_total": 45.0, "customer_type": "VIP", "item_count": 2},
-        {"order_total": 120.0, "customer_type": "REGULAR", "item_count": 4},
+        {"order_amount": 45.0, "customer_tier": "VIP", "items_count": 2},
+        {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4},
     ]
     data_b = [
-        {"customer_type": "VIP", "item_count": 2, "order_total": 45.0},
-        {"item_count": 4, "order_total": 120.0, "customer_type": "REGULAR"},
+        {"customer_tier": "VIP", "items_count": 2, "order_amount": 45.0},
+        {"items_count": 4, "order_amount": 120.0, "customer_tier": "STANDARD"},
     ]
-    hash_a = dataset_validator.extract_schema(data_a)
-    hash_b = dataset_validator.extract_schema(data_b)
-    assert hash_a == hash_b
+    from ingestion.dataset_models import compute_schema_fingerprint
+    schema_a = dataset_validator.extract_schema(data_a)
+    schema_b = dataset_validator.extract_schema(data_b)
+    assert schema_a == schema_b
 
+    fp_a = compute_schema_fingerprint(schema_a)
+    fp_b = compute_schema_fingerprint(schema_b)
+    assert fp_a == fp_b
+    assert len(fp_a) == 64
+
+
+def test_dataset_checksum_invariance_under_key_order():
+    """Verifies that equivalent objects with differing key order produce the exact same canonical SHA-256."""
+    data_a = [
+        {"order_amount": 45.0, "customer_tier": "VIP", "items_count": 2},
+        {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4},
+    ]
+    data_b = [
+        {"customer_tier": "VIP", "items_count": 2, "order_amount": 45.0},
+        {"items_count": 4, "order_amount": 120.0, "customer_tier": "STANDARD"},
+    ]
     from ingestion.dataset_models import compute_canonical_dataset_checksum
-    assert compute_canonical_dataset_checksum(data_a) == compute_canonical_dataset_checksum(data_b)
+    chk_a = compute_canonical_dataset_checksum(data_a)
+    chk_b = compute_canonical_dataset_checksum(data_b)
+    assert chk_a == chk_b
+    assert len(chk_a) == 64
 
+
+def test_meaningful_data_change_alters_checksum_and_input_identity():
+    """Verifies that modifying numerical or categorical values changes the checksum and input-set hash."""
+    data_orig = [
+        {"order_amount": 45.0, "customer_tier": "VIP", "items_count": 2},
+    ]
+    data_mod = [
+        {"order_amount": 45.01, "customer_tier": "VIP", "items_count": 2},
+    ]
+    from ingestion.dataset_models import compute_canonical_dataset_checksum
+    chk_orig = compute_canonical_dataset_checksum(data_orig)
+    chk_mod = compute_canonical_dataset_checksum(data_mod)
+    assert chk_orig != chk_mod
+
+
+# ==============================================================================
+# 3. Correction 2: Metadata-Only Dataset Retrieval (No Raw Records Exposed)
+# ==============================================================================
+
+def test_dataset_metadata_endpoint_returns_no_raw_records(client):
+    """Verifies that GET /api/v1/custom/datasets/{dataset_id} returns metadata only without exposing stored records."""
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_meta_test",
+            "dataset_name": "Private Enterprise Records",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+            "declared_provenance": "PRIVATE_ENTERPRISE",
+        },
+    )
+    assert res_up.status_code == 200
+    ds_id = res_up.json()["dataset_id"]
+
+    res_get = client.get(f"/api/v1/custom/datasets/{ds_id}")
+    assert res_get.status_code == 200
+    meta = res_get.json()
+
+    # Metadata fields must be present
+    assert meta["dataset_id"] == ds_id
+    assert meta["project_id"] == "proj_meta_test"
+    assert meta["dataset_name"] == "Private Enterprise Records"
+    assert meta["row_count"] == 5
+    assert len(meta["checksum"]) == 64
+    assert len(meta["schema_fingerprint"]) == 64
+    assert len(meta["input_set_hash"]) == 64
+    assert "order_amount" in meta["inferred_schema"]
+
+    # Raw/sample records must NOT be exposed in metadata endpoint
+    assert "sample_records" not in meta
+    assert "records" not in meta
+    assert "raw_records" not in meta
+    assert "raw_content" not in meta
+
+
+# ==============================================================================
+# 4. Correction 3: Explicit OracleSet Binding and Compatibility Tests
+# ==============================================================================
+
+def test_list_custom_oracle_sets_endpoint(client):
+    """Verifies that GET /api/v1/custom/oracle-sets returns available frozen OracleSets."""
+    res = client.get("/api/v1/custom/oracle-sets")
+    assert res.status_code == 200
+    data = res.json()
+    assert "oracle_sets" in data
+    set_ids = [s["oracle_set_id"] for s in data["oracle_sets"]]
+    assert "SET-RETAIL-CONTROLLED-v1" in set_ids or any("RETAIL" in sid for sid in set_ids)
+
+
+def test_explicit_oracleset_required_in_controlled_mode(client):
+    """Verifies that omitting oracle_set_id in CONTROLLED mode is rejected."""
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_orc_test",
+            "dataset_name": "Retail Binding Test",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    # Preflight without oracle_set_id fails
+    res_val = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_orc_test",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "CONTROLLED",
+            "oracle_set_id": None,
+        },
+    )
+    data = res_val.json()
+    assert data["is_valid"] is False
+    assert any("Explicit 'oracle_set_id' is required" in e for e in data["errors"])
+
+    # Certify without oracle_set_id fails
+    res_cert = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_orc_test",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "CONTROLLED",
+            "oracle_set_id": None,
+        },
+    )
+    assert res_cert.status_code == 400
+
+
+def test_invalid_oracleset_rejected(client):
+    """Verifies that a nonexistent oracle_set_id is rejected."""
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_orc_inv",
+            "dataset_name": "Retail Binding Test",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    res_val = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_orc_inv",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "CONTROLLED",
+            "oracle_set_id": "NONEXISTENT-ORACLE-SET-999",
+        },
+    )
+    assert res_val.json()["is_valid"] is False
+    assert any("not found in registry" in e for e in res_val.json()["errors"])
+
+
+def test_incompatible_oracleset_rejected(client):
+    """Verifies that binding an OracleSet requiring fields absent in the dataset is rejected."""
+    # Upload Loan dataset schema
+    loan_json = json.dumps([
+        {"credit_score": 750, "debt_ratio": 0.25, "annual_income": 85000},
+    ])
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_incompat",
+            "dataset_name": "Loan Incompatible Schema",
+            "data_format": "JSON",
+            "raw_content": loan_json,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    # Attempt to bind Retail OracleSet (requires order_amount, customer_tier, etc.)
+    res_val = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_incompat",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "CONTROLLED",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+        },
+    )
+    assert res_val.json()["is_valid"] is False
+    assert any("requires schema fields" in e for e in res_val.json()["errors"])
+
+
+def test_adapter_name_alone_cannot_determine_oracleset(client):
+    """Verifies that adapter names containing 'retail' or 'payroll' do NOT implicitly bind an OracleSet."""
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_no_implicit",
+            "dataset_name": "No Implicit Binding Test",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    # Omitting oracle_set_id with retail adapter must still be rejected
+    res_val = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_no_implicit",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "evaluation_mode": "CONTROLLED",
+            "oracle_set_id": None,
+        },
+    )
+    assert res_val.json()["is_valid"] is False
+
+
+# ==============================================================================
+# 5. Correction 1: Authoritative Pre-Flight Fingerprint Enforcement Tests
+# ==============================================================================
+
+def test_exact_custom_preflight_fingerprint_accepted(client):
+    """Verifies that submitting the exact freshly generated pre-flight fingerprint succeeds."""
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_fp_ok",
+            "dataset_name": "Fingerprint OK Dataset",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_fp_ok",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+        },
+    )
+    assert val_res.status_code == 200
+    fp = val_res.json()["config_fingerprint"]
+    assert fp != ""
+
+    res_cert = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_fp_ok",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": fp,
+        },
+    )
+    assert res_cert.status_code == 200
+    art = res_cert.json()
+    assert art["status"] in ("CERTIFIED", "CERTIFIED_WITH_WARNINGS")
+
+
+def test_stale_or_missing_fingerprint_rejected_with_409(client):
+    """Verifies that submitting without a config_fingerprint or with a stale one returns HTTP 409."""
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_fp_stale",
+            "dataset_name": "Stale Fingerprint Test",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    # Missing fingerprint -> HTTP 409
+    res_cert_missing = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_fp_stale",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": None,
+        },
+    )
+    assert res_cert_missing.status_code == 409
+    assert "pre-flight is stale" in res_cert_missing.json()["detail"]
+
+    # Bogus / malformed fingerprint -> HTTP 409
+    res_cert_bogus = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_fp_stale",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": "deadbeef1234567890abcdef",
+        },
+    )
+    assert res_cert_bogus.status_code == 409
+
+
+def test_changing_configuration_invalidates_old_fingerprint(client):
+    """Verifies that changing any certification-affecting config causes the old fingerprint to be rejected with 409."""
+    payload_with_vip_600 = json.dumps([
+        {"order_amount": 600.0, "customer_tier": "VIP", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": False},
+        {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": False},
+    ])
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_fp_change",
+            "dataset_name": "Config Change Test",
+            "data_format": "JSON",
+            "raw_content": payload_with_vip_600,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    # Preflight for clean variant
+    val_clean = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_fp_change",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+        },
+    ).json()
+    clean_fp = val_clean["config_fingerprint"]
+
+    # Now attempt to certify the BUGGY variant using the CLEAN preflight fingerprint -> HTTP 409
+    res_cert_mismatch = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_fp_change",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_buggy_threshold",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": clean_fp,
+        },
+    )
+    assert res_cert_mismatch.status_code == 409
+
+    # Re-running pre-flight for buggy variant produces a new fingerprint that succeeds
+    val_buggy = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_fp_change",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_buggy_threshold",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+        },
+    ).json()
+    buggy_fp = val_buggy["config_fingerprint"]
+    assert buggy_fp != clean_fp
+
+    res_cert_buggy = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_fp_change",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_buggy_threshold",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": buggy_fp,
+        },
+    )
+    assert res_cert_buggy.status_code == 200
+    assert res_cert_buggy.json()["status"] == "NOT_CERTIFIED"
+
+
+# ==============================================================================
+# 6. Additional Security, Isolation & Idempotency Tests
+# ==============================================================================
 
 def test_idempotent_dataset_registration(client):
     """Verifies that uploading the exact same dataset under the same project identity is idempotent."""
@@ -245,7 +632,6 @@ def test_idempotent_dataset_registration(client):
     assert man1["dataset_id"] == man2["dataset_id"]
     assert man1["checksum"] == man2["checksum"]
 
-    # Verify list count is 1
     res_list = client.get("/api/v1/custom/datasets?project_id=proj_idemp")
     assert len(res_list.json()["datasets"]) == 1
 
@@ -310,10 +696,6 @@ def test_dataset_deletion_and_audit_logging(client):
     assert "DATASET_DELETE" in actions
 
 
-# ==============================================================================
-# 3. Adapter Sandboxing & Privacy Tests
-# ==============================================================================
-
 def test_rejection_of_unsupported_implementation_adapter(client):
     """Verifies that requesting an unregistered adapter is strictly rejected."""
     res_up = client.post(
@@ -334,6 +716,7 @@ def test_rejection_of_unsupported_implementation_adapter(client):
             "dataset_id": ds_id,
             "legacy_adapter_id": "malicious_unregistered_adapter_exec",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
         },
     )
@@ -355,7 +738,6 @@ def test_privacy_boundary_cloud_llm_gating(client):
     )
     ds_id = res_up.json()["dataset_id"]
 
-    # Request OpenRouter without consent
     res_val = client.post(
         "/api/v1/custom/validate",
         json={
@@ -363,6 +745,7 @@ def test_privacy_boundary_cloud_llm_gating(client):
             "dataset_id": ds_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "FULL_BEACON",
             "preferred_provider": "openrouter",
             "allow_external_llm": False,
@@ -374,7 +757,7 @@ def test_privacy_boundary_cloud_llm_gating(client):
 
 
 # ==============================================================================
-# 4. Phase 14 Acceptance Tests (Tests A through H)
+# 7. Phase 14 Acceptance Tests (Tests A through H + Idempotency & Recompute)
 # ==============================================================================
 
 def test_acceptance_test_a_builtin_retail_controlled_clean(client):
@@ -441,6 +824,7 @@ def test_acceptance_test_c_user_dataset_controlled_clean(client):
             "dataset_id": ds_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
         },
     )
@@ -457,6 +841,7 @@ def test_acceptance_test_c_user_dataset_controlled_clean(client):
             "dataset_id": ds_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
             "config_fingerprint": val_data["config_fingerprint"],
         },
@@ -488,7 +873,7 @@ def test_acceptance_test_d_modified_dataset_invalidates_context(client):
 
     # Dataset 2 (modified value)
     modified_json = json.dumps([
-        {"order_total": 999.0, "customer_type": "VIP", "is_first_order": True, "item_count": 10}
+        {"order_amount": 999.0, "customer_tier": "VIP", "items_count": 10, "coupon_code": "BULK50", "is_express_shipping": True}
     ])
     res2 = client.post(
         "/api/v1/custom/datasets/upload",
@@ -502,11 +887,9 @@ def test_acceptance_test_d_modified_dataset_invalidates_context(client):
     ds2_id = res2.json()["dataset_id"]
     ds2_chk = res2.json()["checksum"]
 
-    # Checksums and IDs must differ
     assert ds1_chk != ds2_chk
     assert ds1_id != ds2_id
 
-    # Fingerprints must differ
     val1 = client.post(
         "/api/v1/custom/validate",
         json={
@@ -514,6 +897,7 @@ def test_acceptance_test_d_modified_dataset_invalidates_context(client):
             "dataset_id": ds1_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
         },
     ).json()
@@ -525,6 +909,7 @@ def test_acceptance_test_d_modified_dataset_invalidates_context(client):
             "dataset_id": ds2_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
         },
     ).json()
@@ -546,6 +931,22 @@ def test_acceptance_test_e_user_dataset_full_beacon_discovery(client):
     )
     ds_id = res_up.json()["dataset_id"]
 
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_test_e",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "FULL_BEACON",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+        },
+    )
+    assert val_res.status_code == 200
+    fp = val_res.json()["config_fingerprint"]
+
     res_cert = client.post(
         "/api/v1/custom/certify",
         json={
@@ -553,9 +954,11 @@ def test_acceptance_test_e_user_dataset_full_beacon_discovery(client):
             "dataset_id": ds_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "FULL_BEACON",
             "preferred_provider": "offline",
             "allow_external_llm": False,
+            "config_fingerprint": fp,
         },
     )
     assert res_cert.status_code == 200
@@ -584,7 +987,9 @@ def test_acceptance_test_f_cross_project_isolation(client):
             "dataset_id": ds_a_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": "any",
         },
     )
     assert res_cross.status_code == 400
@@ -604,6 +1009,21 @@ def test_acceptance_test_g_external_llm_disabled_local_only(client):
     )
     ds_id = res_up.json()["dataset_id"]
 
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_local",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "preferred_provider": "offline",
+            "allow_external_llm": False,
+        },
+    )
+    fp = val_res.json()["config_fingerprint"]
+
     res_cert = client.post(
         "/api/v1/custom/certify",
         json={
@@ -611,14 +1031,15 @@ def test_acceptance_test_g_external_llm_disabled_local_only(client):
             "dataset_id": ds_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
             "preferred_provider": "offline",
             "allow_external_llm": False,
+            "config_fingerprint": fp,
         },
     )
     assert res_cert.status_code == 200
     art = res_cert.json()
-    # Provider must be recorded as offline
     prov = art["provider"] if "provider" in art else art["context"]["provider"]
     assert prov == "offline"
 
@@ -636,6 +1057,19 @@ def test_acceptance_test_h_tampered_dataset_integrity_verification_fail(client):
     )
     ds_id = res_up.json()["dataset_id"]
 
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_tamper",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+        },
+    )
+    fp = val_res.json()["config_fingerprint"]
+
     res_cert = client.post(
         "/api/v1/custom/certify",
         json={
@@ -643,7 +1077,9 @@ def test_acceptance_test_h_tampered_dataset_integrity_verification_fail(client):
             "dataset_id": ds_id,
             "legacy_adapter_id": "retail_discount_legacy",
             "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
             "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": fp,
         },
     )
     art = res_cert.json()
@@ -653,3 +1089,78 @@ def test_acceptance_test_h_tampered_dataset_integrity_verification_fail(client):
     res_ver = client.post(f"/api/v1/certification/{cert_id}/verify")
     assert res_ver.status_code == 200
     assert res_ver.json()["status"] == "PASS"
+
+
+def test_acceptance_test_j_and_k_idempotency_and_force_recompute(client):
+    """TEST J & K: Idempotency reuses artifact on identical request, while force_recompute creates new run."""
+    res_up = client.post(
+        "/api/v1/custom/datasets/upload",
+        json={
+            "project_id": "proj_idemp_run",
+            "dataset_name": "Idempotent Run Dataset",
+            "data_format": "JSON",
+            "raw_content": SAMPLE_RETAIL_JSON,
+        },
+    )
+    ds_id = res_up.json()["dataset_id"]
+
+    val_res = client.post(
+        "/api/v1/custom/validate",
+        json={
+            "project_id": "proj_idemp_run",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+        },
+    )
+    fp = val_res.json()["config_fingerprint"]
+
+    # Run 1
+    res1 = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_idemp_run",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": fp,
+        },
+    )
+    art1 = res1.json()
+
+    # Run 2 (identical request -> reuse)
+    res2 = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_idemp_run",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": fp,
+        },
+    )
+    art2 = res2.json()
+    assert art1["certification_id"] == art2["certification_id"]
+
+    # Run 3 (force_recompute=True -> distinct run)
+    res3 = client.post(
+        "/api/v1/custom/certify",
+        json={
+            "project_id": "proj_idemp_run",
+            "dataset_id": ds_id,
+            "legacy_adapter_id": "retail_discount_legacy",
+            "modernized_adapter_id": "retail_discount_modern_clean",
+            "oracle_set_id": "SET-RETAIL-CONTROLLED-v1",
+            "evaluation_mode": "CONTROLLED",
+            "config_fingerprint": fp,
+            "force_recompute": True,
+        },
+    )
+    art3 = res3.json()
+    assert art3["certification_id"] != art1["certification_id"]

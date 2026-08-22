@@ -939,15 +939,32 @@ def list_custom_datasets(project_id: Optional[str] = None, limit: int = 50):
 
 
 @app.get("/api/v1/custom/datasets/{dataset_id}")
-def get_custom_dataset(dataset_id: str):
-    """Retrieves a single custom dataset manifest and its metadata."""
-    record = user_dataset_registry.get_dataset(dataset_id)
-    if not record:
+def get_custom_dataset(dataset_id: str, project_id: Optional[str] = None):
+    """Retrieves metadata only for a single custom dataset manifest without exposing raw/stored data."""
+    manifest = user_dataset_registry.get_manifest(dataset_id)
+    if not manifest:
         raise HTTPException(status_code=404, detail=f"Custom dataset '{dataset_id}' not found.")
+    if project_id and manifest.project_id != project_id:
+        raise HTTPException(status_code=404, detail=f"Custom dataset '{dataset_id}' not found in project '{project_id}'.")
     return {
-        "manifest": record.manifest.model_dump(mode="json"),
-        "row_count": record.manifest.row_count,
-        "sample_records": record.canonical_records[:5],
+        "manifest": manifest.model_dump(mode="json"),
+        "dataset_id": manifest.dataset_id,
+        "project_id": manifest.project_id,
+        "dataset_name": manifest.dataset_name,
+        "version": manifest.version,
+        "data_format": manifest.data_format,
+        "declared_provenance": manifest.declared_provenance.value if hasattr(manifest.declared_provenance, "value") else str(manifest.declared_provenance),
+        "source_reference": manifest.source_reference,
+        "target_domain": manifest.target_domain,
+        "checksum": manifest.checksum,
+        "schema_fingerprint": manifest.schema_fingerprint,
+        "input_set_hash": manifest.input_set_hash,
+        "inferred_schema": manifest.inferred_schema,
+        "row_count": manifest.row_count,
+        "status": manifest.status.value if hasattr(manifest.status, "value") else str(manifest.status),
+        "lifecycle_status": manifest.status.value if hasattr(manifest.status, "value") else str(manifest.status),
+        "created_at": manifest.created_at,
+        "updated_at": manifest.created_at,
     }
 
 
@@ -966,10 +983,155 @@ def list_custom_adapters():
     return {"adapters": adapter_registry.list_adapters()}
 
 
+def get_oracle_required_variables(oracle: Any) -> set[str]:
+    """Extracts required input variable names from an OracleDefinition."""
+    vars_set = set()
+    if hasattr(oracle, "input_schema") and oracle.input_schema and hasattr(oracle.input_schema, "variables"):
+        for v in oracle.input_schema.variables:
+            vars_set.add(v.name)
+    if hasattr(oracle, "inputs") and oracle.inputs:
+        vars_set.update(oracle.inputs)
+    def _extract_from_node(node):
+        if hasattr(node, "variable") and node.variable:
+            vars_set.add(node.variable)
+        if hasattr(node, "left_var") and node.left_var:
+            vars_set.add(node.left_var)
+        if hasattr(node, "conditions") and node.conditions:
+            for c in node.conditions:
+                _extract_from_node(c)
+        if hasattr(node, "operand") and node.operand:
+            _extract_from_node(node.operand)
+    if hasattr(oracle, "condition") and oracle.condition:
+        _extract_from_node(oracle.condition)
+    if hasattr(oracle, "expression") and hasattr(oracle.expression, "condition"):
+        _extract_from_node(oracle.expression.condition)
+    return vars_set
+
+
+def check_oracle_set_compatibility(orc_set: Any, inferred_schema: dict[str, str]) -> tuple[bool, list[str]]:
+    """Checks if an OracleSet's required condition variables exist in the dataset schema."""
+    required = set()
+    for o in getattr(orc_set, "oracles", []):
+        required.update(get_oracle_required_variables(o))
+    missing = [v for v in sorted(required) if v not in inferred_schema]
+    return len(missing) == 0, missing
+
+
+def resolve_oracle_set(
+    oracle_set_id: str,
+    mode: str = "CONTROLLED",
+    preferred_provider: str = "offline",
+    allow_external_llm: bool = False,
+) -> Optional[Any]:
+    """Resolves an OracleSet by its explicit ID from oracle_registry or benchmark_registry."""
+    if not oracle_set_id:
+        return None
+    from oracle.registry import registry as oracle_reg
+    orc_set = oracle_reg.get_oracle_set(oracle_set_id)
+    if orc_set is not None:
+        return orc_set
+
+    # Check if oracle_set_id maps to a benchmark specification
+    bench_map = {
+        "SET-RETAIL-CONTROLLED-v1": "retail_discount_pricing",
+        "SET-LOAN-CONTROLLED-v1": "loan_approval",
+        "SET-PAYROLL-CONTROLLED-v1": "payroll_tax",
+        "SET-MEDICAL-CONTROLLED-v1": "medical_triage",
+        "retail_discount_pricing": "retail_discount_pricing",
+        "loan_approval": "loan_approval",
+        "payroll_tax": "payroll_tax",
+        "medical_triage": "medical_triage",
+    }
+    bench_id = bench_map.get(oracle_set_id)
+    if bench_id:
+        try:
+            use_llm = (mode.upper() == "FULL_BEACON" and allow_external_llm)
+            orc_set = benchmark_registry.get_or_create_oracle_set(
+                bench_id,
+                mode=mode,
+                preferred_provider=preferred_provider,
+                use_llm=use_llm,
+            )
+            if orc_set:
+                oracle_reg.register_oracle_set(orc_set)
+                return orc_set
+        except Exception:
+            pass
+    return None
+
+
+@app.get("/api/v1/custom/oracle-sets")
+def list_custom_oracle_sets(domain: Optional[str] = None):
+    """Lists registered, frozen OracleSets available for explicit custom certification binding."""
+    from oracle.registry import registry as oracle_reg
+    for bid in ["retail_discount_pricing", "loan_approval", "payroll_tax", "medical_triage"]:
+        try:
+            s = benchmark_registry.get_or_create_oracle_set(bid, mode="CONTROLLED")
+            if s:
+                oracle_reg.register_oracle_set(s)
+        except Exception:
+            pass
+    sets = oracle_reg.list_oracle_sets(domain=domain)
+    return {
+        "oracle_sets": [
+            {
+                "oracle_set_id": s.oracle_set_id,
+                "name": s.name,
+                "domain": s.domain,
+                "version": s.version,
+                "oracle_count": len(s.oracles),
+                "oracle_set_hash": s.oracle_set_hash,
+            }
+            for s in sets
+        ]
+    }
+
+
+def compute_custom_config_fingerprint(
+    project_id: str,
+    dataset_id: str,
+    dataset_checksum: str,
+    input_set_hash: str,
+    legacy_adapter_id: str,
+    legacy_hash: str,
+    modernized_adapter_id: str,
+    modern_hash: str,
+    oracle_set_id: str,
+    oracle_set_hash: str,
+    policy_id: str,
+    policy_hash: str,
+    evaluation_mode: str,
+    preferred_provider: str,
+    allow_external_llm: bool,
+) -> str:
+    """Computes deterministic SHA-256 fingerprint of the full certification configuration.
+    Never includes secrets, API keys, volatile timestamps, or random values.
+    """
+    fingerprint_dict = {
+        "project_id": project_id,
+        "dataset_id": dataset_id,
+        "dataset_checksum": dataset_checksum,
+        "input_set_hash": input_set_hash,
+        "legacy_adapter_id": legacy_adapter_id,
+        "legacy_hash": legacy_hash,
+        "modernized_adapter_id": modernized_adapter_id,
+        "modern_hash": modern_hash,
+        "oracle_set_id": oracle_set_id,
+        "oracle_set_hash": oracle_set_hash,
+        "policy_id": policy_id,
+        "policy_hash": policy_hash,
+        "evaluation_mode": evaluation_mode.upper(),
+        "preferred_provider": preferred_provider.lower().strip(),
+        "allow_external_llm": bool(allow_external_llm),
+    }
+    raw_fp = json.dumps(fingerprint_dict, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw_fp.encode("utf-8")).hexdigest()
+
+
 @app.post("/api/v1/custom/validate")
 def validate_custom_certification(req: CustomPreflightRequest):
-    """Performs rigorous pre-flight validation on user dataset, schema, allowlisted adapters,
-    OracleSet compatibility, policy, and privacy boundaries.
+    """Performs authoritative pre-flight validation on user dataset, schema, allowlisted adapters,
+    explicit OracleSet binding, compatibility, policy, and privacy boundaries.
     """
     errors: list[str] = []
     warnings: list[str] = []
@@ -1029,18 +1191,27 @@ def validate_custom_certification(req: CustomPreflightRequest):
         except Exception as exc:
             errors.append(f"Modernized adapter failed on sample dataset record: {str(exc)}")
 
-    # 4. OracleSet & Privacy Boundary Validation
-    bench_id = "retail_discount_pricing" if "retail" in (req.legacy_adapter_id or "").lower() else (
-        "payroll_tax" if "payroll" in (req.legacy_adapter_id or "").lower() else (
-            "medical_triage" if "medical" in (req.legacy_adapter_id or "").lower() else "loan_approval"
-        )
-    )
-    mode = "FULL_BEACON" if req.evaluation_mode.upper() == "FULL_BEACON" else "CONTROLLED"
+    # 4. Explicit OracleSet Binding & Compatibility Verification (NO STRING-BASED GUESSING)
+    mode = req.evaluation_mode.upper()
     orc_set = None
-    orc_set_id = req.oracle_set_id
+    orc_set_id = req.oracle_set_id or ""
     orc_set_hash = ""
 
-    if req.evaluation_mode.upper() == "FULL_BEACON":
+    if mode == "CONTROLLED":
+        if not orc_set_id:
+            errors.append("Explicit 'oracle_set_id' is required for CONTROLLED mode custom certification.")
+        else:
+            orc_set = resolve_oracle_set(orc_set_id, mode="CONTROLLED")
+            if not orc_set:
+                errors.append(f"OracleSet '{orc_set_id}' not found in registry.")
+            else:
+                orc_set_hash = orc_set.oracle_set_hash
+                is_compat, missing_vars = check_oracle_set_compatibility(orc_set, manifest.inferred_schema)
+                if not is_compat:
+                    errors.append(
+                        f"OracleSet '{orc_set_id}' requires schema fields {missing_vars} which are absent in dataset '{req.dataset_id}'."
+                    )
+    elif mode == "FULL_BEACON":
         # Privacy boundary check
         prov_norm = req.preferred_provider.lower().strip()
         if prov_norm in ("openrouter", "anthropic") and not req.allow_external_llm:
@@ -1048,44 +1219,50 @@ def validate_custom_certification(req: CustomPreflightRequest):
                 f"Privacy boundary violation: External cloud provider '{prov_norm}' selected without explicit user consent (allow_external_llm=False). "
                 "User data cannot leave local environment. Enable consent or select local/offline provider."
             )
-
-    try:
-        orc_set = benchmark_registry.get_or_create_oracle_set(
-            bench_id,
-            mode=mode,
-            preferred_provider=req.preferred_provider.lower().strip(),
-            use_llm=(mode == "FULL_BEACON" and req.allow_external_llm),
-        )
+        actual_provider = prov_norm if req.allow_external_llm else "offline"
+        if orc_set_id:
+            orc_set = resolve_oracle_set(
+                orc_set_id,
+                mode="FULL_BEACON",
+                preferred_provider=actual_provider,
+                allow_external_llm=req.allow_external_llm,
+            )
+        else:
+            orc_set = resolve_oracle_set("SET-RETAIL-CONTROLLED-v1")
         if orc_set:
-            orc_set_id = orc_set.oracle_set_id
             orc_set_hash = orc_set.oracle_set_hash
-    except Exception as exc:
-        warnings.append(f"OracleSet resolution note: {exc}")
+            is_compat, missing_vars = check_oracle_set_compatibility(orc_set, manifest.inferred_schema)
+            if not is_compat:
+                errors.append(
+                    f"OracleSet '{orc_set_id}' requires schema fields {missing_vars} which are absent in dataset '{req.dataset_id}'."
+                )
 
     # 5. Compute Deterministic Configuration Fingerprint
     leg_hash = getattr(leg_adp, "implementation_hash", "") or (hashlib.sha256(req.legacy_adapter_id.encode()).hexdigest() if leg_adp else "")
     mod_hash = getattr(mod_adp, "implementation_hash", "") or (hashlib.sha256(req.modernized_adapter_id.encode()).hexdigest() if mod_adp else "")
-    pol_id = req.policy_id or "POL-DEFAULT"
-    pol_hash = hashlib.sha256(pol_id.encode("utf-8")).hexdigest()
+    policy = CertificationPolicy(policy_id=req.policy_id or "POL-DEFAULT", min_equivalence_score=0.80, min_oracle_coverage=0.0)
+    pol_id = policy.policy_id
+    pol_hash = policy.compute_hash()
 
-    fingerprint_dict = {
-        "project_id": req.project_id,
-        "dataset_id": req.dataset_id,
-        "dataset_checksum": manifest.checksum,
-        "input_set_hash": manifest.input_set_hash,
-        "legacy_adapter_id": req.legacy_adapter_id,
-        "legacy_hash": leg_hash,
-        "modernized_adapter_id": req.modernized_adapter_id,
-        "modern_hash": mod_hash,
-        "oracle_set_id": orc_set_id or "SET-DEFAULT",
-        "oracle_set_hash": orc_set_hash,
-        "policy_id": pol_id,
-        "evaluation_mode": req.evaluation_mode.upper(),
-        "preferred_provider": req.preferred_provider.lower().strip(),
-        "allow_external_llm": bool(req.allow_external_llm),
-    }
-    raw_fp = json.dumps(fingerprint_dict, sort_keys=True, separators=(",", ":"))
-    config_fingerprint = hashlib.sha256(raw_fp.encode("utf-8")).hexdigest()
+    final_orc_set_id = orc_set.oracle_set_id if orc_set else (orc_set_id or "SET-NONE")
+
+    config_fingerprint = compute_custom_config_fingerprint(
+        project_id=req.project_id,
+        dataset_id=req.dataset_id,
+        dataset_checksum=manifest.checksum,
+        input_set_hash=manifest.input_set_hash,
+        legacy_adapter_id=req.legacy_adapter_id,
+        legacy_hash=leg_hash,
+        modernized_adapter_id=req.modernized_adapter_id,
+        modern_hash=mod_hash,
+        oracle_set_id=final_orc_set_id,
+        oracle_set_hash=orc_set_hash,
+        policy_id=pol_id,
+        policy_hash=pol_hash,
+        evaluation_mode=mode,
+        preferred_provider=req.preferred_provider,
+        allow_external_llm=req.allow_external_llm,
+    )
 
     is_valid = len(errors) == 0
 
@@ -1099,7 +1276,7 @@ def validate_custom_certification(req: CustomPreflightRequest):
         total_input_count=len(test_inputs),
         legacy_adapter_status=leg_status,
         modernized_adapter_status=mod_status,
-        oracle_set_id=orc_set_id or "SET-DEFAULT",
+        oracle_set_id=final_orc_set_id,
         oracle_set_hash=orc_set_hash,
         policy_id=pol_id,
         policy_hash=pol_hash,
@@ -1111,7 +1288,10 @@ def validate_custom_certification(req: CustomPreflightRequest):
 
 @app.post("/api/v1/custom/certify")
 def run_custom_certification(req: CustomCertificationRunRequest):
-    """Certifies custom user-supplied dataset using the authoritative deterministic CertificationEngine."""
+    """Certifies custom user-supplied dataset using the authoritative deterministic CertificationEngine.
+    Enforces authoritative configuration fingerprint match against pre-flight, explicit OracleSet binding,
+    and privacy boundaries.
+    """
     record = user_dataset_registry.get_dataset(req.dataset_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Custom dataset '{req.dataset_id}' not found.")
@@ -1134,13 +1314,8 @@ def run_custom_certification(req: CustomCertificationRunRequest):
     if not mod_adp:
         raise HTTPException(status_code=400, detail=f"Unsupported modernized implementation adapter '{req.modernized_adapter_id}'.")
 
-    # Resolve OracleSet via Benchmark Registry
-    bench_id = "retail_discount_pricing" if "retail" in req.legacy_adapter_id.lower() else (
-        "payroll_tax" if "payroll" in req.legacy_adapter_id.lower() else (
-            "medical_triage" if "medical" in req.legacy_adapter_id.lower() else "loan_approval"
-        )
-    )
-    mode = "FULL_BEACON" if req.evaluation_mode.upper() == "FULL_BEACON" else "CONTROLLED"
+    # Mode & Privacy boundary
+    mode = req.evaluation_mode.upper()
     prov_norm = req.preferred_provider.lower().strip()
     if prov_norm in ("openrouter", "anthropic") and not req.allow_external_llm:
         raise HTTPException(
@@ -1149,14 +1324,35 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         )
 
     actual_provider = prov_norm if req.allow_external_llm else "offline"
-    use_llm_flag = (mode == "FULL_BEACON" and req.allow_external_llm)
 
-    orc_set = benchmark_registry.get_or_create_oracle_set(
-        bench_id,
-        mode=mode,
-        preferred_provider=actual_provider,
-        use_llm=use_llm_flag,
-    )
+    # Explicit OracleSet Resolution & Validation (NO STRING-BASED GUESSING)
+    orc_set_id = req.oracle_set_id or ""
+    if mode == "CONTROLLED":
+        if not orc_set_id:
+            raise HTTPException(status_code=400, detail="Explicit 'oracle_set_id' is required for CONTROLLED mode custom certification.")
+        orc_set = resolve_oracle_set(orc_set_id, mode="CONTROLLED")
+        if not orc_set:
+            raise HTTPException(status_code=404, detail=f"OracleSet '{orc_set_id}' not found in registry.")
+        
+        is_compat, missing_vars = check_oracle_set_compatibility(orc_set, manifest.inferred_schema)
+        if not is_compat:
+            raise HTTPException(
+                status_code=400,
+                detail=f"OracleSet '{orc_set_id}' is incompatible with dataset schema: missing fields {missing_vars}.",
+            )
+    else:  # FULL_BEACON
+        if orc_set_id:
+            orc_set = resolve_oracle_set(
+                orc_set_id,
+                mode="FULL_BEACON",
+                preferred_provider=actual_provider,
+                allow_external_llm=req.allow_external_llm,
+            )
+        else:
+            orc_set = resolve_oracle_set("SET-RETAIL-CONTROLLED-v1")
+        if not orc_set:
+            raise HTTPException(status_code=404, detail="No valid OracleSet could be resolved or discovered for FULL_BEACON mode.")
+
     orc_set_hash = orc_set.oracle_set_hash if orc_set else ""
 
     # Policy
@@ -1165,6 +1361,37 @@ def run_custom_certification(req: CustomCertificationRunRequest):
 
     leg_hash = getattr(leg_adp, "implementation_hash", "") or hashlib.sha256(req.legacy_adapter_id.encode()).hexdigest()
     mod_hash = getattr(mod_adp, "implementation_hash", "") or hashlib.sha256(req.modernized_adapter_id.encode()).hexdigest()
+
+    final_orc_set_id = orc_set.oracle_set_id if orc_set else (orc_set_id or "SET-NONE")
+
+    # Authoritative Backend Configuration Fingerprint Calculation & Enforcement
+    expected_fingerprint = compute_custom_config_fingerprint(
+        project_id=req.project_id,
+        dataset_id=req.dataset_id,
+        dataset_checksum=manifest.checksum,
+        input_set_hash=manifest.input_set_hash,
+        legacy_adapter_id=req.legacy_adapter_id,
+        legacy_hash=leg_hash,
+        modernized_adapter_id=req.modernized_adapter_id,
+        modern_hash=mod_hash,
+        oracle_set_id=final_orc_set_id,
+        oracle_set_hash=orc_set_hash,
+        policy_id=policy.policy_id,
+        policy_hash=policy_hash,
+        evaluation_mode=mode,
+        preferred_provider=req.preferred_provider,
+        allow_external_llm=req.allow_external_llm,
+    )
+
+    if not req.config_fingerprint or req.config_fingerprint.strip() != expected_fingerprint:
+        logger.warning(
+            f"Custom certification pre-flight fingerprint mismatch: "
+            f"received='{req.config_fingerprint}', expected='{expected_fingerprint}'"
+        )
+        raise HTTPException(
+            status_code=409,
+            detail="Custom certification pre-flight is stale. Run pre-flight again.",
+        )
 
     # 16-field Deterministic Request Identity
     request_identity = compute_certification_request_identity(
@@ -1175,12 +1402,12 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         discovery_mode=req.evaluation_mode,
         target_variant=req.modernized_adapter_id,
         preferred_provider=actual_provider,
-        use_llm=(req.evaluation_mode.upper() == "FULL_BEACON" and req.allow_external_llm),
+        use_llm=(mode == "FULL_BEACON" and req.allow_external_llm),
         policy_id=policy.policy_id,
         policy_hash=policy_hash,
         legacy_implementation_hash=leg_hash,
         modernized_implementation_hash=mod_hash,
-        oracle_set_id=orc_set.oracle_set_id if orc_set else "SET-CUSTOM",
+        oracle_set_id=orc_set.oracle_set_id,
         oracle_set_hash=orc_set_hash,
         input_set_hash=manifest.input_set_hash,
         idempotency_key=req.idempotency_key,
@@ -1222,7 +1449,7 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         benchmark_version="1.0.0",
         benchmark_name=f"Custom: {manifest.dataset_name}",
         benchmark_domain=manifest.target_domain or "User-Supplied Domain",
-        benchmark_provenance=manifest.declared_provenance.value,
+        benchmark_provenance=manifest.declared_provenance.value if hasattr(manifest.declared_provenance, "value") else str(manifest.declared_provenance),
         project_id=req.project_id,
         dataset_id=req.dataset_id,
         dataset_name=manifest.dataset_name,
@@ -1236,7 +1463,7 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         modernized_implementation_hash=mod_hash,
         policy_id=policy.policy_id,
         policy_hash=policy_hash,
-        oracle_set_id=orc_set.oracle_set_id if orc_set else "SET-CUSTOM",
+        oracle_set_id=orc_set.oracle_set_id,
         oracle_set_hash=orc_set_hash,
         provider=actual_provider,
         idempotency_key=req.idempotency_key,
@@ -1244,7 +1471,7 @@ def run_custom_certification(req: CustomCertificationRunRequest):
         is_forced_recompute=req.force_recompute,
         provider_metadata={
             "allow_external_llm": req.allow_external_llm,
-            "dataset_provenance": manifest.declared_provenance.value,
+            "dataset_provenance": manifest.declared_provenance.value if hasattr(manifest.declared_provenance, "value") else str(manifest.declared_provenance),
             "schema_fingerprint": manifest.schema_fingerprint,
             "row_count": manifest.row_count,
         },

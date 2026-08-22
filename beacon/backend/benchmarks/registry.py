@@ -57,6 +57,7 @@ class BenchmarkRegistry:
         self._specs: dict[str, BenchmarkSpec] = {}
         self._legacy_adapters: dict[str, ImplementationAdapter] = {}
         self._modern_adapters: dict[tuple[str, str], ImplementationAdapter] = {}
+        self._discovered_oracle_sets: dict[tuple[str, str, str, bool], OracleSet] = {}
         self.refresh()
 
     def refresh(self):
@@ -64,6 +65,7 @@ class BenchmarkRegistry:
         self._specs.clear()
         self._legacy_adapters.clear()
         self._modern_adapters.clear()
+        self._discovered_oracle_sets.clear()
 
         # 1. Register Built-in Loan Demo Benchmark (Controlled synthetic baseline)
         self._register_builtin_loan_benchmark()
@@ -574,12 +576,18 @@ class BenchmarkRegistry:
         - CONTROLLED: Returns predefined baseline OracleSet with 'CONTROLLED_ORACLE_SET' provenance.
         - FULL_BEACON: Executes the full evidence mining, grounding, adversarial validation, and Oracle compilation pipeline.
         """
-        if mode == "FULL_BEACON":
-            return self.discover_oracle_set_full_pipeline(
+        cache_key = (benchmark_id, mode.upper(), (preferred_provider or "auto").lower().strip(), bool(use_llm))
+        if cache_key in self._discovered_oracle_sets:
+            return self._discovered_oracle_sets[cache_key]
+
+        if mode.upper() == "FULL_BEACON":
+            orc_set = self.discover_oracle_set_full_pipeline(
                 benchmark_id=benchmark_id,
                 use_llm=use_llm,
                 preferred_provider=preferred_provider,
             )
+            self._discovered_oracle_sets[cache_key] = orc_set
+            return orc_set
 
         # CONTROLLED Mode Baseline
         set_id = f"SET-{benchmark_id.upper()}-CONTROLLED"

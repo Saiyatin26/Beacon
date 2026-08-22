@@ -98,6 +98,7 @@ export default function App() {
   const [customUploadedManifest, setCustomUploadedManifest] = useState(null);
   const [customLegacyAdapterId, setCustomLegacyAdapterId] = useState("retail_discount_legacy");
   const [customModernAdapterId, setCustomModernAdapterId] = useState("retail_discount_modern_clean");
+  const [customOracleSetId, setCustomOracleSetId] = useState("SET-RETAIL-CONTROLLED-v1");
   const [customMode, setCustomMode] = useState("CONTROLLED");
   const [customProvider, setCustomProvider] = useState("auto");
   const [customAllowExternalLLM, setCustomAllowExternalLLM] = useState(false);
@@ -208,6 +209,7 @@ export default function App() {
           dataset_id: customUploadedManifest.dataset_id,
           legacy_adapter_id: customLegacyAdapterId,
           modernized_adapter_id: customModernAdapterId,
+          oracle_set_id: customOracleSetId,
           evaluation_mode: customMode,
           preferred_provider: customProvider,
           allow_external_llm: customAllowExternalLLM,
@@ -246,6 +248,7 @@ export default function App() {
           dataset_id: customUploadedManifest.dataset_id,
           legacy_adapter_id: customLegacyAdapterId,
           modernized_adapter_id: customModernAdapterId,
+          oracle_set_id: customOracleSetId,
           evaluation_mode: customMode,
           preferred_provider: customProvider,
           allow_external_llm: customAllowExternalLLM,
@@ -253,7 +256,13 @@ export default function App() {
         }),
       });
       const artifact = await res.json();
-      if (!res.ok) throw new Error(artifact.detail || "Custom certification failed.");
+      if (!res.ok) {
+        if (res.status === 409) {
+          setCustomPreflight(null);
+          throw new Error("Custom certification pre-flight is stale. Please re-run pre-flight validation.");
+        }
+        throw new Error(artifact.detail || "Custom certification failed.");
+      }
       setCustomActiveResult(artifact);
       const isPass = artifact.status === "CERTIFIED" || artifact.status === "CERTIFIED_WITH_WARNINGS";
       setNotice(
@@ -1623,7 +1632,7 @@ export default function App() {
                 Select registered allowlisted adapters and configure the privacy boundary for cloud LLM evaluation.
               </p>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "14px", marginBottom: "16px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: "12px", marginBottom: "16px" }}>
                 <div>
                   <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Legacy Implementation Adapter</label>
                   <select
@@ -1650,6 +1659,19 @@ export default function App() {
                     <option value="loan_approval_modern_buggy">loan_approval_modern_buggy (v2.0.0 Buggy)</option>
                     <option value="payroll_tax_modern_clean">payroll_tax_modern_clean (v2.0.0 Clean)</option>
                     <option value="payroll_tax_modern_buggy_bracket">payroll_tax_modern_buggy_bracket (v2.0.0 Buggy)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Explicit OracleSet Binding</label>
+                  <select
+                    value={customOracleSetId}
+                    onChange={(e) => { setCustomOracleSetId(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
+                  >
+                    <option value="SET-RETAIL-CONTROLLED-v1">SET-RETAIL-CONTROLLED-v1 (Retail Pricing)</option>
+                    <option value="SET-LOAN-CONTROLLED-v1">SET-LOAN-CONTROLLED-v1 (Loan Approval)</option>
+                    <option value="SET-PAYROLL-CONTROLLED-v1">SET-PAYROLL-CONTROLLED-v1 (Payroll Tax)</option>
+                    <option value="SET-MEDICAL-CONTROLLED-v1">SET-MEDICAL-CONTROLLED-v1 (Medical Triage)</option>
                   </select>
                 </div>
                 <div>
