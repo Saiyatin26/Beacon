@@ -1421,6 +1421,7 @@ def compute_custom_config_fingerprint(
 
 
 @app.post("/api/v1/custom/validate")
+@app.post("/api/v1/custom/preflight")
 def validate_custom_certification(req: CustomPreflightRequest):
     """Performs authoritative pre-flight validation on user dataset, schema, allowlisted adapters,
     explicit OracleSet binding, compatibility, policy, and privacy boundaries.

@@ -49,11 +49,15 @@ def clean_state():
     audit_logger.clear()
     certification_job_tracker.clear()
     operational_metrics.clear()
+    from benchmarks import benchmark_registry
+    benchmark_registry.refresh()
     yield
     certification_repository.clear()
     audit_logger.clear()
     certification_job_tracker.clear()
     operational_metrics.clear()
+    from benchmarks import benchmark_registry
+    benchmark_registry.refresh()
 
 
 @pytest.fixture
@@ -470,24 +474,138 @@ def test_A_lifecycle_failure_transitions_to_failed(client):
     assert data["duration_ms"] is not None
 
 
+def test_1_empty_oracleset_registry_reports_not_ready(client):
+    """Test 1: When OracleSet registry is empty, /health/ready MUST report NOT_READY (not READY).
+    Creation capability in benchmark registry must NOT cause false-positive readiness.
+    """
+    from oracle.registry import registry as oracle_registry
+
+    existing_sets = list(oracle_registry.list_oracle_sets())
+    try:
+        oracle_registry.clear()
+        assert len(oracle_registry.list_oracle_sets()) == 0
+
+        res = client.get("/health/ready")
+        assert res.status_code in (200, 503)
+        data = res.json()
+        assert data["status"] == "NOT_READY"
+        assert data["checks"]["oracle_set_registry"] is False
+        assert "oracle_set_registry_empty" in data["reasons"]
+    finally:
+        for s in existing_sets:
+            if not oracle_registry.get_oracle_set(s.oracle_set_id):
+                oracle_registry.register_oracle_set(s)
+
+
+def test_2_health_check_does_not_mutate_oraclesets(client):
+    """Test 2: Multiple calls to /health/ready must NOT create or register any OracleSets."""
+    from oracle.registry import registry as oracle_registry
+
+    count_before = len(oracle_registry.list_oracle_sets())
+    ids_before = set(s.oracle_set_id for s in oracle_registry.list_oracle_sets())
+
+    for _ in range(5):
+        res = client.get("/health/ready")
+        assert res.status_code == 200
+
+    count_after = len(oracle_registry.list_oracle_sets())
+    ids_after = set(s.oracle_set_id for s in oracle_registry.list_oracle_sets())
+
+    assert count_after == count_before
+    assert ids_after == ids_before
+
+
+def test_3_restoring_oraclesets_restores_readiness(client):
+    """Test 3: Clearing OracleSets makes system NOT_READY; restoring them makes it READY."""
+    from oracle.registry import registry as oracle_registry
+    from benchmarks import benchmark_registry
+
+    existing_sets = list(oracle_registry.list_oracle_sets())
+    try:
+        # Clear
+        oracle_registry.clear()
+        res_empty = client.get("/health/ready")
+        assert res_empty.json()["status"] == "NOT_READY"
+
+        # Restore
+        for b in benchmark_registry.list_benchmarks():
+            benchmark_registry.resolve_controlled_oracle_set(b.benchmark_id)
+
+        res_restored = client.get("/health/ready")
+        assert res_restored.json()["status"] == "READY"
+        assert res_restored.json()["checks"]["oracle_set_registry"] is True
+    finally:
+        for s in existing_sets:
+            if not oracle_registry.get_oracle_set(s.oracle_set_id):
+                oracle_registry.register_oracle_set(s)
+
+
+def test_4_ready_and_details_agree_consistently(client):
+    """Test 4: /health/ready and /health/details must agree consistently in both missing and present states."""
+    from oracle.registry import registry as oracle_registry
+    from benchmarks import benchmark_registry
+
+    existing_sets = list(oracle_registry.list_oracle_sets())
+    try:
+        # Case A: Missing
+        oracle_registry.clear()
+        ready_res = client.get("/health/ready").json()
+        details_res = client.get("/health/details").json()
+
+        assert ready_res["status"] == "NOT_READY"
+        assert ready_res["checks"]["oracle_set_registry"] is False
+        assert details_res["readiness"] == "NOT_READY"
+        assert details_res["dependencies"]["oracle_set_registry"]["status"] == "unavailable"
+        assert details_res["status"] in ("UNAVAILABLE", "DEGRADED")
+
+        # Case B: Restored
+        for b in benchmark_registry.list_benchmarks():
+            benchmark_registry.resolve_controlled_oracle_set(b.benchmark_id)
+
+        ready_res2 = client.get("/health/ready").json()
+        details_res2 = client.get("/health/details").json()
+
+        assert ready_res2["status"] == "READY"
+        assert ready_res2["checks"]["oracle_set_registry"] is True
+        assert details_res2["readiness"] == "READY"
+        assert details_res2["dependencies"]["oracle_set_registry"]["status"] == "healthy"
+    finally:
+        for s in existing_sets:
+            if not oracle_registry.get_oracle_set(s.oracle_set_id):
+                oracle_registry.register_oracle_set(s)
+
+
+def test_5_liveness_remains_intact_when_dependencies_down(client):
+    """Test 5: /health/live returns UP even when OracleSet registry is empty or database is down."""
+    from oracle.registry import registry as oracle_registry
+
+    existing_sets = list(oracle_registry.list_oracle_sets())
+    try:
+        oracle_registry.clear()
+
+        res = client.get("/health/live")
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "UP"
+        assert data["service"] == "BEACON"
+    finally:
+        for s in existing_sets:
+            if not oracle_registry.get_oracle_set(s.oracle_set_id):
+                oracle_registry.register_oracle_set(s)
+
+
 def test_B_health_readiness_is_read_only(client):
     """Test B: Verifies that GET /health/ready is purely read-only — oracle count unchanged."""
     from oracle.registry import registry as oracle_registry
 
-    # Count OracleSets before
     count_before = len(oracle_registry.list_oracle_sets())
 
-    # Call /health/ready multiple times
     for _ in range(3):
         res = client.get("/health/ready")
         assert res.status_code == 200
 
-    # Count must be unchanged
     count_after = len(oracle_registry.list_oracle_sets())
-    assert count_after == count_before, (
-        f"OracleSet count changed from {count_before} to {count_after} — "
-        f"/health/ready must not create OracleSets."
-    )
+    assert count_after == count_before
 
 
 def test_C_project_isolation_jobs_endpoint(client):
@@ -649,9 +767,9 @@ def test_G_custom_dataset_regression(client):
     import json
     sample_data = json.dumps([
         {"order_amount": 600.0, "customer_tier": "VIP", "coupon_code": "NONE",
-         "items_count": 10, "discount_applied_pct": 0.20},
+         "items_count": 10, "is_express_shipping": False, "discount_applied_pct": 0.20},
         {"order_amount": 100.0, "customer_tier": "STANDARD", "coupon_code": "NONE",
-         "items_count": 5, "discount_applied_pct": 0.05},
+         "items_count": 5, "is_express_shipping": False, "discount_applied_pct": 0.05},
     ])
 
     # 1. Upload

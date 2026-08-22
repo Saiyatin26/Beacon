@@ -61,6 +61,44 @@ def check_liveness() -> LivenessResponse:
     return LivenessResponse(status="UP")
 
 
+def _get_oracleset_health() -> tuple[bool, str, dict[str, Any], Optional[str]]:
+    """Authoritative, strictly READ-ONLY check of OracleSet availability.
+    
+    Inspects oracle_registry directly without creating, registering,
+    or mutating any OracleSets or benchmarks.
+
+    Returns:
+        (is_ready, status_str, details_dict, error_reason_if_any)
+        where status_str is 'healthy' or 'unavailable'.
+    """
+    try:
+        registered_sets = oracle_registry.list_oracle_sets()
+        set_count = len(registered_sets)
+        if set_count > 0:
+            return (
+                True,
+                "healthy",
+                {"oracle_set_count": set_count},
+                None,
+            )
+        else:
+            logger.warning("Readiness check: OracleSet registry is empty (expected startup initialization)")
+            return (
+                False,
+                "unavailable",
+                {"oracle_set_count": 0},
+                "oracle_set_registry_empty",
+            )
+    except Exception:
+        logger.warning("Readiness check: OracleSet registry check failed", exc_info=True)
+        return (
+            False,
+            "unavailable",
+            {"oracle_set_count": 0},
+            "oracle_set_registry_unavailable",
+        )
+
+
 def check_readiness() -> ReadinessResponse:
     """Answers: Is BEACON currently able to accept certification work safely?
 
@@ -69,7 +107,7 @@ def check_readiness() -> ReadinessResponse:
     or perform any state-mutating operation.
 
     OracleSets are initialized at application startup by on_startup().
-    This function only reports whether they are present.
+    This function only reports whether required resources are currently present.
     """
     checks: dict[str, bool] = {}
     reasons: list[str] = []
@@ -84,7 +122,6 @@ def check_readiness() -> ReadinessResponse:
             cursor.fetchone()
         db_ok = True
     except Exception:
-        # Internal detail logged; only safe category exposed to API
         logger.warning("Readiness check: database connectivity unavailable", exc_info=True)
         reasons.append("database_unavailable")
     checks["database"] = db_ok
@@ -101,25 +138,11 @@ def check_readiness() -> ReadinessResponse:
         reasons.append("benchmark_registry_unavailable")
     checks["benchmark_registry"] = bench_ok
 
-    # 3. OracleSet Registry Check — READ ONLY
-    # OracleSets are initialized in on_startup(). This check ONLY inspects state.
-    # It does NOT create or register any OracleSets.
-    # Considers ready if: oracle registry has sets, OR benchmark_registry supports on-demand oracle creation.
-    oracle_ok = False
-    try:
-        sets = oracle_registry.list_oracle_sets()
-        if sets:
-            oracle_ok = True
-        elif hasattr(benchmark_registry, "get_or_create_oracle_set"):
-            # Benchmark registry can create OracleSets on demand — system is operationally capable
-            oracle_ok = True
-        else:
-            logger.warning("Readiness check: OracleSet registry is empty and no creation capability found")
-            reasons.append("oracle_set_registry_empty")
-    except Exception:
-        logger.warning("Readiness check: OracleSet registry unavailable", exc_info=True)
-        reasons.append("oracle_set_registry_unavailable")
+    # 3. OracleSet Registry Check — STRICTLY READ ONLY via authoritative helper
+    oracle_ok, _, _, oracle_reason = _get_oracleset_health()
     checks["oracle_set_registry"] = oracle_ok
+    if not oracle_ok and oracle_reason:
+        reasons.append(oracle_reason)
 
     # 4. Dataset Registry Check — READ ONLY (attribute presence)
     ds_ok = False
@@ -178,18 +201,13 @@ def check_dependency_health() -> HealthDetailsResponse:
         details={"benchmark_count": bench_count},
     )
 
-    # 3. OracleSet Registry — READ ONLY inspection
-    oracle_count = 0
-    try:
-        oracle_count = len(oracle_registry.list_oracle_sets()) if hasattr(oracle_registry, "list_oracle_sets") else 0
-    except Exception:
-        pass
-    oracle_status: Literal["healthy", "unavailable"] = "healthy" if oracle_count > 0 else "unavailable"
+    # 3. OracleSet Registry — STRICTLY READ ONLY via authoritative helper
+    oracle_ok, oracle_status, oracle_details, _ = _get_oracleset_health()
     deps["oracle_set_registry"] = DependencyStatus(
         name="OracleSet Registry",
         status=oracle_status,
         category="registry",
-        details={"oracle_set_count": oracle_count},
+        details=oracle_details,
     )
 
     # 4. Dataset Registry
@@ -242,7 +260,6 @@ def check_dependency_health() -> HealthDetailsResponse:
             )
     except Exception:
         logger.warning("Dependency health: LLM provider status check failed", exc_info=True)
-        # Ensure offline provider is always represented as healthy
         deps["provider_offline"] = DependencyStatus(
             name="LLM Provider: Offline",
             status="healthy",

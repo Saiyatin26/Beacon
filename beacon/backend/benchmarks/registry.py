@@ -86,6 +86,10 @@ class BenchmarkRegistry:
             except Exception as exc:
                 logger.debug(f"Controlled oracle set pre-load note for {b_id}: {exc}")
 
+    def resolve_controlled_oracle_set(self, benchmark_id: str) -> OracleSet:
+        """Resolves/pre-loads the controlled baseline OracleSet for a benchmark."""
+        return self.get_or_create_oracle_set(benchmark_id, mode="CONTROLLED")
+
     def _register_builtin_loan_benchmark(self):
         spec = BenchmarkSpec(
             benchmark_id="loan_demo",
