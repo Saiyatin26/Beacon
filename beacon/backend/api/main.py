@@ -25,6 +25,7 @@ from certification import (
     ModernizedAdapter,
     certification_engine,
     certification_repository,
+    compute_certification_request_identity,
     generate_html_report,
     generate_markdown_report,
     verify_artifact_integrity,
@@ -514,26 +515,69 @@ def run_certification_v1(request: CertificationRunRequest):
         field_bounds = None
         proj_id = request.project_id
 
-    # 3. Deterministic Idempotency / Duplicate Request Protection
+    # 3. Construct Deterministic Request Identity (All Certification-Affecting Fields)
+    pol_id = request.policy.policy_id if request.policy else "POL-DEFAULT"
+    pol_hash = request.policy.compute_hash() if request.policy else ""
+    leg_impl_hash = getattr(legacy_adp, "implementation_hash", "") or (context.legacy_implementation_hash if context else "")
+    mod_impl_hash = getattr(modern_adp, "implementation_hash", "") or (context.modernized_implementation_hash if context else "")
+    d_checksum = context.dataset_checksum if context else ""
+    b_ver = context.benchmark_version if context else "1.0.0"
+    e_mode = context.evaluation_mode if context else request.discovery_mode
+    t_variant = context.modernization_variant_id if context else (request.benchmark_variant or "clean_v2")
+    p_prov = request.preferred_provider or "auto"
+    use_llm_flag = request.use_llm or (e_mode == "FULL_BEACON" and p_prov != "offline")
+
+    request_identity = compute_certification_request_identity(
+        benchmark_id=request.benchmark_id or proj_id,
+        benchmark_version=b_ver,
+        dataset_name=request.dataset_name,
+        dataset_checksum=d_checksum,
+        discovery_mode=e_mode,
+        target_variant=t_variant,
+        preferred_provider=p_prov,
+        use_llm=use_llm_flag,
+        policy_id=pol_id,
+        policy_hash=pol_hash,
+        legacy_implementation_hash=leg_impl_hash,
+        modernized_implementation_hash=mod_impl_hash,
+        oracle_set_id=oracle_set.oracle_set_id,
+        oracle_set_hash=oracle_set.oracle_set_hash,
+        idempotency_key=request.idempotency_key,
+    )
+
+    if context:
+        context.request_identity = request_identity
+        context.idempotency_key = request.idempotency_key
+        context.is_forced_recompute = request.force_recompute
+
+    # 4. Deterministic Idempotency / Duplicate Request Protection
     if not request.force_recompute:
-        pol_id = request.policy.policy_id if request.policy else "POL-DEFAULT"
-        existing_artifact = certification_repository.find_idempotent_artifact(
-            benchmark_id=request.benchmark_id,
-            evaluation_mode=context.evaluation_mode if context else None,
-            target_variant=context.modernization_variant_id if context else None,
-            dataset_checksum=context.dataset_checksum if context else None,
-            oracle_set_hash=oracle_set.oracle_set_hash,
-            legacy_implementation_hash=getattr(legacy_adp, "implementation_hash", "") or (context.legacy_implementation_hash if context else ""),
-            modernized_implementation_hash=getattr(modern_adp, "implementation_hash", "") or (context.modernized_implementation_hash if context else ""),
-            policy_id=pol_id,
-            preferred_provider=request.preferred_provider,
-        )
+        existing_artifact = certification_repository.get_by_request_identity(request_identity)
+        if existing_artifact is None:
+            existing_artifact = certification_repository.find_idempotent_artifact(
+                request_identity=request_identity,
+                benchmark_id=request.benchmark_id,
+                evaluation_mode=e_mode,
+                target_variant=t_variant,
+                dataset_checksum=d_checksum,
+                oracle_set_hash=oracle_set.oracle_set_hash,
+                legacy_implementation_hash=leg_impl_hash,
+                modernized_implementation_hash=mod_impl_hash,
+                policy_id=pol_id,
+                preferred_provider=p_prov,
+                idempotency_key=request.idempotency_key,
+            )
         if existing_artifact is not None:
             logger.info(
                 f"Returning existing completed artifact '{existing_artifact.certification_id}' "
-                f"for identical request configuration."
+                f"for deterministic request identity '{request_identity[:16]}...'."
             )
             return existing_artifact.model_dump(mode="json")
+    else:
+        logger.info(
+            f"Force recompute requested (force_recompute=True) for benchmark '{request.benchmark_id or proj_id}'. "
+            f"Bypassing cache reuse and executing fresh certification run."
+        )
 
     artifact = certification_engine.certify(
         project_id=proj_id,

@@ -195,6 +195,9 @@ class CertificationContext(BaseModel):
     certification_artifact_id: str = ""
     certification_artifact_hash: str = ""
     run_timestamp: str = ""
+    idempotency_key: Optional[str] = None
+    request_identity: Optional[str] = None
+    is_forced_recompute: bool = False
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
     run_status: str = "NOT_CERTIFIED"
     # Disambiguated metrics
@@ -392,6 +395,9 @@ class CertificationArtifact(BaseModel):
     oracle_source_type: Optional[str] = "CONTROLLED_ORACLE_SET"
     legacy_implementation_hash: Optional[str] = ""
     modernized_implementation_hash: Optional[str] = ""
+    idempotency_key: Optional[str] = None
+    request_identity: Optional[str] = None
+    is_forced_recompute: bool = False
     context: Optional[CertificationContext] = None
     legacy_version: str = "1.0.0"
     modernized_version: str = "2.0.0"
@@ -421,6 +427,49 @@ class CertificationArtifact(BaseModel):
         "This certificate represents quantified behavioral equivalence relative to the frozen validated oracle set "
         "and tested input domain under the declared certification policy. It does not constitute a formal mathematical proof of arbitrary program equivalence."
     )
+
+
+def compute_certification_request_identity(
+    benchmark_id: Optional[str],
+    benchmark_version: str = "1.0.0",
+    dataset_name: str = "default",
+    dataset_checksum: str = "",
+    discovery_mode: str = "CONTROLLED",
+    target_variant: str = "clean_v2",
+    preferred_provider: str = "auto",
+    use_llm: bool = False,
+    policy_id: str = "POL-DEFAULT",
+    policy_hash: str = "",
+    legacy_implementation_hash: str = "",
+    modernized_implementation_hash: str = "",
+    oracle_set_id: str = "",
+    oracle_set_hash: str = "",
+    input_set_hash: str = "",
+    idempotency_key: Optional[str] = None,
+) -> str:
+    """Computes deterministic SHA-256 identity for a certification request from all certification-affecting fields.
+    Never includes secrets, API keys, or volatile timestamps.
+    """
+    payload = {
+        "benchmark_id": benchmark_id or "",
+        "benchmark_version": benchmark_version or "1.0.0",
+        "dataset_name": dataset_name or "default",
+        "dataset_checksum": dataset_checksum or "",
+        "discovery_mode": str(discovery_mode).upper(),
+        "target_variant": target_variant or "clean_v2",
+        "preferred_provider": str(preferred_provider).lower().strip() if preferred_provider else "auto",
+        "use_llm": bool(use_llm),
+        "policy_id": policy_id or "POL-DEFAULT",
+        "policy_hash": policy_hash or "",
+        "legacy_implementation_hash": legacy_implementation_hash or "",
+        "modernized_implementation_hash": modernized_implementation_hash or "",
+        "oracle_set_id": oracle_set_id or "",
+        "oracle_set_hash": oracle_set_hash or "",
+        "input_set_hash": input_set_hash or "",
+        "idempotency_key": idempotency_key or "",
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 def compute_artifact_content_hash(artifact: Union[CertificationArtifact, dict[str, Any]]) -> str:

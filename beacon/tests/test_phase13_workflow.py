@@ -33,6 +33,13 @@ from benchmarks.registry import benchmark_registry
 from certification.repository import certification_repository
 
 
+@pytest.fixture(autouse=True)
+def clean_state():
+    certification_repository.clear()
+    yield
+    certification_repository.clear()
+
+
 @pytest.fixture
 def client():
     return TestClient(app)
@@ -211,6 +218,79 @@ def test_backend_idempotency_duplicate_request_protection(client):
     assert count1 == count2
 
 
+def test_backend_idempotency_different_idempotency_key_creates_new_run(client):
+    """Verifies that submitting the same configuration with a different idempotency key creates a new run."""
+    res_alpha1 = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "idempotency_key": "custom-key-alpha-123",
+        },
+    )
+    assert res_alpha1.status_code == 200
+    art_alpha1 = res_alpha1.json()
+    id_alpha1 = art_alpha1["certification_id"]
+
+    # Same idempotency key returns identical run
+    res_alpha2 = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "idempotency_key": "custom-key-alpha-123",
+        },
+    )
+    assert res_alpha2.status_code == 200
+    assert res_alpha2.json()["certification_id"] == id_alpha1
+
+    # Different idempotency key creates distinct new run
+    res_beta = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "idempotency_key": "custom-key-beta-456",
+        },
+    )
+    assert res_beta.status_code == 200
+    art_beta = res_beta.json()
+    assert art_beta["certification_id"] != id_alpha1
+
+
+def test_backend_idempotency_force_recompute_creates_new_run(client):
+    """Verifies that force_recompute=True explicitly bypasses reuse and creates a new run with is_forced_recompute recorded."""
+    res_initial = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "payroll_tax_calculator",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
+    assert res_initial.status_code == 200
+    art_initial = res_initial.json()
+    initial_id = art_initial["certification_id"]
+
+    # Forced recompute
+    res_forced = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "payroll_tax_calculator",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "force_recompute": True,
+        },
+    )
+    assert res_forced.status_code == 200
+    art_forced = res_forced.json()
+    assert art_forced["certification_id"] != initial_id
+    assert art_forced["is_forced_recompute"] is True or art_forced.get("context", {}).get("is_forced_recompute") is True
+
+
 def test_backend_idempotency_changed_config_creates_distinct_run(client):
     """Verifies that legitimately changing configuration parameters creates a distinct run."""
     res_clean = client.post(
@@ -219,6 +299,7 @@ def test_backend_idempotency_changed_config_creates_distinct_run(client):
             "benchmark_id": "retail_discount_pricing",
             "benchmark_variant": "clean_v2",
             "discovery_mode": "CONTROLLED",
+            "preferred_provider": "auto",
         },
     )
     art_clean = res_clean.json()
@@ -229,6 +310,7 @@ def test_backend_idempotency_changed_config_creates_distinct_run(client):
             "benchmark_id": "retail_discount_pricing",
             "benchmark_variant": "buggy_threshold_v2",
             "discovery_mode": "CONTROLLED",
+            "preferred_provider": "auto",
         },
     )
     art_buggy = res_buggy.json()

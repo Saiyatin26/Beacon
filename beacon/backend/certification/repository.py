@@ -31,6 +31,7 @@ class CertificationRepository:
     def __init__(self, db_path: Optional[Path] = None):
         self._db_path = db_path or DB_PATH
         self._memory_artifacts: dict[str, CertificationArtifact] = {}
+        self._memory_idempotency: dict[str, str] = {}
         self._init_db()
 
     def _init_db(self):
@@ -81,8 +82,17 @@ class CertificationRepository:
                         FOREIGN KEY(input_set_id) REFERENCES input_sets(input_set_id)
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS certification_idempotency (
+                        request_identity TEXT PRIMARY KEY,
+                        certification_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_cases_run_id ON certification_cases(run_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_cases_input_set_id ON certification_cases(input_set_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_idempotency_cert_id ON certification_idempotency(certification_id)")
                 conn.commit()
         except Exception as exc:
             logger.warning(f"Could not initialize SQLite certification table: {exc}")
@@ -126,6 +136,17 @@ class CertificationRepository:
             artifact.model_dump_json(),
             artifact.timestamp or datetime.now(timezone.utc).isoformat(),
         ))
+
+        # Register idempotency identity if present
+        req_id = artifact.request_identity or (artifact.context.request_identity if artifact.context else None)
+        if req_id and not artifact.is_forced_recompute:
+            cursor.execute("""
+                INSERT OR REPLACE INTO certification_idempotency (
+                    request_identity, certification_id, status, created_at
+                ) VALUES (?, ?, 'COMPLETED', ?)
+            """, (req_id, artifact.certification_id, artifact.timestamp or datetime.now(timezone.utc).isoformat()))
+            self._memory_idempotency[req_id] = artifact.certification_id
+
         return artifact
 
     def save_artifact(self, artifact: CertificationArtifact) -> CertificationArtifact:
@@ -138,17 +159,20 @@ class CertificationRepository:
             existing = self._memory_artifacts[cid]
             if existing.content_hash == artifact.content_hash:
                 return existing
-            raise ImmutabilityError(f"Immutability violation: Certificate #{cid} already exists with different content hash.")
+            raise ImmutabilityError(
+                f"Immutability violation: Certificate #{cid} already exists with different content hash "
+                f"('{existing.content_hash}' vs '{artifact.content_hash}'). Overwrite forbidden."
+            )
 
         with sqlite3.connect(self._db_path) as conn:
-            self._save_artifact_tx(artifact, conn)
+            res = self._save_artifact_tx(artifact, conn)
             conn.commit()
 
-        self._memory_artifacts[cid] = artifact
-        return artifact
+        self._memory_artifacts[cid] = res
+        return res
 
     def get_artifact(self, certification_id: str) -> Optional[CertificationArtifact]:
-        """Retrieves a CertificationArtifact by ID."""
+        """Retrieves a single CertificationArtifact by its ID."""
         if certification_id in self._memory_artifacts:
             return self._memory_artifacts[certification_id]
 
@@ -166,7 +190,7 @@ class CertificationRepository:
                     self._memory_artifacts[certification_id] = artifact
                     return artifact
         except Exception as exc:
-            logger.debug(f"SQLite lookup notice: {exc}")
+            logger.warning(f"Error querying SQLite for certification artifact {certification_id}: {exc}")
 
         return None
 
@@ -176,46 +200,49 @@ class CertificationRepository:
         benchmark_id: Optional[str] = None,
         limit: int = 50,
     ) -> list[CertificationArtifact]:
-        """Lists historical CertificationArtifacts sorted newest first, with optional benchmark_id or project_id filtering."""
-        results: list[CertificationArtifact] = []
-
+        """Lists historical immutable CertificationArtifacts filtered by project or benchmark."""
+        results = []
         try:
             with sqlite3.connect(self._db_path) as conn:
                 cursor = conn.cursor()
                 query = "SELECT payload_json FROM certification_artifacts"
                 params = []
+                clauses = []
                 if project_id:
-                    query += " WHERE project_id = ?"
+                    clauses.append("project_id = ?")
                     params.append(project_id)
-                query += " ORDER BY created_at DESC LIMIT ?"
-                params.append(limit * 3 if benchmark_id else limit)
 
-                cursor.execute(query, params)
+                if clauses:
+                    query += " WHERE " + " AND ".join(clauses)
+                query += " ORDER BY created_at DESC LIMIT ?"
+                params.append(limit * 3)
+
+                cursor.execute(query, tuple(params))
                 for row in cursor.fetchall():
                     data = json.loads(row[0])
                     art = CertificationArtifact.model_validate(data)
-                    self._memory_artifacts[art.certification_id] = art
+                    # Filter by benchmark_id if requested
                     if benchmark_id:
-                        art_b_id = getattr(art, "benchmark_id", None) or (art.context.benchmark_id if art.context else None) or art.project_id.replace("benchmark_", "")
-                        if art_b_id != benchmark_id and art.project_id != benchmark_id and art.project_id != f"benchmark_{benchmark_id}":
+                        art_bench = (
+                            getattr(art, "benchmark_id", None)
+                            or (art.context.benchmark_id if art.context else None)
+                            or art.project_id.replace("benchmark_", "")
+                        )
+                        if art_bench != benchmark_id and art.project_id != benchmark_id and art.project_id != f"benchmark_{benchmark_id}":
                             continue
                     results.append(art)
         except Exception as exc:
-            logger.debug(f"SQLite list notice: {exc}")
-
-        if not results:
-            mem_list = list(self._memory_artifacts.values())
+            logger.warning(f"Error listing certification artifacts from SQLite: {exc}")
+            results = list(self._memory_artifacts.values())
             if project_id:
-                mem_list = [a for a in mem_list if a.project_id == project_id]
+                results = [a for a in results if a.project_id == project_id]
             if benchmark_id:
-                mem_list = [
-                    a for a in mem_list
-                    if getattr(a, "benchmark_id", None) == benchmark_id
-                    or (a.context and a.context.benchmark_id == benchmark_id)
+                results = [
+                    a for a in results
+                    if (getattr(a, "benchmark_id", None) or (a.context.benchmark_id if a.context else None) or a.project_id.replace("benchmark_", "")) == benchmark_id
                     or a.project_id == benchmark_id
                     or a.project_id == f"benchmark_{benchmark_id}"
                 ]
-            results = sorted(mem_list, key=lambda a: a.timestamp, reverse=True)
 
         return results[:limit]
 
@@ -224,8 +251,56 @@ class CertificationRepository:
         artifacts = self.list_artifacts(project_id=project_id, limit=1)
         return artifacts[0] if artifacts else None
 
+    def get_by_request_identity(self, request_identity: str) -> Optional[CertificationArtifact]:
+        """Retrieves an existing completed CertificationArtifact matching the deterministic request identity."""
+        if not request_identity:
+            return None
+        if request_identity in self._memory_idempotency:
+            cert_id = self._memory_idempotency[request_identity]
+            art = self.get_artifact(cert_id)
+            if art is not None:
+                return art
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT certification_id FROM certification_idempotency WHERE request_identity = ? AND status = 'COMPLETED'",
+                    (request_identity,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    cert_id = row[0]
+                    self._memory_idempotency[request_identity] = cert_id
+                    return self.get_artifact(cert_id)
+        except Exception as exc:
+            logger.warning(f"Error querying certification_idempotency: {exc}")
+        return None
+
+    def register_request_identity(
+        self, request_identity: str, certification_id: str, status: str = "COMPLETED"
+    ):
+        """Registers a deterministic request identity mapping to an artifact ID."""
+        if not request_identity or not certification_id:
+            return
+        self._memory_idempotency[request_identity] = certification_id
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO certification_idempotency (
+                        request_identity, certification_id, status, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (request_identity, certification_id, status, datetime.now(timezone.utc).isoformat()),
+                )
+                conn.commit()
+        except Exception as exc:
+            logger.warning(f"Error saving certification_idempotency: {exc}")
+
     def find_idempotent_artifact(
         self,
+        request_identity: Optional[str] = None,
         benchmark_id: Optional[str] = None,
         evaluation_mode: Optional[str] = None,
         target_variant: Optional[str] = None,
@@ -235,11 +310,25 @@ class CertificationRepository:
         modernized_implementation_hash: Optional[str] = None,
         policy_id: Optional[str] = None,
         preferred_provider: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
     ) -> Optional[CertificationArtifact]:
-        """Finds an existing completed CertificationArtifact matching the exact configuration deterministically."""
+        """Finds an existing completed CertificationArtifact matching the request identity or exact configuration."""
+        if request_identity:
+            matched = self.get_by_request_identity(request_identity)
+            if matched is not None:
+                return matched
+
         artifacts = self.list_artifacts(benchmark_id=benchmark_id, limit=50)
         for art in artifacts:
             ctx = art.context
+            # Check idempotency key if supplied
+            art_idem_key = getattr(art, "idempotency_key", None) or (ctx.idempotency_key if ctx else None)
+            if idempotency_key is not None and art_idem_key != idempotency_key:
+                continue
+            if idempotency_key is None and art_idem_key is not None:
+                # Artifact was tied to a specific user-supplied idempotency key
+                continue
+
             art_bench = getattr(art, "benchmark_id", None) or (ctx.benchmark_id if ctx else None) or art.project_id.replace("benchmark_", "")
             if benchmark_id and art_bench != benchmark_id and art.project_id != benchmark_id and art.project_id != f"benchmark_{benchmark_id}":
                 continue
@@ -278,11 +367,13 @@ class CertificationRepository:
     def clear(self):
         """Clears memory and DB table (for test isolation)."""
         self._memory_artifacts.clear()
+        self._memory_idempotency.clear()
         try:
             with sqlite3.connect(self._db_path) as conn:
                 conn.execute("DELETE FROM certification_cases")
                 conn.execute("DELETE FROM input_sets")
                 conn.execute("DELETE FROM certification_artifacts")
+                conn.execute("DELETE FROM certification_idempotency")
                 conn.commit()
         except Exception:
             pass

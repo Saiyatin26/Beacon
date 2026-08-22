@@ -31,6 +31,7 @@ from .models import (
     OracleEquivalenceMetrics,
     PerOracleCertificationSummary,
     compute_artifact_content_hash,
+    compute_certification_request_identity,
     compute_input_set_canonical_hash,
     verify_artifact_integrity,
     verify_input_set_integrity,
