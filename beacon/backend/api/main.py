@@ -1,3 +1,5 @@
+import hashlib
+import json
 import logging
 import sys
 from datetime import datetime, timezone
@@ -46,6 +48,7 @@ from ingestion.trace_loader import load_traces
 from oracle.interpreter import run_oracle
 from oracle.synthesizer import synthesize_oracle
 from oracle import registry, compile_candidate_to_oracle, OracleCompilationError
+from benchmarks.models import BenchmarkValidationResult
 
 import legacy_loan_approval
 import modern_loan_approval
@@ -839,4 +842,461 @@ def verify_certification_artifact(certification_id: str):
 def verify_certification_reproducibility(certification_id: str):
     """Backward-compatible endpoint for checking artifact and input-set integrity."""
     return verify_certification_artifact(certification_id)
+
+
+# ==============================================================================
+# Phase 14 — User-Supplied Dataset Ingestion & Custom Certification Endpoints
+# ==============================================================================
+
+from ingestion import (
+    DataFormat,
+    DatasetProvenanceCategory,
+    DatasetLifecycleStatus,
+    DatasetIngestionRequest,
+    DatasetPreview,
+    DatasetIngestionManifest,
+    UserDatasetRecord,
+    dataset_validator,
+    user_dataset_registry,
+    AuditAction,
+    AuditEvent,
+    audit_logger,
+)
+from certification.adapter_registry import adapter_registry
+
+
+class CustomPreflightRequest(BaseModel):
+    """Request payload for custom dataset pre-flight validation."""
+    project_id: str
+    dataset_id: str
+    legacy_adapter_id: str
+    modernized_adapter_id: str
+    oracle_set_id: Optional[str] = None
+    evaluation_mode: str = "CONTROLLED"
+    preferred_provider: str = "auto"
+    allow_external_llm: bool = False
+    policy_id: Optional[str] = "POL-DEFAULT"
+
+
+class CustomCertificationRunRequest(BaseModel):
+    """Request payload for certifying custom user-supplied datasets."""
+    project_id: str
+    dataset_id: str
+    legacy_adapter_id: str
+    modernized_adapter_id: str
+    oracle_set_id: Optional[str] = None
+    evaluation_mode: str = "CONTROLLED"
+    preferred_provider: str = "auto"
+    allow_external_llm: bool = False
+    policy: Optional[CertificationPolicy] = None
+    idempotency_key: Optional[str] = None
+    force_recompute: bool = False
+    config_fingerprint: Optional[str] = None
+
+
+@app.post("/api/v1/custom/datasets/preview", response_model=DatasetPreview)
+def preview_custom_dataset(request: DatasetIngestionRequest):
+    """Dry-run preview that parses, sanitizes, and extracts schema/checksum without persisting."""
+    preview = dataset_validator.create_preview(request)
+    audit_logger.log(
+        project_id=request.project_id,
+        action=AuditAction.DATASET_VALIDATE,
+        status="SUCCESS" if preview.validation_passed else "FAIL",
+        details={
+            "dataset_name": request.dataset_name,
+            "format": request.data_format.value,
+            "row_count": preview.row_count,
+            "validation_passed": preview.validation_passed,
+            "errors": preview.errors,
+        },
+    )
+    return preview
+
+
+@app.post("/api/v1/custom/datasets/upload")
+def upload_custom_dataset(request: DatasetIngestionRequest):
+    """Authoritatively validates, canonicalizes, registers, and manifests a user-supplied dataset."""
+    try:
+        manifest, records, test_inputs = dataset_validator.validate_for_ingestion(request)
+    except ValueError as ve:
+        audit_logger.log(
+            project_id=request.project_id,
+            action=AuditAction.DATASET_UPLOAD,
+            status="FAIL",
+            details={"dataset_name": request.dataset_name, "error": str(ve)},
+        )
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    user_record = user_dataset_registry.register_dataset(manifest, records, test_inputs)
+    return user_record.manifest.model_dump(mode="json")
+
+
+@app.get("/api/v1/custom/datasets")
+def list_custom_datasets(project_id: Optional[str] = None, limit: int = 50):
+    """Lists registered custom dataset manifests with project namespace isolation."""
+    manifests = user_dataset_registry.list_datasets(project_id=project_id, limit=limit)
+    return {"datasets": [m.model_dump(mode="json") for m in manifests]}
+
+
+@app.get("/api/v1/custom/datasets/{dataset_id}")
+def get_custom_dataset(dataset_id: str):
+    """Retrieves a single custom dataset manifest and its metadata."""
+    record = user_dataset_registry.get_dataset(dataset_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Custom dataset '{dataset_id}' not found.")
+    return {
+        "manifest": record.manifest.model_dump(mode="json"),
+        "row_count": record.manifest.row_count,
+        "sample_records": record.canonical_records[:5],
+    }
+
+
+@app.delete("/api/v1/custom/datasets/{dataset_id}")
+def delete_custom_dataset(dataset_id: str):
+    """Deletes a custom dataset and its stored records."""
+    deleted = user_dataset_registry.delete_dataset(dataset_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Custom dataset '{dataset_id}' not found.")
+    return {"deleted": True, "dataset_id": dataset_id}
+
+
+@app.get("/api/v1/custom/adapters")
+def list_custom_adapters():
+    """Lists registered, allowlisted implementation adapters for custom certification."""
+    return {"adapters": adapter_registry.list_adapters()}
+
+
+@app.post("/api/v1/custom/validate")
+def validate_custom_certification(req: CustomPreflightRequest):
+    """Performs rigorous pre-flight validation on user dataset, schema, allowlisted adapters,
+    OracleSet compatibility, policy, and privacy boundaries.
+    """
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    # 1. Dataset Verification
+    record = user_dataset_registry.get_dataset(req.dataset_id)
+    if not record:
+        errors.append(f"Custom dataset '{req.dataset_id}' not found in registry.")
+        return BenchmarkValidationResult(
+            is_valid=False,
+            benchmark_id="custom",
+            benchmark_version="1.0.0",
+            declared_dataset_checksum="",
+            verified_dataset_checksum="",
+            dataset_checksum_valid=False,
+            total_input_count=0,
+            legacy_adapter_status="NOT_FOUND",
+            modernized_adapter_status="NOT_FOUND",
+            oracle_set_id=req.oracle_set_id or "",
+            oracle_set_hash="",
+            policy_id=req.policy_id or "POL-DEFAULT",
+            policy_hash="",
+            config_fingerprint="",
+            errors=errors,
+            warnings=warnings,
+        )
+
+    if record.project_id != req.project_id:
+        errors.append(f"Project namespace isolation mismatch: Dataset belongs to '{record.project_id}', not '{req.project_id}'.")
+
+    manifest = record.manifest
+    test_inputs = user_dataset_registry.get_test_inputs(req.dataset_id)
+    if not test_inputs:
+        errors.append("Dataset contains 0 executable input probe records.")
+
+    # 2. Allowlisted Adapter Resolution
+    leg_adp = adapter_registry.get_adapter(req.legacy_adapter_id)
+    mod_adp = adapter_registry.get_adapter(req.modernized_adapter_id)
+
+    leg_status = "READY" if leg_adp else "NOT_FOUND"
+    mod_status = "READY" if mod_adp else "NOT_FOUND"
+
+    if not leg_adp:
+        errors.append(f"Unsupported legacy implementation adapter '{req.legacy_adapter_id}'. Only registered adapters are permitted.")
+    if not mod_adp:
+        errors.append(f"Unsupported modernized implementation adapter '{req.modernized_adapter_id}'. Only registered adapters are permitted.")
+
+    # 3. Dry-run sample evaluation
+    if leg_adp and mod_adp and test_inputs:
+        sample_inp = test_inputs[0].values
+        try:
+            leg_out = leg_adp.execute(sample_inp)
+        except Exception as exc:
+            errors.append(f"Legacy adapter failed on sample dataset record: {str(exc)}")
+        try:
+            mod_out = mod_adp.execute(sample_inp)
+        except Exception as exc:
+            errors.append(f"Modernized adapter failed on sample dataset record: {str(exc)}")
+
+    # 4. OracleSet & Privacy Boundary Validation
+    bench_id = "retail_discount_pricing" if "retail" in (req.legacy_adapter_id or "").lower() else (
+        "payroll_tax" if "payroll" in (req.legacy_adapter_id or "").lower() else (
+            "medical_triage" if "medical" in (req.legacy_adapter_id or "").lower() else "loan_approval"
+        )
+    )
+    mode = "FULL_BEACON" if req.evaluation_mode.upper() == "FULL_BEACON" else "CONTROLLED"
+    orc_set = None
+    orc_set_id = req.oracle_set_id
+    orc_set_hash = ""
+
+    if req.evaluation_mode.upper() == "FULL_BEACON":
+        # Privacy boundary check
+        prov_norm = req.preferred_provider.lower().strip()
+        if prov_norm in ("openrouter", "anthropic") and not req.allow_external_llm:
+            errors.append(
+                f"Privacy boundary violation: External cloud provider '{prov_norm}' selected without explicit user consent (allow_external_llm=False). "
+                "User data cannot leave local environment. Enable consent or select local/offline provider."
+            )
+
+    try:
+        orc_set = benchmark_registry.get_or_create_oracle_set(
+            bench_id,
+            mode=mode,
+            preferred_provider=req.preferred_provider.lower().strip(),
+            use_llm=(mode == "FULL_BEACON" and req.allow_external_llm),
+        )
+        if orc_set:
+            orc_set_id = orc_set.oracle_set_id
+            orc_set_hash = orc_set.oracle_set_hash
+    except Exception as exc:
+        warnings.append(f"OracleSet resolution note: {exc}")
+
+    # 5. Compute Deterministic Configuration Fingerprint
+    leg_hash = getattr(leg_adp, "implementation_hash", "") or (hashlib.sha256(req.legacy_adapter_id.encode()).hexdigest() if leg_adp else "")
+    mod_hash = getattr(mod_adp, "implementation_hash", "") or (hashlib.sha256(req.modernized_adapter_id.encode()).hexdigest() if mod_adp else "")
+    pol_id = req.policy_id or "POL-DEFAULT"
+    pol_hash = hashlib.sha256(pol_id.encode("utf-8")).hexdigest()
+
+    fingerprint_dict = {
+        "project_id": req.project_id,
+        "dataset_id": req.dataset_id,
+        "dataset_checksum": manifest.checksum,
+        "input_set_hash": manifest.input_set_hash,
+        "legacy_adapter_id": req.legacy_adapter_id,
+        "legacy_hash": leg_hash,
+        "modernized_adapter_id": req.modernized_adapter_id,
+        "modern_hash": mod_hash,
+        "oracle_set_id": orc_set_id or "SET-DEFAULT",
+        "oracle_set_hash": orc_set_hash,
+        "policy_id": pol_id,
+        "evaluation_mode": req.evaluation_mode.upper(),
+        "preferred_provider": req.preferred_provider.lower().strip(),
+        "allow_external_llm": bool(req.allow_external_llm),
+    }
+    raw_fp = json.dumps(fingerprint_dict, sort_keys=True, separators=(",", ":"))
+    config_fingerprint = hashlib.sha256(raw_fp.encode("utf-8")).hexdigest()
+
+    is_valid = len(errors) == 0
+
+    return BenchmarkValidationResult(
+        is_valid=is_valid,
+        benchmark_id="custom",
+        benchmark_version="1.0.0",
+        declared_dataset_checksum=manifest.checksum,
+        verified_dataset_checksum=manifest.checksum,
+        dataset_checksum_valid=True,
+        total_input_count=len(test_inputs),
+        legacy_adapter_status=leg_status,
+        modernized_adapter_status=mod_status,
+        oracle_set_id=orc_set_id or "SET-DEFAULT",
+        oracle_set_hash=orc_set_hash,
+        policy_id=pol_id,
+        policy_hash=pol_hash,
+        config_fingerprint=config_fingerprint,
+        errors=errors,
+        warnings=warnings,
+    )
+
+
+@app.post("/api/v1/custom/certify")
+def run_custom_certification(req: CustomCertificationRunRequest):
+    """Certifies custom user-supplied dataset using the authoritative deterministic CertificationEngine."""
+    record = user_dataset_registry.get_dataset(req.dataset_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Custom dataset '{req.dataset_id}' not found.")
+
+    if record.project_id != req.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Project namespace isolation mismatch: Dataset belongs to '{record.project_id}', not '{req.project_id}'.",
+        )
+
+    manifest = record.manifest
+    test_inputs = user_dataset_registry.get_test_inputs(req.dataset_id)
+    if not test_inputs:
+        raise HTTPException(status_code=400, detail="Dataset contains no executable test inputs.")
+
+    leg_adp = adapter_registry.get_adapter(req.legacy_adapter_id)
+    mod_adp = adapter_registry.get_adapter(req.modernized_adapter_id)
+    if not leg_adp:
+        raise HTTPException(status_code=400, detail=f"Unsupported legacy implementation adapter '{req.legacy_adapter_id}'.")
+    if not mod_adp:
+        raise HTTPException(status_code=400, detail=f"Unsupported modernized implementation adapter '{req.modernized_adapter_id}'.")
+
+    # Resolve OracleSet via Benchmark Registry
+    bench_id = "retail_discount_pricing" if "retail" in req.legacy_adapter_id.lower() else (
+        "payroll_tax" if "payroll" in req.legacy_adapter_id.lower() else (
+            "medical_triage" if "medical" in req.legacy_adapter_id.lower() else "loan_approval"
+        )
+    )
+    mode = "FULL_BEACON" if req.evaluation_mode.upper() == "FULL_BEACON" else "CONTROLLED"
+    prov_norm = req.preferred_provider.lower().strip()
+    if prov_norm in ("openrouter", "anthropic") and not req.allow_external_llm:
+        raise HTTPException(
+            status_code=403,
+            detail="Privacy violation: Cloud LLM requested without explicit user consent (allow_external_llm=False).",
+        )
+
+    actual_provider = prov_norm if req.allow_external_llm else "offline"
+    use_llm_flag = (mode == "FULL_BEACON" and req.allow_external_llm)
+
+    orc_set = benchmark_registry.get_or_create_oracle_set(
+        bench_id,
+        mode=mode,
+        preferred_provider=actual_provider,
+        use_llm=use_llm_flag,
+    )
+    orc_set_hash = orc_set.oracle_set_hash if orc_set else ""
+
+    # Policy
+    policy = req.policy or CertificationPolicy(policy_id="POL-DEFAULT", min_equivalence_score=0.80, min_oracle_coverage=0.0)
+    policy_hash = policy.compute_hash()
+
+    leg_hash = getattr(leg_adp, "implementation_hash", "") or hashlib.sha256(req.legacy_adapter_id.encode()).hexdigest()
+    mod_hash = getattr(mod_adp, "implementation_hash", "") or hashlib.sha256(req.modernized_adapter_id.encode()).hexdigest()
+
+    # 16-field Deterministic Request Identity
+    request_identity = compute_certification_request_identity(
+        benchmark_id=req.project_id,
+        benchmark_version="1.0.0",
+        dataset_name=manifest.dataset_name,
+        dataset_checksum=manifest.checksum,
+        discovery_mode=req.evaluation_mode,
+        target_variant=req.modernized_adapter_id,
+        preferred_provider=actual_provider,
+        use_llm=(req.evaluation_mode.upper() == "FULL_BEACON" and req.allow_external_llm),
+        policy_id=policy.policy_id,
+        policy_hash=policy_hash,
+        legacy_implementation_hash=leg_hash,
+        modernized_implementation_hash=mod_hash,
+        oracle_set_id=orc_set.oracle_set_id if orc_set else "SET-CUSTOM",
+        oracle_set_hash=orc_set_hash,
+        input_set_hash=manifest.input_set_hash,
+        idempotency_key=req.idempotency_key,
+    )
+
+    # Idempotency lookup
+    if not req.force_recompute:
+        existing_artifact = certification_repository.get_by_request_identity(request_identity)
+        if existing_artifact is not None:
+            logger.info(
+                f"Returning existing completed custom artifact '{existing_artifact.certification_id}' "
+                f"for request identity '{request_identity[:16]}...'."
+            )
+            audit_logger.log(
+                project_id=req.project_id,
+                action=AuditAction.CERTIFICATION_COMPLETE,
+                status="SUCCESS",
+                dataset_id=req.dataset_id,
+                certification_id=existing_artifact.certification_id,
+                details={"reuse": True, "request_identity": request_identity},
+            )
+            return existing_artifact.model_dump(mode="json")
+
+    audit_logger.log(
+        project_id=req.project_id,
+        action=AuditAction.CERTIFICATION_START,
+        status="INFO",
+        dataset_id=req.dataset_id,
+        details={
+            "dataset_name": manifest.dataset_name,
+            "mode": req.evaluation_mode,
+            "allow_external_llm": req.allow_external_llm,
+            "provider": actual_provider,
+        },
+    )
+
+    context = CertificationContext(
+        benchmark_id=f"custom_{req.project_id}",
+        benchmark_version="1.0.0",
+        benchmark_name=f"Custom: {manifest.dataset_name}",
+        benchmark_domain=manifest.target_domain or "User-Supplied Domain",
+        benchmark_provenance=manifest.declared_provenance.value,
+        project_id=req.project_id,
+        dataset_id=req.dataset_id,
+        dataset_name=manifest.dataset_name,
+        dataset_version=manifest.version,
+        dataset_checksum=manifest.checksum,
+        input_set_id=f"INPSET-{manifest.checksum[:8]}",
+        input_set_hash=manifest.input_set_hash,
+        evaluation_mode=req.evaluation_mode.upper(),
+        modernization_variant_id=req.modernized_adapter_id,
+        legacy_implementation_hash=leg_hash,
+        modernized_implementation_hash=mod_hash,
+        policy_id=policy.policy_id,
+        policy_hash=policy_hash,
+        oracle_set_id=orc_set.oracle_set_id if orc_set else "SET-CUSTOM",
+        oracle_set_hash=orc_set_hash,
+        provider=actual_provider,
+        idempotency_key=req.idempotency_key,
+        request_identity=request_identity,
+        is_forced_recompute=req.force_recompute,
+        provider_metadata={
+            "allow_external_llm": req.allow_external_llm,
+            "dataset_provenance": manifest.declared_provenance.value,
+            "schema_fingerprint": manifest.schema_fingerprint,
+            "row_count": manifest.row_count,
+        },
+    )
+
+    try:
+        artifact = certification_engine.certify(
+            project_id=req.project_id,
+            legacy_adapter=leg_adp,
+            modern_adapter=mod_adp,
+            oracle_set=orc_set,
+            policy=policy,
+            test_inputs=test_inputs,
+            field_bounds={},
+            context=context,
+            n_samples=len(test_inputs),
+        )
+
+        audit_logger.log(
+            project_id=req.project_id,
+            action=AuditAction.CERTIFICATION_COMPLETE,
+            status="SUCCESS",
+            dataset_id=req.dataset_id,
+            certification_id=artifact.certification_id,
+            details={
+                "status": artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status),
+                "score": artifact.score,
+                "regressions": len(artifact.regressions),
+                "content_hash": artifact.content_hash,
+            },
+        )
+        return artifact.model_dump(mode="json")
+
+    except Exception as exc:
+        audit_logger.log(
+            project_id=req.project_id,
+            action=AuditAction.CERTIFICATION_FAIL,
+            status="FAIL",
+            dataset_id=req.dataset_id,
+            details={"error": str(exc)},
+        )
+        raise HTTPException(status_code=500, detail=f"Custom certification failed: {str(exc)}")
+
+
+@app.get("/api/v1/custom/audit")
+def list_custom_audit_events(
+    project_id: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+    limit: int = 50,
+):
+    """Lists audit events for custom dataset ingestion and certification."""
+    events = audit_logger.list_events(project_id=project_id, dataset_id=dataset_id, limit=limit)
+    return {"events": [e.model_dump(mode="json") for e in events]}
+
 

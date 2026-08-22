@@ -30,11 +30,26 @@ class AdapterRegistry:
         """Resolves an ImplementationAdapter by name, and optionally version.
         If version is omitted, returns the latest registered version matching target_name.
         """
+        # Name alias mapping
+        alias_map = {
+            "retail_discount_legacy": "retail_pricing_legacy",
+            "retail_discount_modern_clean": "retail_pricing_modern_clean",
+            "retail_discount_modern_buggy_threshold": "retail_pricing_modern_buggy_threshold",
+            "retail_discount_modern_buggy_operator": "retail_pricing_modern_buggy_operator",
+            "payroll_tax_legacy": "payroll_legacy",
+            "payroll_tax_modern_clean": "payroll_modern_clean",
+            "payroll_tax_modern_buggy_bracket": "payroll_modern_buggy_bracket",
+            "payroll_tax_modern_buggy_deduction": "payroll_modern_buggy_deduction",
+        }
+        resolved_name = alias_map.get(target_name, target_name)
+
         if version is not None:
+            if (resolved_name, version) in self._adapters:
+                return self._adapters[(resolved_name, version)]
             return self._adapters.get((target_name, version))
 
         # Find matching adapters and select the latest
-        matches = [a for (name, ver), a in self._adapters.items() if name == target_name]
+        matches = [a for (name, ver), a in self._adapters.items() if name in (resolved_name, target_name)]
         if not matches:
             return None
         return matches[-1]

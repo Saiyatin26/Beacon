@@ -77,6 +77,34 @@ export default function App() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
+  // =========================================================================
+  // Phase 14 Custom Dataset Certification State
+  // =========================================================================
+  const [customProjectId, setCustomProjectId] = useState("proj_retail_pilot");
+  const [customDatasetName, setCustomDatasetName] = useState("Retail Custom Promo Dataset");
+  const [customFormat, setCustomFormat] = useState("JSON");
+  const [customProvenance, setCustomProvenance] = useState("USER_SUPPLIED");
+  const [customVersion, setCustomVersion] = useState("1.0.0");
+  const [customSourceRef, setCustomSourceRef] = useState("Enterprise Pilot Dataset v1");
+  const [customDomain, setCustomDomain] = useState("Retail & Wholesale Commerce");
+  const [customRawContent, setCustomRawContent] = useState(`[
+  {"order_amount": 45.0, "customer_tier": "STANDARD", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": false},
+  {"order_amount": 75.0, "customer_tier": "VIP", "items_count": 3, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 250.0, "customer_tier": "VIP", "items_count": 5, "coupon_code": "LOYALTY20", "is_express_shipping": true},
+  {"order_amount": 15.0, "customer_tier": "WHOLESALE", "items_count": 1, "coupon_code": "NONE", "is_express_shipping": false}
+]`);
+  const [customPreview, setCustomPreview] = useState(null);
+  const [customUploadedManifest, setCustomUploadedManifest] = useState(null);
+  const [customLegacyAdapterId, setCustomLegacyAdapterId] = useState("retail_discount_legacy");
+  const [customModernAdapterId, setCustomModernAdapterId] = useState("retail_discount_modern_clean");
+  const [customMode, setCustomMode] = useState("CONTROLLED");
+  const [customProvider, setCustomProvider] = useState("auto");
+  const [customAllowExternalLLM, setCustomAllowExternalLLM] = useState(false);
+  const [customPreflight, setCustomPreflight] = useState(null);
+  const [customActiveResult, setCustomActiveResult] = useState(null);
+  const [customCryptographicProof, setCustomCryptographicProof] = useState(null);
+
   // Clear previous validation and active result whenever ANY certification-affecting config changes
   const invalidateValidationAndActiveState = () => {
     setBenchmarkValidation(null);
@@ -85,6 +113,173 @@ export default function App() {
     setViewingHistoricalArtifact(null);
     setError(null);
     setNotice(null);
+  };
+
+  const invalidateCustomState = () => {
+    setCustomPreflight(null);
+    setCustomActiveResult(null);
+    setCustomCryptographicProof(null);
+    setError(null);
+    setNotice(null);
+  };
+
+  // Phase 14: Dry-Run Preview
+  const handlePreviewCustomDataset = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/custom/datasets/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: customProjectId,
+          dataset_name: customDatasetName,
+          data_format: customFormat,
+          raw_content: customRawContent,
+          declared_provenance: customProvenance,
+          dataset_version: customVersion,
+          source_reference: customSourceRef,
+          target_domain: customDomain,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || "Preview failed.");
+      setCustomPreview(data);
+      if (data.validation_passed) {
+        setNotice(`Dataset Preview Valid: ${data.row_count} rows parsed (SHA-256: ${data.dataset_checksum.slice(0, 16)}...).`);
+      } else {
+        setError(`Dataset Preview Errors: ${data.errors?.join("; ")}`);
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Phase 14: Authoritative Ingestion & Manifest Registration
+  const handleUploadCustomDataset = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    invalidateCustomState();
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/custom/datasets/upload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: customProjectId,
+          dataset_name: customDatasetName,
+          data_format: customFormat,
+          raw_content: customRawContent,
+          declared_provenance: customProvenance,
+          dataset_version: customVersion,
+          source_reference: customSourceRef,
+          target_domain: customDomain,
+        }),
+      });
+      const manifest = await res.json();
+      if (!res.ok) throw new Error(manifest.detail || "Upload failed.");
+      setCustomUploadedManifest(manifest);
+      setNotice(`Dataset Registered [${manifest.dataset_id}]: ${manifest.accepted_records} records verified.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Phase 14: Custom Pre-Flight Validation
+  const handleValidateCustomCertification = async () => {
+    if (!customUploadedManifest) {
+      setError("Please register or upload a dataset first.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/custom/validate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: customProjectId,
+          dataset_id: customUploadedManifest.dataset_id,
+          legacy_adapter_id: customLegacyAdapterId,
+          modernized_adapter_id: customModernAdapterId,
+          evaluation_mode: customMode,
+          preferred_provider: customProvider,
+          allow_external_llm: customAllowExternalLLM,
+        }),
+      });
+      const data = await res.json();
+      setCustomPreflight(data);
+      if (data.is_valid) {
+        setNotice(`Custom Pre-Flight Passed: Verified ${data.total_input_count} inputs and adapters.`);
+      } else {
+        setError(`Custom Pre-Flight Failed: ${data.errors?.join("; ") || "Validation errors."}`);
+      }
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Phase 14: Run Custom Certification
+  const handleRunCustomCertification = async () => {
+    if (!customPreflight || !customPreflight.is_valid) {
+      setError("Cannot certify: Run and pass Custom Pre-Flight validation first.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    setCustomCryptographicProof(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/custom/certify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project_id: customProjectId,
+          dataset_id: customUploadedManifest.dataset_id,
+          legacy_adapter_id: customLegacyAdapterId,
+          modernized_adapter_id: customModernAdapterId,
+          evaluation_mode: customMode,
+          preferred_provider: customProvider,
+          allow_external_llm: customAllowExternalLLM,
+          config_fingerprint: customPreflight.config_fingerprint,
+        }),
+      });
+      const artifact = await res.json();
+      if (!res.ok) throw new Error(artifact.detail || "Custom certification failed.");
+      setCustomActiveResult(artifact);
+      const isPass = artifact.status === "CERTIFIED" || artifact.status === "CERTIFIED_WITH_WARNINGS";
+      setNotice(
+        isPass
+          ? `CUSTOM CERTIFIED: Equivalence established for ${customDatasetName}.`
+          : `NOT CERTIFIED: Behavioral regressions detected for ${customDatasetName}.`
+      );
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Phase 14: Custom 8-Point Cryptographic Verification
+  const handleVerifyCustomIntegrity = async (certId) => {
+    if (!certId) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/certification/${certId}/verify`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setCustomCryptographicProof(data);
+      }
+    } catch (e) {
+      console.error(e);
+    }
   };
 
   // Load Benchmarks with Explicit Success / Error / Empty Handling
@@ -390,6 +585,7 @@ export default function App() {
         <div style={{ maxWidth: "1440px", margin: "0 auto", display: "flex", gap: "24px" }}>
           {[
             { id: "benchmark", label: "🎯 Benchmark Certification", desc: "Select & Certify Applications" },
+            { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },
             { id: "history", label: "📜 Certification History", desc: "Benchmark Runs & Fingerprints" },
             { id: "audit", label: "🔒 Audit Trail & Proofs", desc: "Cryptographic Verification" },
             { id: "drift", label: "📈 Drift Monitoring", desc: "Post-Migration Live Drift" },
@@ -1189,7 +1385,508 @@ export default function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB 2: CERTIFICATION HISTORY (BENCHMARK FILTERED)                          */}
+        {/* TAB: CUSTOM / USER-SUPPLIED DATASET CERTIFICATION WORKFLOW (PHASE 14)      */}
+        {/* ========================================================================= */}
+        {activeTab === "custom" && (
+          <div>
+            {/* Custom Certification Status & Privacy Banner */}
+            <div style={{ background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "10px", padding: "14px 20px", marginBottom: "20px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
+                  📥 Custom & User-Supplied Dataset Certification
+                </h2>
+                <p style={{ margin: "2px 0 0", fontSize: "13px", color: "#64748b" }}>
+                  Ingest custom enterprise or public datasets, validate schemas, bind allowlisted adapters, enforce privacy gates, and certify equivalence with the authoritative CertificationEngine.
+                </p>
+              </div>
+              <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                <span style={badgeStyle("#eff6ff", "#1e40af", "#bfdbfe")}>Namespace: {customProjectId}</span>
+                <span style={badgeStyle(customAllowExternalLLM ? "#fef3c7" : "#ecfdf5", customAllowExternalLLM ? "#92400e" : "#065f46", customAllowExternalLLM ? "#fde68a" : "#a7f3d0")}>
+                  {customAllowExternalLLM ? "🌐 Cloud LLM Allowed" : "🔒 Local Processing Only"}
+                </span>
+                <span style={badgeStyle("#f8fafc", "#475569", "#cbd5e1")}>Mode: {customMode}</span>
+              </div>
+            </div>
+
+            {/* Step 1: Dataset Specification & Provenance Declaration */}
+            <div style={cardStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "10px", marginBottom: "16px" }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                    Step 1: Dataset Ingestion & Truthful Provenance
+                  </h3>
+                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
+                    Provide structured records (JSON, JSONL, or CSV) with explicit provenance declaration.
+                  </p>
+                </div>
+                {/* Sample Preset Loaders */}
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    onClick={() => {
+                      setCustomDatasetName("Retail Custom Pricing Invariants");
+                      setCustomFormat("JSON");
+                      setCustomDomain("Retail E-Commerce");
+                      setCustomProvenance("USER_SUPPLIED");
+                      setCustomLegacyAdapterId("retail_discount_legacy");
+                      setCustomModernAdapterId("retail_discount_modern_clean");
+                      setCustomRawContent(`[
+  {"order_amount": 45.0, "customer_tier": "STANDARD", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": false},
+  {"order_amount": 75.0, "customer_tier": "VIP", "items_count": 3, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 250.0, "customer_tier": "VIP", "items_count": 5, "coupon_code": "LOYALTY20", "is_express_shipping": true},
+  {"order_amount": 15.0, "customer_tier": "WHOLESALE", "items_count": 1, "coupon_code": "NONE", "is_express_shipping": false}
+]`);
+                      invalidateCustomState();
+                    }}
+                    style={{ background: "#f8fafc", border: "1px solid #cbd5e1", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontWeight: "600" }}
+                  >
+                    Load Retail Preset
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCustomDatasetName("Loan Underwriting Custom Test Inputs");
+                      setCustomFormat("JSON");
+                      setCustomDomain("Financial Services & Underwriting");
+                      setCustomProvenance("PRIVATE_ENTERPRISE");
+                      setCustomLegacyAdapterId("loan_approval_legacy");
+                      setCustomModernAdapterId("loan_approval_modern_equiv");
+                      setCustomRawContent(`[
+  {"credit_score": 750, "debt_ratio": 0.25, "annual_income": 85000},
+  {"credit_score": 580, "debt_ratio": 0.45, "annual_income": 42000},
+  {"credit_score": 810, "debt_ratio": 0.15, "annual_income": 120000},
+  {"credit_score": 640, "debt_ratio": 0.35, "annual_income": 55000}
+]`);
+                      invalidateCustomState();
+                    }}
+                    style={{ background: "#f8fafc", border: "1px solid #cbd5e1", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontWeight: "600" }}
+                  >
+                    Load Loan Preset
+                  </button>
+                </div>
+              </div>
+
+              {/* Metadata Inputs */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "14px", marginBottom: "16px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Project ID</label>
+                  <input
+                    type="text"
+                    value={customProjectId}
+                    onChange={(e) => { setCustomProjectId(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Dataset Name</label>
+                  <input
+                    type="text"
+                    value={customDatasetName}
+                    onChange={(e) => { setCustomDatasetName(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Data Format</label>
+                  <select
+                    value={customFormat}
+                    onChange={(e) => { setCustomFormat(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
+                  >
+                    <option value="JSON">JSON (Array of objects)</option>
+                    <option value="JSONL">JSONL (Newline-delimited JSON)</option>
+                    <option value="CSV">CSV (Header-delimited values)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Declared Provenance</label>
+                  <select
+                    value={customProvenance}
+                    onChange={(e) => { setCustomProvenance(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
+                  >
+                    <option value="USER_SUPPLIED">USER_SUPPLIED (Direct user input)</option>
+                    <option value="PUBLIC_EXTERNAL">PUBLIC_EXTERNAL (Public dataset source)</option>
+                    <option value="PRIVATE_ENTERPRISE">PRIVATE_ENTERPRISE (Proprietary data)</option>
+                    <option value="REALISTIC_SYNTHETIC">REALISTIC_SYNTHETIC (Synthetic distribution)</option>
+                    <option value="BENCHMARK_DERIVED">BENCHMARK_DERIVED (Derived subset)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Raw Content Area */}
+              <div style={{ marginBottom: "16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "4px" }}>
+                  <label style={{ fontSize: "12px", fontWeight: "600", color: "#475569" }}>Dataset Content ({customFormat})</label>
+                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>{customRawContent.length} chars • Max 10MB</span>
+                </div>
+                <textarea
+                  rows={7}
+                  value={customRawContent}
+                  onChange={(e) => { setCustomRawContent(e.target.value); invalidateCustomState(); }}
+                  placeholder="Paste JSON array, JSONL, or CSV data here..."
+                  style={{ width: "100%", padding: "10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontFamily: "monospace", fontSize: "12px", boxSizing: "border-box" }}
+                />
+              </div>
+
+              {/* Preview & Register Action Buttons */}
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button
+                  onClick={handlePreviewCustomDataset}
+                  disabled={busy}
+                  style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 16px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}
+                >
+                  🔍 Step 2: Validate & Preview (Dry-Run)
+                </button>
+                <button
+                  onClick={handleUploadCustomDataset}
+                  disabled={busy}
+                  style={{ background: "#059669", color: "#ffffff", border: "none", padding: "8px 18px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}
+                >
+                  💾 Step 3: Register & Manifest Dataset
+                </button>
+              </div>
+            </div>
+
+            {/* Step 2 Preview Card */}
+            {customPreview && (
+              <div style={cardStyle}>
+                <h3 style={{ margin: "0 0 10px", fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
+                  📊 Dataset Dry-Run Preview Summary
+                </h3>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "12px", marginBottom: "14px" }}>
+                  <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Parsed Rows</div>
+                    <div style={{ fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>{customPreview.row_count}</div>
+                  </div>
+                  <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Validation Outcome</div>
+                    <div style={{ fontSize: "13px", fontWeight: "700", color: customPreview.validation_passed ? "#059669" : "#dc2626" }}>
+                      {customPreview.validation_passed ? "VALID" : "INVALID"}
+                    </div>
+                  </div>
+                  <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Dataset SHA-256</div>
+                    <div style={{ fontSize: "11px", fontFamily: "monospace", color: "#0f172a" }}>{customPreview.dataset_checksum ? `${customPreview.dataset_checksum.slice(0, 16)}...` : "N/A"}</div>
+                  </div>
+                  <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Schema Fingerprint</div>
+                    <div style={{ fontSize: "11px", fontFamily: "monospace", color: "#0f172a" }}>{customPreview.schema_fingerprint ? `${customPreview.schema_fingerprint.slice(0, 16)}...` : "N/A"}</div>
+                  </div>
+                </div>
+
+                {/* Inferred Schema Fields */}
+                <div style={{ marginBottom: "12px" }}>
+                  <div style={{ fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "6px" }}>Inferred Schema Fields:</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
+                    {Object.entries(customPreview.inferred_schema || {}).map(([col, typ]) => (
+                      <span key={col} style={{ background: "#f1f5f9", padding: "3px 8px", borderRadius: "4px", fontSize: "11px", fontFamily: "monospace" }}>
+                        <strong>{col}</strong>: <span style={{ color: "#2563eb" }}>{typ}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Sample Records Table */}
+                {customPreview.sample_records && customPreview.sample_records.length > 0 && (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                      <thead>
+                        <tr style={{ background: "#f8fafc", borderBottom: "1px solid #e2e8f0" }}>
+                          <th style={{ padding: "6px 8px", textAlign: "left" }}>#</th>
+                          {Object.keys(customPreview.sample_records[0]).map((k) => (
+                            <th key={k} style={{ padding: "6px 8px", textAlign: "left" }}>{k}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {customPreview.sample_records.map((row, idx) => (
+                          <tr key={idx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                            <td style={{ padding: "6px 8px", color: "#94a3b8" }}>{idx + 1}</td>
+                            {Object.values(row).map((val, cidx) => (
+                              <td key={cidx} style={{ padding: "6px 8px", fontFamily: "monospace" }}>{JSON.stringify(val)}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Step 3: Implementation Adapter Binding & Privacy Settings */}
+            <div style={cardStyle}>
+              <h3 style={{ margin: "0 0 10px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                Step 4: Implementation Binding & Privacy Boundary
+              </h3>
+              <p style={{ margin: "0 0 14px", fontSize: "12px", color: "#64748b" }}>
+                Select registered allowlisted adapters and configure the privacy boundary for cloud LLM evaluation.
+              </p>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: "14px", marginBottom: "16px" }}>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Legacy Implementation Adapter</label>
+                  <select
+                    value={customLegacyAdapterId}
+                    onChange={(e) => { setCustomLegacyAdapterId(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
+                  >
+                    <option value="retail_discount_legacy">retail_discount_legacy (v1.0.0)</option>
+                    <option value="loan_approval_legacy">loan_approval_legacy (v1.0.0)</option>
+                    <option value="payroll_tax_legacy">payroll_tax_legacy (v1.0.0)</option>
+                    <option value="medical_triage_legacy">medical_triage_legacy (v1.0.0)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Modernized Implementation Variant</label>
+                  <select
+                    value={customModernAdapterId}
+                    onChange={(e) => { setCustomModernAdapterId(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
+                  >
+                    <option value="retail_discount_modern_clean">retail_discount_modern_clean (v2.0.0 Clean)</option>
+                    <option value="retail_discount_modern_buggy_threshold">retail_discount_modern_buggy_threshold (v2.0.0 Buggy)</option>
+                    <option value="loan_approval_modern_equiv">loan_approval_modern_equiv (v2.0.0 Clean)</option>
+                    <option value="loan_approval_modern_buggy">loan_approval_modern_buggy (v2.0.0 Buggy)</option>
+                    <option value="payroll_tax_modern_clean">payroll_tax_modern_clean (v2.0.0 Clean)</option>
+                    <option value="payroll_tax_modern_buggy_bracket">payroll_tax_modern_buggy_bracket (v2.0.0 Buggy)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Evaluation Mode</label>
+                  <select
+                    value={customMode}
+                    onChange={(e) => { setCustomMode(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
+                  >
+                    <option value="CONTROLLED">CONTROLLED (Frozen Deterministic OracleSet)</option>
+                    <option value="FULL_BEACON">FULL_BEACON (Invariant Discovery & Synthesis)</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Preferred Provider</label>
+                  <select
+                    value={customProvider}
+                    onChange={(e) => { setCustomProvider(e.target.value); invalidateCustomState(); }}
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
+                  >
+                    <option value="auto">auto (Priority Fallback Chain)</option>
+                    <option value="offline">offline (Deterministic Offline Engine)</option>
+                    <option value="ollama">ollama (Local Private LLM)</option>
+                    <option value="openrouter">openrouter (OpenRouter Cloud)</option>
+                    <option value="anthropic">anthropic (Direct Anthropic Cloud)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Privacy Consent Checkbox */}
+              <div style={{ background: "#f8fafc", padding: "12px 16px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                <label style={{ display: "flex", alignItems: "center", gap: "10px", cursor: "pointer", fontSize: "13px" }}>
+                  <input
+                    type="checkbox"
+                    checked={customAllowExternalLLM}
+                    onChange={(e) => { setCustomAllowExternalLLM(e.target.checked); invalidateCustomState(); }}
+                  />
+                  <span>
+                    <strong>Explicit Cloud LLM Consent:</strong> Allow sending dataset inputs and traces to external cloud providers (OpenRouter/Anthropic) when in FULL_BEACON mode.
+                  </span>
+                </label>
+                <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", marginLeft: "24px" }}>
+                  When unchecked (default), user-supplied data is strictly processed locally (Ollama / Offline). Credentials and secrets are never transmitted.
+                </div>
+              </div>
+            </div>
+
+            {/* Step 4: Custom Pre-Flight Validation */}
+            <div style={cardStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                    Step 5 & 6: Pre-Flight Integrity Check & Certification Execution
+                  </h3>
+                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
+                    Validates schema compatibility, adapter readiness, OracleSet coverage, and cryptographic fingerprint.
+                  </p>
+                </div>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button
+                    onClick={handleValidateCustomCertification}
+                    disabled={busy || !customUploadedManifest}
+                    style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 16px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: customUploadedManifest ? "pointer" : "not-allowed" }}
+                  >
+                    🔍 Step 6: Custom Pre-Flight Check
+                  </button>
+                  <button
+                    onClick={handleRunCustomCertification}
+                    disabled={busy || !customPreflight || !customPreflight.is_valid}
+                    style={{
+                      background: customPreflight?.is_valid ? "#2563eb" : "#94a3b8",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "8px 20px",
+                      borderRadius: "6px",
+                      fontWeight: "600",
+                      fontSize: "13px",
+                      cursor: customPreflight?.is_valid ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    {busy ? "Certifying..." : "⚡ Step 7: Run Equivalence Certification"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Preflight Results Panel */}
+              {customPreflight && (
+                <div style={{ background: customPreflight.is_valid ? "#f0fdf4" : "#fef2f2", border: `1px solid ${customPreflight.is_valid ? "#bbf7d0" : "#fecaca"}`, borderRadius: "8px", padding: "12px 16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                    <span style={{ fontWeight: "700", fontSize: "13px", color: customPreflight.is_valid ? "#166534" : "#991b1b" }}>
+                      {customPreflight.is_valid ? "✅ Custom Pre-Flight Validation PASSED" : "❌ Custom Pre-Flight Validation FAILED"}
+                    </span>
+                    <span style={{ fontSize: "11px", fontFamily: "monospace", color: "#64748b" }}>
+                      Fingerprint: {customPreflight.config_fingerprint.slice(0, 16)}...
+                    </span>
+                  </div>
+                  {customPreflight.errors?.length > 0 && (
+                    <div style={{ color: "#991b1b", fontSize: "12px", marginTop: "4px" }}>
+                      <strong>Errors:</strong> {customPreflight.errors.join("; ")}
+                    </div>
+                  )}
+                  {customPreflight.warnings?.length > 0 && (
+                    <div style={{ color: "#92400e", fontSize: "12px", marginTop: "4px" }}>
+                      <strong>Warnings:</strong> {customPreflight.warnings.join("; ")}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Step 8 & 9: Authoritative Outcome, Evidence & Verification */}
+            {customActiveResult && (
+              <div style={cardStyle}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #e2e8f0", paddingBottom: "12px", marginBottom: "16px" }}>
+                  <div>
+                    <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "700", color: "#0f172a" }}>
+                      Step 8: Authoritative Certification Outcome
+                    </h3>
+                    <div style={{ fontSize: "12px", color: "#64748b", marginTop: "2px" }}>
+                      Run ID: <code style={{ color: "#2563eb" }}>{customActiveResult.certification_id}</code> • Project: <strong>{customProjectId}</strong>
+                    </div>
+                  </div>
+                  <span style={badgeStyle(
+                    statusBadgeStyles[customActiveResult.status]?.bg || "#f1f5f9",
+                    statusBadgeStyles[customActiveResult.status]?.color || "#334155",
+                    statusBadgeStyles[customActiveResult.status]?.border || "#cbd5e1"
+                  )}>
+                    {statusBadgeStyles[customActiveResult.status]?.text || customActiveResult.status}
+                  </span>
+                </div>
+
+                {/* Score & Metrics Grid */}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: "12px", marginBottom: "16px" }}>
+                  <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Equivalence Score</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: customActiveResult.metrics?.equivalence_score === 1.0 ? "#059669" : "#dc2626" }}>
+                      {((customActiveResult.metrics?.equivalence_score || 0) * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                  <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Test Probes Evaluated</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: "#0f172a" }}>
+                      {customActiveResult.metrics?.unique_input_count || customActiveResult.metrics?.total_inputs}
+                    </div>
+                  </div>
+                  <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Matching Probes</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: "#059669" }}>
+                      {customActiveResult.metrics?.matching_case_count || customActiveResult.metrics?.matching_probes}
+                    </div>
+                  </div>
+                  <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Regressions Pinpointed</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: (customActiveResult.regressions?.length || 0) > 0 ? "#dc2626" : "#059669" }}>
+                      {customActiveResult.regressions?.length || 0}
+                    </div>
+                  </div>
+                  <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
+                    <div style={{ fontSize: "11px", color: "#64748b" }}>Oracle Coverage</div>
+                    <div style={{ fontSize: "20px", fontWeight: "800", color: "#2563eb" }}>
+                      {((customActiveResult.metrics?.oracle_coverage_pct || 1.0) * 100).toFixed(1)}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Provenance & Cryptographic Identifiers Table */}
+                <div style={{ background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0", padding: "14px", marginBottom: "16px" }}>
+                  <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a", marginBottom: "8px" }}>
+                    🔒 Cryptographic Provenance Identifiers
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", fontSize: "12px" }}>
+                    <div>Dataset Checksum: <code style={{ color: "#2563eb" }}>{customActiveResult.dataset_checksum || customActiveResult.context?.dataset_checksum || "N/A"}</code></div>
+                    <div>Input-Set Hash: <code style={{ color: "#2563eb" }}>{customActiveResult.input_set_hash || "N/A"}</code></div>
+                    <div>Legacy Implementation: <code style={{ color: "#475569" }}>{customActiveResult.legacy_implementation_hash ? `${customActiveResult.legacy_implementation_hash.slice(0, 16)}...` : "N/A"}</code></div>
+                    <div>Modern Implementation: <code style={{ color: "#475569" }}>{customActiveResult.modernized_implementation_hash ? `${customActiveResult.modernized_implementation_hash.slice(0, 16)}...` : "N/A"}</code></div>
+                    <div>OracleSet Digest: <code style={{ color: "#475569" }}>{customActiveResult.oracle_set_hash ? `${customActiveResult.oracle_set_hash.slice(0, 16)}...` : "N/A"}</code></div>
+                    <div>Artifact Hash: <code style={{ color: "#059669", fontWeight: "700" }}>{customActiveResult.content_hash ? `${customActiveResult.content_hash.slice(0, 16)}...` : "N/A"}</code></div>
+                  </div>
+                </div>
+
+                {/* Behavioral Regressions & Counterexamples */}
+                {customActiveResult.regressions?.length > 0 && (
+                  <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "8px", padding: "14px", marginBottom: "16px" }}>
+                    <div style={{ fontWeight: "700", color: "#991b1b", fontSize: "13px", marginBottom: "8px" }}>
+                      ⚠️ Behavioral Regressions Detected ({customActiveResult.regressions.length})
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                      {customActiveResult.regressions.map((reg, idx) => (
+                        <div key={idx} style={{ background: "#ffffff", padding: "8px 12px", borderRadius: "6px", border: "1px solid #fee2e2", fontSize: "12px" }}>
+                          <span style={{ fontWeight: "600", color: "#dc2626" }}>Oracle {reg.oracle_id}:</span> {reg.details} •
+                          Legacy: <code>{JSON.stringify(reg.legacy_output)}</code> vs Modern: <code>{JSON.stringify(reg.modern_output)}</code>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 9: 8-Point Cryptographic Verification Action */}
+                <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
+                  <button
+                    onClick={() => handleVerifyCustomIntegrity(customActiveResult.certification_id)}
+                    style={{ background: "#0f172a", color: "#ffffff", border: "none", padding: "8px 16px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}
+                  >
+                    🔐 Step 9: Verify 8-Point Cryptographic Proof
+                  </button>
+                  <button
+                    onClick={() => exportDossier(customActiveResult.certification_id, "markdown")}
+                    style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 14px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}
+                  >
+                    📄 Export Markdown Dossier
+                  </button>
+                  <button
+                    onClick={() => exportDossier(customActiveResult.certification_id, "json")}
+                    style={{ background: "#f1f5f9", color: "#1e293b", border: "1px solid #cbd5e1", padding: "8px 14px", borderRadius: "6px", fontWeight: "600", fontSize: "13px", cursor: "pointer" }}
+                  >
+                    📦 Export JSON Dossier
+                  </button>
+                </div>
+
+                {/* Verification Results Panel */}
+                {customCryptographicProof && (
+                  <div style={{ marginTop: "14px", background: customCryptographicProof.status === "PASS" ? "#f0fdf4" : "#fef2f2", border: `1px solid ${customCryptographicProof.status === "PASS" ? "#bbf7d0" : "#fecaca"}`, borderRadius: "8px", padding: "12px 16px" }}>
+                    <div style={{ fontWeight: "700", color: customCryptographicProof.status === "PASS" ? "#166534" : "#991b1b", fontSize: "13px", marginBottom: "4px" }}>
+                      {customCryptographicProof.status === "PASS" ? "✅ 8-Point Cryptographic Integrity PASS" : "❌ Cryptographic Integrity Check FAIL"}
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#475569" }}>
+                      All artifact hashes, persisted inputs, implementation hashes, and dataset checksums successfully verified against canonical standards.
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB 3: CERTIFICATION HISTORY (BENCHMARK FILTERED)                          */}
         {/* ========================================================================= */}
         {activeTab === "history" && (
           <div>
