@@ -409,12 +409,22 @@ class BenchmarkRegistry:
         checksum = hashlib.sha256(canonical_str.encode("utf-8")).hexdigest()
         return inputs, checksum
 
-    def validate_benchmark(self, benchmark_id: str) -> BenchmarkValidationResult:
-        """Runs comprehensive pre-flight validation on benchmark schemas, adapters, datasets, and provenance."""
+    def validate_benchmark(
+        self,
+        benchmark_id: str,
+        evaluation_mode: str = "CONTROLLED",
+        target_variant: str = "clean_v2",
+        preferred_provider: str = "auto",
+        dataset_name: str = "default",
+    ) -> BenchmarkValidationResult:
+        """Runs comprehensive pre-flight validation on benchmark schemas, adapters, datasets, and configuration."""
         spec = self.get_benchmark(benchmark_id)
         if not spec:
             return BenchmarkValidationResult(
                 benchmark_id=benchmark_id,
+                evaluation_mode=evaluation_mode,
+                target_variant=target_variant,
+                preferred_provider=preferred_provider,
                 is_valid=False,
                 errors=[f"Benchmark '{benchmark_id}' not found in registry."],
             )
@@ -424,7 +434,14 @@ class BenchmarkRegistry:
         warnings: list[str] = []
         mod_status: dict[str, str] = {}
 
-        # 1. Validate Provenance & Metadata
+        # 1. Validate Mode
+        norm_mode = evaluation_mode.upper().strip()
+        if norm_mode not in ("CONTROLLED", "FULL_BEACON"):
+            errors.append(f"Invalid evaluation mode '{evaluation_mode}'. Must be 'CONTROLLED' or 'FULL_BEACON'.")
+        else:
+            passed.append(f"Evaluation mode '{norm_mode}' validated.")
+
+        # 2. Validate Provenance & Metadata
         if not spec.source:
             errors.append("Benchmark specification missing 'source' field.")
         if not spec.license:
@@ -433,15 +450,17 @@ class BenchmarkRegistry:
             warnings.append("Benchmark specification missing explicit 'dataset_source' field.")
         passed.append(f"Provenance categorized truthfully as '{spec.provenance_category.value}'.")
 
-        # 2. Validate Legacy Adapter
+        # 3. Validate Legacy Adapter
         leg_adp = self.get_legacy_adapter(benchmark_id)
         leg_status = "OK" if leg_adp else "MISSING"
+        leg_hash = ""
         if leg_adp:
-            passed.append(f"Legacy adapter '{leg_adp.name}' resolved successfully.")
+            leg_hash = getattr(leg_adp, "implementation_hash", "") or spec.legacy_implementation_hash
+            passed.append(f"Legacy adapter '{leg_adp.name}' resolved successfully (hash: {leg_hash[:16]}...).")
         else:
             errors.append(f"Legacy adapter '{spec.legacy_adapter_id}' could not be resolved.")
 
-        # 3. Validate Modernized Adapters
+        # 4. Validate Modernized Adapters & Requested Variant
         for var_name, adp_id in spec.modernized_adapters.items():
             mod_adp = self.get_modernized_adapter(benchmark_id, var_name)
             if mod_adp:
@@ -451,11 +470,20 @@ class BenchmarkRegistry:
                 mod_status[var_name] = "MISSING"
                 errors.append(f"Modernized adapter variant '{var_name}' ({adp_id}) missing.")
 
-        # 4. Validate Dataset Loading & Checksum Propagation
+        target_mod_adp = self.get_modernized_adapter(benchmark_id, target_variant)
+        target_var_status = "OK" if target_mod_adp else "MISSING"
+        mod_hash = ""
+        if target_mod_adp:
+            mod_hash = getattr(target_mod_adp, "implementation_hash", "")
+            passed.append(f"Target modernization variant '{target_variant}' adapter resolved (hash: {mod_hash[:16]}...).")
+        else:
+            errors.append(f"Requested target modernization variant '{target_variant}' not available for benchmark '{benchmark_id}'.")
+
+        # 5. Validate Dataset Loading & Checksum Propagation
         record_count = 0
         checksum = ""
         try:
-            inputs, checksum = self.load_dataset_with_checksum(benchmark_id, dataset_name="default")
+            inputs, checksum = self.load_dataset_with_checksum(benchmark_id, dataset_name=dataset_name)
             record_count = len(inputs)
             if inputs:
                 passed.append(f"Successfully loaded and validated {record_count} dataset inputs.")
@@ -473,24 +501,67 @@ class BenchmarkRegistry:
                         passed.append("Legacy adapter executed sample record without exception.")
                     else:
                         errors.append(f"Legacy adapter execution error on sample: {obs.error_message}")
+
+                # Test execution of modern target adapter on first input
+                if target_mod_adp:
+                    mod_obs = target_mod_adp.execute(inputs[0].values, input_id=inputs[0].input_id)
+                    if mod_obs.execution_status == "SUCCESS":
+                        passed.append("Target modern adapter executed sample record without exception.")
+                    else:
+                        errors.append(f"Modern adapter execution error on sample: {mod_obs.error_message}")
             else:
                 warnings.append("Dataset returned zero records.")
         except Exception as exc:
             errors.append(f"Dataset validation failed: {exc}")
 
-        is_valid = len(errors) == 0 and leg_status == "OK"
+        # 6. Validate OracleSet / Policy Availability
+        try:
+            if norm_mode == "CONTROLLED":
+                orc_set = self.get_or_create_oracle_set(benchmark_id, mode="CONTROLLED")
+                if orc_set and len(orc_set.oracles) > 0:
+                    passed.append(f"Baseline OracleSet '{orc_set.oracle_set_id}' resolved ({len(orc_set.oracles)} invariants).")
+                else:
+                    errors.append(f"Baseline OracleSet for benchmark '{benchmark_id}' contains zero invariants.")
+            else:
+                passed.append(f"FULL_BEACON discovery pipeline configured (preferred provider: '{preferred_provider}').")
+        except Exception as exc:
+            errors.append(f"OracleSet pre-flight check failed: {exc}")
+
+        is_valid = len(errors) == 0 and leg_status == "OK" and target_var_status == "OK"
+
+        # 7. Compute Canonical Validation Fingerprint
+        fingerprint_payload = {
+            "benchmark_id": benchmark_id,
+            "evaluation_mode": norm_mode,
+            "target_variant": target_variant,
+            "preferred_provider": preferred_provider.lower().strip(),
+            "dataset_checksum": checksum,
+            "legacy_implementation_hash": leg_hash,
+            "modernized_implementation_hash": mod_hash,
+        }
+        config_fingerprint = hashlib.sha256(
+            json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
         return BenchmarkValidationResult(
             benchmark_id=benchmark_id,
+            evaluation_mode=norm_mode,
+            target_variant=target_variant,
+            preferred_provider=preferred_provider,
+            config_fingerprint=config_fingerprint,
             is_valid=is_valid,
             checks_passed=passed,
             errors=errors,
             warnings=warnings,
-                    legacy_adapter_status=leg_status,
-                    modernized_adapters_status=mod_status,
-                    dataset_record_count=record_count,
-                    dataset_checksum=checksum,
-                    metadata_provenance_valid=len(errors) == 0,
-                )
+            legacy_adapter_status=leg_status,
+            modernized_adapters_status=mod_status,
+            target_variant_adapter_status=target_var_status,
+            dataset_record_count=record_count,
+            dataset_checksum=checksum,
+            legacy_implementation_hash=leg_hash,
+            modernized_implementation_hash=mod_hash,
+            metadata_provenance_valid=len(errors) == 0,
+        )
 
     def get_or_create_oracle_set(
         self,

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
-const API_BASE = "http://localhost:8000";
+// Environment-based API Base URL with safe development fallback
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
 // Reusable Design Tokens & Styles
 const cardStyle = {
@@ -32,6 +33,7 @@ const statusBadgeStyles = {
   NOT_CERTIFIED: { bg: "#fef2f2", border: "#ef4444", color: "#991b1b", text: "NOT CERTIFIED" },
   REFERENCE_INCONSISTENT: { bg: "#f5f3ff", border: "#8b5cf6", color: "#5b21b6", text: "REFERENCE INCONSISTENT" },
   INSUFFICIENT_COVERAGE: { bg: "#fff7ed", border: "#f97316", color: "#9a3412", text: "INSUFFICIENT COVERAGE" },
+  INCONCLUSIVE: { bg: "#fff7ed", border: "#f97316", color: "#9a3412", text: "INCONCLUSIVE" },
   ORACLE_SET_INVALID: { bg: "#fef2f2", border: "#dc2626", color: "#7f1d1d", text: "ORACLE SET INVALID" },
 };
 
@@ -39,8 +41,11 @@ export default function App() {
   // Navigation Tabs
   const [activeTab, setActiveTab] = useState("benchmark"); // benchmark, history, audit, drift, loan_demo
 
-  // Benchmark Selection & Step Workflow State
+  // Benchmark Catalog State with explicit Loading / Error / Empty States
   const [benchmarks, setBenchmarks] = useState([]);
+  const [benchmarksLoadingState, setBenchmarksLoadingState] = useState("idle"); // idle, loading, success, error, empty
+
+  // Step Workflow Configuration State
   const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("retail_discount_pricing");
   const [selectedVariant, setSelectedVariant] = useState("clean_v2");
   const [discoveryMode, setDiscoveryMode] = useState("CONTROLLED");
@@ -72,16 +77,45 @@ export default function App() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
-  // Load Benchmarks Metadata
+  // Clear previous validation and active result whenever ANY certification-affecting config changes
+  const invalidateValidationAndActiveState = () => {
+    setBenchmarkValidation(null);
+    setActiveResult(null);
+    setCryptographicProof(null);
+    setViewingHistoricalArtifact(null);
+    setError(null);
+    setNotice(null);
+  };
+
+  // Load Benchmarks with Explicit Success / Error / Empty Handling
   const loadBenchmarks = async () => {
+    setBenchmarksLoadingState("loading");
+    setError(null);
     try {
       const res = await fetch(`${API_BASE}/api/v1/benchmarks`);
-      if (res.ok) {
-        const data = await res.json();
-        setBenchmarks(data.benchmarks || []);
+      if (!res.ok) {
+        throw new Error(`Server returned HTTP ${res.status}`);
       }
-    } catch {
-      // Non-fatal
+      const data = await res.json();
+      const list = data.benchmarks || [];
+      if (list.length === 0) {
+        setBenchmarks([]);
+        setBenchmarksLoadingState("empty");
+      } else {
+        setBenchmarks(list);
+        setBenchmarksLoadingState("success");
+        // Ensure selected benchmark is valid
+        if (!list.some((b) => b.benchmark_id === selectedBenchmarkId)) {
+          setSelectedBenchmarkId(list[0].benchmark_id);
+          const spec = list[0];
+          if (spec.modernized_adapters && Object.keys(spec.modernized_adapters).length > 0) {
+            setSelectedVariant(Object.keys(spec.modernized_adapters)[0]);
+          }
+        }
+      }
+    } catch (err) {
+      setBenchmarksLoadingState("error");
+      setError(`BEACON backend unavailable (${err.message}). Start the API server and retry.`);
     }
   };
 
@@ -143,20 +177,15 @@ export default function App() {
 
   // Initial Load
   useEffect(() => {
-    Promise.all([loadBenchmarks(), loadHistoricalArtifacts(selectedBenchmarkId), loadDrift(selectedBenchmarkId)]).catch(() =>
-      setError("Could not reach BEACON API backend. Start with: python -m uvicorn backend.api.main:app --reload")
-    );
+    loadBenchmarks();
+    loadHistoricalArtifacts(selectedBenchmarkId);
+    loadDrift(selectedBenchmarkId);
   }, []);
 
-  // Invalidate Active Result and Reload Benchmark Data when Configuration Changes
+  // Handlers for Configuration Changes (Strict Invalidation Flow)
   const handleBenchmarkChange = (newBenchmarkId) => {
     setSelectedBenchmarkId(newBenchmarkId);
-    setActiveResult(null);
-    setBenchmarkValidation(null);
-    setCryptographicProof(null);
-    setViewingHistoricalArtifact(null);
-    setNotice(null);
-    setError(null);
+    invalidateValidationAndActiveState();
 
     const spec = benchmarks.find((b) => b.benchmark_id === newBenchmarkId);
     if (spec && spec.modernized_adapters) {
@@ -171,19 +200,26 @@ export default function App() {
 
   const handleModeChange = (newMode) => {
     setDiscoveryMode(newMode);
-    setActiveResult(null);
-    setCryptographicProof(null);
-    setViewingHistoricalArtifact(null);
-    setNotice(null);
+    invalidateValidationAndActiveState();
+  };
+
+  const handleProviderChange = (newProvider) => {
+    setPreferredProvider(newProvider);
+    invalidateValidationAndActiveState();
   };
 
   const handleVariantChange = (newVariant) => {
     setSelectedVariant(newVariant);
-    setActiveResult(null);
-    setCryptographicProof(null);
-    setViewingHistoricalArtifact(null);
-    setNotice(null);
+    invalidateValidationAndActiveState();
   };
+
+  // Check if current validation corresponds to the exact active configuration
+  const isValidationCurrent =
+    benchmarkValidation?.is_valid === true &&
+    benchmarkValidation?.benchmark_id === selectedBenchmarkId &&
+    benchmarkValidation?.evaluation_mode === discoveryMode &&
+    benchmarkValidation?.target_variant === selectedVariant &&
+    benchmarkValidation?.preferred_provider === preferredProvider;
 
   // Load Cases when Active Result or Historical Artifact Changes
   const targetArtifact = viewingHistoricalArtifact || activeResult;
@@ -198,7 +234,7 @@ export default function App() {
     }
   }, [targetArtifact, caseFilter]);
 
-  // Step 6: Pre-Flight Validation Action
+  // Step 6: Pre-Flight Validation Action (Sends Complete Configuration)
   const validateBenchmark = async () => {
     if (!selectedBenchmarkId) return;
     setBusy(true);
@@ -207,12 +243,22 @@ export default function App() {
     try {
       const res = await fetch(`${API_BASE}/api/v1/benchmarks/${selectedBenchmarkId}/validate`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          benchmark_id: selectedBenchmarkId,
+          evaluation_mode: discoveryMode,
+          target_variant: selectedVariant,
+          preferred_provider: preferredProvider,
+          dataset_name: "default",
+        }),
       });
       const data = await res.json();
       setBenchmarkValidation(data);
       if (data.is_valid) {
         const cs = data.dataset_checksum ? ` (SHA-256: ${data.dataset_checksum.slice(0, 16)}...)` : "";
-        setNotice(`Pre-flight validation passed: ${data.dataset_record_count} dataset inputs verified${cs}. Ready to certify.`);
+        setNotice(
+          `Pre-flight validation passed for [${selectedBenchmarkId} • ${discoveryMode} • ${selectedVariant}]: ${data.dataset_record_count} dataset inputs verified${cs}. Ready to certify.`
+        );
       } else {
         setError(`Pre-flight validation failed: ${data.errors?.join("; ") || "Adapter or dataset mismatch."}`);
       }
@@ -225,6 +271,11 @@ export default function App() {
 
   // Step 7: Run Benchmark Equivalence Certification
   const runBenchmarkCertification = async () => {
+    if (!isValidationCurrent) {
+      setError("Cannot run certification: Pre-flight validation is missing or stale for the current configuration.");
+      return;
+    }
+
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -328,7 +379,7 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={badgeStyle("#1e293b", "#38bdf8", "#334155")}>Phase 13 Production-Grade</span>
+            <span style={badgeStyle("#1e293b", "#38bdf8", "#334155")}>Phase 13 Hardened Release</span>
             <span style={badgeStyle("#1e293b", "#a7f3d0", "#334155")}>Deterministic Reproducibility</span>
           </div>
         </div>
@@ -403,7 +454,7 @@ export default function App() {
                 <span><strong>Provider:</strong> <span style={{ color: "#475569" }}>{preferredProvider}</span></span>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                {benchmarkValidation?.is_valid ? (
+                {isValidationCurrent ? (
                   <span style={badgeStyle("#dcfce7", "#15803d", "#86efac")}>✅ Pre-Flight: Ready ({benchmarkValidation.dataset_record_count} cases)</span>
                 ) : (
                   <span style={badgeStyle("#fef3c7", "#92400e", "#fde68a")}>⚠️ Pre-Flight: Validation Required</span>
@@ -425,7 +476,7 @@ export default function App() {
                 <div style={{ display: "flex", gap: "10px" }}>
                   <button
                     onClick={validateBenchmark}
-                    disabled={busy}
+                    disabled={busy || benchmarksLoadingState !== "success"}
                     style={{
                       background: "#f1f5f9",
                       color: "#334155",
@@ -434,24 +485,25 @@ export default function App() {
                       borderRadius: "6px",
                       fontWeight: "600",
                       fontSize: "13px",
-                      cursor: busy ? "not-allowed" : "pointer",
+                      cursor: busy || benchmarksLoadingState !== "success" ? "not-allowed" : "pointer",
                     }}
                   >
                     {busy ? "Validating..." : "Step 6: 🔍 Pre-Flight Validate"}
                   </button>
                   <button
                     onClick={runBenchmarkCertification}
-                    disabled={busy || !benchmarkValidation?.is_valid}
+                    disabled={busy || !isValidationCurrent}
+                    title={!isValidationCurrent ? "Pre-flight validation required for current configuration" : "Run equivalence certification"}
                     style={{
-                      background: benchmarkValidation?.is_valid ? "#2563eb" : "#94a3b8",
+                      background: isValidationCurrent ? "#2563eb" : "#94a3b8",
                       color: "#ffffff",
                       border: "none",
                       padding: "8px 20px",
                       borderRadius: "6px",
                       fontWeight: "600",
                       fontSize: "13px",
-                      cursor: busy || !benchmarkValidation?.is_valid ? "not-allowed" : "pointer",
-                      boxShadow: benchmarkValidation?.is_valid ? "0 1px 2px rgba(37,99,235,0.2)" : "none",
+                      cursor: busy || !isValidationCurrent ? "not-allowed" : "pointer",
+                      boxShadow: isValidationCurrent ? "0 1px 2px rgba(37,99,235,0.2)" : "none",
                     }}
                   >
                     {busy ? "Executing Certification..." : "Step 7: ⚡ Run Equivalence Certification"}
@@ -461,30 +513,50 @@ export default function App() {
 
               {/* Grid of Steps 1 to 5 Controls */}
               <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 1.2fr 1fr", gap: "14px" }}>
-                {/* Step 1: Benchmark Selector */}
+                {/* Step 1: Benchmark Selector with Explicit Error / Loading / Empty UI */}
                 <div>
                   <label style={{ display: "block", fontSize: "13px", fontWeight: "600", color: "#334155", marginBottom: "6px" }}>
                     Step 1 — Select Benchmark
                   </label>
-                  <select
-                    value={selectedBenchmarkId}
-                    onChange={(e) => handleBenchmarkChange(e.target.value)}
-                    style={{
-                      width: "100%",
-                      padding: "9px 12px",
-                      borderRadius: "6px",
-                      border: "1px solid #cbd5e1",
-                      background: "#ffffff",
-                      fontSize: "13px",
-                      fontWeight: "500",
-                    }}
-                  >
-                    {benchmarks.map((b) => (
-                      <option key={b.benchmark_id} value={b.benchmark_id}>
-                        {b.name} ({b.domain.toUpperCase()})
-                      </option>
-                    ))}
-                  </select>
+                  {benchmarksLoadingState === "loading" && (
+                    <div style={{ padding: "9px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#f8fafc", fontSize: "13px", color: "#64748b" }}>
+                      ⏳ Loading benchmark catalog...
+                    </div>
+                  )}
+                  {benchmarksLoadingState === "error" && (
+                    <div style={{ padding: "8px 10px", borderRadius: "6px", border: "1px solid #fca5a5", background: "#fef2f2", fontSize: "12px", color: "#991b1b", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                      <span>⚠️ API Unavailable</span>
+                      <button onClick={loadBenchmarks} style={{ background: "#dc2626", color: "#ffffff", border: "none", padding: "3px 8px", borderRadius: "4px", fontSize: "11px", cursor: "pointer", fontWeight: "600" }}>
+                        🔄 Retry
+                      </button>
+                    </div>
+                  )}
+                  {benchmarksLoadingState === "empty" && (
+                    <div style={{ padding: "9px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", background: "#f8fafc", fontSize: "13px", color: "#64748b" }}>
+                      No benchmarks registered in catalog.
+                    </div>
+                  )}
+                  {benchmarksLoadingState === "success" && (
+                    <select
+                      value={selectedBenchmarkId}
+                      onChange={(e) => handleBenchmarkChange(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "9px 12px",
+                        borderRadius: "6px",
+                        border: "1px solid #cbd5e1",
+                        background: "#ffffff",
+                        fontSize: "13px",
+                        fontWeight: "500",
+                      }}
+                    >
+                      {benchmarks.map((b) => (
+                        <option key={b.benchmark_id} value={b.benchmark_id}>
+                          {b.name} ({b.domain.toUpperCase()})
+                        </option>
+                      ))}
+                    </select>
+                  )}
                 </div>
 
                 {/* Step 3: Evaluation Mode */}
@@ -537,7 +609,7 @@ export default function App() {
                   </label>
                   <select
                     value={preferredProvider}
-                    onChange={(e) => setPreferredProvider(e.target.value)}
+                    onChange={(e) => handleProviderChange(e.target.value)}
                     style={{
                       width: "100%",
                       padding: "9px 12px",
@@ -633,12 +705,12 @@ export default function App() {
                       {benchmarkValidation.is_valid ? "✅ Step 6: Pre-Flight Validation Passed" : "❌ Step 6: Pre-Flight Validation Failed"}
                     </span>
                     <span style={{ fontSize: "12px", color: "#475569" }}>
-                      Verified Dataset Inputs: <strong>{benchmarkValidation.dataset_record_count}</strong> | Legacy Adapter: <strong>{benchmarkValidation.legacy_adapter_status || "OK"}</strong>
+                      Verified Dataset Inputs: <strong>{benchmarkValidation.dataset_record_count}</strong> | Legacy Adapter: <strong>{benchmarkValidation.legacy_adapter_status || "OK"}</strong> | Target Adapter: <strong>{benchmarkValidation.target_variant_adapter_status || "OK"}</strong>
                     </span>
                   </div>
-                  {benchmarkValidation.dataset_checksum && (
+                  {benchmarkValidation.config_fingerprint && (
                     <div style={{ fontSize: "11px", color: "#166534", marginTop: "4px", fontFamily: "monospace" }}>
-                      Propagated Checksum: {benchmarkValidation.dataset_checksum}
+                      Config Fingerprint: {benchmarkValidation.config_fingerprint}
                     </div>
                   )}
                   {benchmarkValidation.errors?.length > 0 && (
@@ -700,6 +772,8 @@ export default function App() {
                           ? "CERTIFICATION BLOCKED: Inadequate Oracle Coverage across Tested Input Domain"
                           : targetArtifact.status === "REFERENCE_INCONSISTENT"
                           ? "CERTIFICATION BLOCKED: Reference Inconsistency Detected in Legacy Implementation"
+                          : targetArtifact.status === "INCONCLUSIVE"
+                          ? "INCONCLUSIVE: Inconclusive Equivalence Result Under Current Policy"
                           : "NOT CERTIFIED: Behavioral Regressions Detected Across Target Implementation"}
                       </span>
                       <span
@@ -775,6 +849,9 @@ export default function App() {
                     )}
                     {targetArtifact.status === "REFERENCE_INCONSISTENT" && (
                       <>Legacy reference implementation itself contradicted one or more validated invariant oracles. Equivalence certification is blocked.</>
+                    )}
+                    {targetArtifact.status === "INCONCLUSIVE" && (
+                      <>Certification outcome is inconclusive under the current policy and evaluated probe evidence.</>
                     )}
                   </p>
                 </div>
@@ -1068,13 +1145,13 @@ export default function App() {
                   Ready to Certify: {currentSpec?.name || selectedBenchmarkId}
                 </h3>
                 <p style={{ margin: "0 auto 20px", maxWidth: "600px", fontSize: "14px", color: "#64748b" }}>
-                  Selected Configuration: <strong>{discoveryMode}</strong> mode with <strong>{selectedVariant}</strong>.
+                  Selected Configuration: <strong>{discoveryMode}</strong> mode with <strong>{selectedVariant}</strong> ({preferredProvider}).
                   Run Step 6 Pre-Flight Validation to verify dataset inputs and adapter bindings before executing certification.
                 </p>
                 <div style={{ display: "flex", justifyContent: "center", gap: "12px" }}>
                   <button
                     onClick={validateBenchmark}
-                    disabled={busy}
+                    disabled={busy || benchmarksLoadingState !== "success"}
                     style={{
                       background: "#f1f5f9",
                       color: "#334155",
@@ -1083,23 +1160,24 @@ export default function App() {
                       borderRadius: "6px",
                       fontWeight: "600",
                       fontSize: "14px",
-                      cursor: "pointer",
+                      cursor: busy || benchmarksLoadingState !== "success" ? "not-allowed" : "pointer",
                     }}
                   >
                     Step 6: 🔍 Pre-Flight Validate
                   </button>
                   <button
                     onClick={runBenchmarkCertification}
-                    disabled={busy || !benchmarkValidation?.is_valid}
+                    disabled={busy || !isValidationCurrent}
+                    title={!isValidationCurrent ? "Pre-flight validation required for current configuration" : "Run equivalence certification"}
                     style={{
-                      background: benchmarkValidation?.is_valid ? "#2563eb" : "#94a3b8",
+                      background: isValidationCurrent ? "#2563eb" : "#94a3b8",
                       color: "#ffffff",
                       border: "none",
                       padding: "10px 24px",
                       borderRadius: "6px",
                       fontWeight: "600",
                       fontSize: "14px",
-                      cursor: busy || !benchmarkValidation?.is_valid ? "not-allowed" : "pointer",
+                      cursor: busy || !isValidationCurrent ? "not-allowed" : "pointer",
                     }}
                   >
                     {busy ? "Executing Certification..." : "Step 7: ⚡ Run Equivalence Certification"}

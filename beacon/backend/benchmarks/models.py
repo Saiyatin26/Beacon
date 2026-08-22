@@ -94,18 +94,34 @@ class BenchmarkSpec(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class BenchmarkValidationRequest(BaseModel):
+    """Request payload for comprehensive benchmark pre-flight validation."""
+    benchmark_id: Optional[str] = None
+    dataset_name: str = "default"
+    evaluation_mode: str = "CONTROLLED"
+    target_variant: str = "clean_v2"
+    preferred_provider: str = "auto"
+    policy_id: str = "POL-DEFAULT"
+
+
 class BenchmarkValidationResult(BaseModel):
-    """Pre-flight validation result for a benchmark's adapters, schema, and dataset."""
+    """Pre-flight validation result for a benchmark's adapters, schema, dataset, and configuration."""
     benchmark_id: str
+    evaluation_mode: str = "CONTROLLED"
+    target_variant: str = "clean_v2"
+    preferred_provider: str = "auto"
+    config_fingerprint: str = ""
     is_valid: bool
     checks_passed: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     legacy_adapter_status: str = "UNKNOWN"
     modernized_adapters_status: dict[str, str] = Field(default_factory=dict)
+    target_variant_adapter_status: str = "UNKNOWN"
     dataset_record_count: int = 0
     dataset_checksum: str = ""
     legacy_implementation_hash: str = ""
+    modernized_implementation_hash: str = ""
     metadata_provenance_valid: bool = True
 
 

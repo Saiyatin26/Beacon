@@ -224,6 +224,57 @@ class CertificationRepository:
         artifacts = self.list_artifacts(project_id=project_id, limit=1)
         return artifacts[0] if artifacts else None
 
+    def find_idempotent_artifact(
+        self,
+        benchmark_id: Optional[str] = None,
+        evaluation_mode: Optional[str] = None,
+        target_variant: Optional[str] = None,
+        dataset_checksum: Optional[str] = None,
+        oracle_set_hash: Optional[str] = None,
+        legacy_implementation_hash: Optional[str] = None,
+        modernized_implementation_hash: Optional[str] = None,
+        policy_id: Optional[str] = None,
+        preferred_provider: Optional[str] = None,
+    ) -> Optional[CertificationArtifact]:
+        """Finds an existing completed CertificationArtifact matching the exact configuration deterministically."""
+        artifacts = self.list_artifacts(benchmark_id=benchmark_id, limit=50)
+        for art in artifacts:
+            ctx = art.context
+            art_bench = getattr(art, "benchmark_id", None) or (ctx.benchmark_id if ctx else None) or art.project_id.replace("benchmark_", "")
+            if benchmark_id and art_bench != benchmark_id and art.project_id != benchmark_id and art.project_id != f"benchmark_{benchmark_id}":
+                continue
+
+            art_mode = getattr(art, "evaluation_mode", None) or (ctx.evaluation_mode if ctx else None)
+            if evaluation_mode and art_mode and str(art_mode).upper() != str(evaluation_mode).upper():
+                continue
+
+            art_variant = getattr(art, "modernization_variant", None) or (ctx.modernization_variant_id if ctx else None)
+            if target_variant and art_variant != target_variant:
+                continue
+
+            if dataset_checksum:
+                art_d_checksum = getattr(art, "dataset_checksum", None) or (ctx.dataset_checksum if ctx else None)
+                if art_d_checksum and art_d_checksum != dataset_checksum:
+                    continue
+
+            if oracle_set_hash and art.oracle_set_hash != oracle_set_hash:
+                continue
+
+            if legacy_implementation_hash and ctx and ctx.legacy_implementation_hash:
+                if ctx.legacy_implementation_hash != legacy_implementation_hash:
+                    continue
+
+            if modernized_implementation_hash and ctx and ctx.modernized_implementation_hash:
+                if ctx.modernized_implementation_hash != modernized_implementation_hash:
+                    continue
+
+            if policy_id and art.certification_policy_id != policy_id:
+                continue
+
+            return art
+
+        return None
+
     def clear(self):
         """Clears memory and DB table (for test isolation)."""
         self._memory_artifacts.clear()

@@ -1,9 +1,10 @@
-"""FastAPI application for the local-first BEACON prototype."""
-
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 sys.path.append(str(Path(__file__).resolve().parents[2] / "legacy_sample"))
@@ -61,9 +62,10 @@ FIELD_BOUNDS = {
 app = FastAPI(title="BEACON API", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=settings.cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
 
 
@@ -261,7 +263,7 @@ def list_drift_samples(limit: int = 100, benchmark_id: Optional[str] = None):
 # ==============================================================================
 
 from certification.adapter_registry import adapter_registry
-from benchmarks.models import DiscoveryMode
+from benchmarks.models import DiscoveryMode, BenchmarkValidationRequest
 from benchmarks.registry import benchmark_registry
 
 class CertificationRunRequest(BaseModel):
@@ -281,6 +283,8 @@ class CertificationRunRequest(BaseModel):
     dataset_name: str = "default"
     n_samples: int = 100
     seed: int = 42
+    force_recompute: bool = False
+    idempotency_key: Optional[str] = None
 
 
 class DriftEvaluateRequest(BaseModel):
@@ -311,9 +315,29 @@ def get_benchmark_endpoint(benchmark_id: str):
 
 @app.get("/api/v1/benchmarks/{benchmark_id}/validate")
 @app.post("/api/v1/benchmarks/{benchmark_id}/validate")
-def validate_benchmark_endpoint(benchmark_id: str):
-    """Performs pre-flight validation on a benchmark's adapters, schemas, and dataset."""
-    result = benchmark_registry.validate_benchmark(benchmark_id)
+def validate_benchmark_endpoint(
+    benchmark_id: str,
+    request: Optional[BenchmarkValidationRequest] = None,
+    evaluation_mode: str = "CONTROLLED",
+    target_variant: str = "clean_v2",
+    preferred_provider: str = "auto",
+    dataset_name: str = "default",
+):
+    """Performs comprehensive pre-flight validation on a benchmark's adapters, schemas, dataset, and configuration."""
+    mode = request.evaluation_mode if request and request.evaluation_mode else evaluation_mode
+    variant = request.target_variant if request and request.target_variant else target_variant
+    provider = request.preferred_provider if request and request.preferred_provider else preferred_provider
+    d_name = request.dataset_name if request and request.dataset_name else dataset_name
+
+    result = benchmark_registry.validate_benchmark(
+        benchmark_id=benchmark_id,
+        evaluation_mode=mode,
+        target_variant=variant,
+        preferred_provider=provider,
+        dataset_name=d_name,
+    )
+    if not result.is_valid and any("not found in registry" in e for e in result.errors):
+        raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found.")
     return result.model_dump(mode="json")
 
 
@@ -489,6 +513,27 @@ def run_certification_v1(request: CertificationRunRequest):
 
         field_bounds = None
         proj_id = request.project_id
+
+    # 3. Deterministic Idempotency / Duplicate Request Protection
+    if not request.force_recompute:
+        pol_id = request.policy.policy_id if request.policy else "POL-DEFAULT"
+        existing_artifact = certification_repository.find_idempotent_artifact(
+            benchmark_id=request.benchmark_id,
+            evaluation_mode=context.evaluation_mode if context else None,
+            target_variant=context.modernization_variant_id if context else None,
+            dataset_checksum=context.dataset_checksum if context else None,
+            oracle_set_hash=oracle_set.oracle_set_hash,
+            legacy_implementation_hash=getattr(legacy_adp, "implementation_hash", "") or (context.legacy_implementation_hash if context else ""),
+            modernized_implementation_hash=getattr(modern_adp, "implementation_hash", "") or (context.modernized_implementation_hash if context else ""),
+            policy_id=pol_id,
+            preferred_provider=request.preferred_provider,
+        )
+        if existing_artifact is not None:
+            logger.info(
+                f"Returning existing completed artifact '{existing_artifact.certification_id}' "
+                f"for identical request configuration."
+            )
+            return existing_artifact.model_dump(mode="json")
 
     artifact = certification_engine.certify(
         project_id=proj_id,

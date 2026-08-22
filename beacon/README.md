@@ -204,7 +204,7 @@ beacon/
 ├── frontend/              React + Vite + Recharts dashboard with 9-Step Production Workflow & Audit Trail
 ├── docs/                  Baseline documentation & architectural verification
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (186 passed tests)
+└── tests/                 Comprehensive pytest test suite (190 passed tests)
 ```
 
 ---

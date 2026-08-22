@@ -1,17 +1,19 @@
-"""Phase 13 — Production-Grade Certification Workflow & UI Verification Test Suite.
+"""Phase 13 — Production-Grade Certification Workflow, Hardening & Idempotency Test Suite.
 
-Validates the complete 9-step production workflow:
-1. Step 1: Benchmark Selection & Specification Retrieval
-2. Step 2: Dataset Specifications & Truthful Provenance
-3. Step 3: Evaluation Mode Selection (CONTROLLED vs FULL_BEACON)
-4. Step 4: Provider Hierarchy Configuration
-5. Step 5: Target Variant Selection (Clean vs Buggy)
-6. Step 6: Pre-Flight Validation (dataset & adapter checks)
-7. Step 7: Certification Execution & Duplicate Protection
-8. Step 8: Authoritative Result Presentation (CERTIFIED / NOT_CERTIFIED)
-9. Step 9: Evidence Drill-Down, Case Explorer, Cryptographic Verification & Exports
-10. Tab 2: Benchmark-Aware Certification History Isolation
-11. Tab 5: Isolated Legacy Loan Demo Sandbox
+Validates the complete hardened Phase 13 workflow:
+1. Step 1 & 2: Benchmark Catalog Retrieval, Dataset Specifications & Truthful Provenance
+2. Step 6: Comprehensive Pre-Flight Validation with Complete Configuration & Fingerprinting
+3. Step 6: Invalidation of Validation on any Configuration Change
+4. Backend Idempotency: Duplicate Identical Requests Return Completed Artifact Without Artifact Duplication
+5. Backend Idempotency: Legitimately Changed Configuration Creates Distinct Runs
+6. Step 7 & 8: Retail Clean Variant Produces CERTIFIED (100% Equivalence, Zero Regressions)
+7. Step 7 & 8: Retail Buggy Variant Produces NOT_CERTIFIED (Pinpointed Counterexamples)
+8. Step 7 & 8: Retail FULL_BEACON Clean Workflow Evaluates Oracles with Provenance
+9. Step 9: Per-Oracle Breakdown, Case Explorer Filters, and Concrete Counterexamples
+10. Step 9: 8-Point Cryptographic Integrity Verification & Secret Freedom
+11. Step 9: Export Dossier Consistency (JSON, Markdown, CSV)
+12. Tab 2: Benchmark-Aware Certification History Isolation
+13. Tab 5: Isolated Legacy Loan Demo Sandbox
 """
 
 import json
@@ -60,36 +62,193 @@ def test_step1_and_2_benchmark_catalog_and_dataset_provenance(client):
     assert payroll["provenance_category"] == "REALISTIC_SYNTHETIC"
     assert payroll["dataset_checksum"] != ""
 
-    # Medical & Loan Benchmarks
+    # Medical Benchmark
     medical = next((b for b in benchmarks if b["benchmark_id"] == "medical_triage"), None)
     assert medical is not None
     assert medical["provenance_category"] == "CONTROLLED"
 
 
-def test_step6_preflight_validation(client):
-    """Verifies Step 6: Pre-flight validation on valid and invalid benchmark configurations."""
-    # 1. Valid Benchmark
-    res_valid = client.post("/api/v1/benchmarks/retail_discount_pricing/validate")
+def test_step6_preflight_validation_complete_configuration(client):
+    """Verifies Step 6: Pre-flight validation receives complete configuration and returns config_fingerprint."""
+    # 1. Valid Retail Clean in CONTROLLED mode
+    res_valid = client.post(
+        "/api/v1/benchmarks/retail_discount_pricing/validate",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "evaluation_mode": "CONTROLLED",
+            "target_variant": "clean_v2",
+            "preferred_provider": "auto",
+            "dataset_name": "default",
+        },
+    )
     assert res_valid.status_code == 200
     val_data = res_valid.json()
     assert val_data["is_valid"] is True
+    assert val_data["benchmark_id"] == "retail_discount_pricing"
+    assert val_data["evaluation_mode"] == "CONTROLLED"
+    assert val_data["target_variant"] == "clean_v2"
+    assert val_data["config_fingerprint"] != ""
+    assert len(val_data["config_fingerprint"]) == 64
     assert val_data["dataset_record_count"] > 0
-    assert val_data["legacy_adapter_status"] in ("VALID", "OK", "UNKNOWN")
+    assert val_data["legacy_adapter_status"] == "OK"
+    assert val_data["target_variant_adapter_status"] == "OK"
     assert len(val_data["errors"]) == 0
 
-    # 2. Invalid / Nonexistent Benchmark
-    res_invalid = client.post("/api/v1/benchmarks/nonexistent_project_xyz/validate")
-    assert res_invalid.status_code == 404 or (res_invalid.status_code == 200 and not res_invalid.json().get("is_valid"))
+    # 2. Invalid Mode
+    res_inv_mode = client.post(
+        "/api/v1/benchmarks/retail_discount_pricing/validate",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "evaluation_mode": "INVALID_MODE_XYZ",
+            "target_variant": "clean_v2",
+        },
+    )
+    assert res_inv_mode.status_code == 200
+    inv_data = res_inv_mode.json()
+    assert inv_data["is_valid"] is False
+    assert any("Invalid evaluation mode" in e for e in inv_data["errors"])
+
+    # 3. Invalid Target Variant
+    res_inv_var = client.post(
+        "/api/v1/benchmarks/retail_discount_pricing/validate",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "evaluation_mode": "CONTROLLED",
+            "target_variant": "nonexistent_variant_v99",
+        },
+    )
+    assert res_inv_var.status_code == 200
+    inv_var_data = res_inv_var.json()
+    assert inv_var_data["is_valid"] is False
+    assert any("not available" in e for e in inv_var_data["errors"])
+
+    # 4. Nonexistent Benchmark
+    res_nonexistent = client.post("/api/v1/benchmarks/nonexistent_project_123/validate")
+    assert res_nonexistent.status_code == 404 or not res_nonexistent.json().get("is_valid")
+
+
+def test_config_fingerprint_uniqueness(client):
+    """Verifies that changing any certification configuration parameter alters the deterministic config fingerprint."""
+    res1 = client.post(
+        "/api/v1/benchmarks/retail_discount_pricing/validate",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "evaluation_mode": "CONTROLLED",
+            "target_variant": "clean_v2",
+            "preferred_provider": "auto",
+        },
+    )
+    fp1 = res1.json()["config_fingerprint"]
+
+    res2 = client.post(
+        "/api/v1/benchmarks/retail_discount_pricing/validate",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "evaluation_mode": "FULL_BEACON",
+            "target_variant": "clean_v2",
+            "preferred_provider": "auto",
+        },
+    )
+    fp2 = res2.json()["config_fingerprint"]
+
+    res3 = client.post(
+        "/api/v1/benchmarks/retail_discount_pricing/validate",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "evaluation_mode": "CONTROLLED",
+            "target_variant": "buggy_threshold_v2",
+            "preferred_provider": "auto",
+        },
+    )
+    fp3 = res3.json()["config_fingerprint"]
+
+    assert fp1 != fp2
+    assert fp1 != fp3
+    assert fp2 != fp3
+
+
+def test_backend_idempotency_duplicate_request_protection(client):
+    """Verifies that duplicate identical certification requests return existing completed runs without creating duplicate artifacts."""
+    # First execution
+    res1 = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "preferred_provider": "auto",
+        },
+    )
+    assert res1.status_code == 200
+    art1 = res1.json()
+    cert_id1 = art1["certification_id"]
+
+    # History count after first run
+    res_hist1 = client.get("/api/v1/certification/artifacts?benchmark_id=retail_discount_pricing")
+    count1 = len(res_hist1.json()["artifacts"])
+
+    # Second execution with identical configuration
+    res2 = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "preferred_provider": "auto",
+        },
+    )
+    assert res2.status_code == 200
+    art2 = res2.json()
+    cert_id2 = art2["certification_id"]
+
+    # Must return exact same artifact ID
+    assert cert_id1 == cert_id2
+    assert art1["content_hash"] == art2["content_hash"]
+
+    # History count must not duplicate
+    res_hist2 = client.get("/api/v1/certification/artifacts?benchmark_id=retail_discount_pricing")
+    count2 = len(res_hist2.json()["artifacts"])
+    assert count1 == count2
+
+
+def test_backend_idempotency_changed_config_creates_distinct_run(client):
+    """Verifies that legitimately changing configuration parameters creates a distinct run."""
+    res_clean = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
+    art_clean = res_clean.json()
+
+    res_buggy = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "buggy_threshold_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
+    art_buggy = res_buggy.json()
+
+    assert art_clean["certification_id"] != art_buggy["certification_id"]
+    assert art_clean["status"] in ("CERTIFIED", "CERTIFIED_WITH_WARNINGS")
+    assert art_buggy["status"] == "NOT_CERTIFIED"
 
 
 def test_step7_and_8_retail_clean_certified_workflow(client):
     """Verifies Step 7 & 8: Retail Clean variant produces CERTIFIED with 100% equivalence and 0 regressions."""
-    res_run = client.post("/api/v1/certification/run", json={
-        "benchmark_id": "retail_discount_pricing",
-        "benchmark_variant": "clean_v2",
-        "discovery_mode": "CONTROLLED",
-        "preferred_provider": "auto",
-    })
+    res_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+            "preferred_provider": "auto",
+        },
+    )
     assert res_run.status_code == 200
     art = res_run.json()
 
@@ -106,19 +265,22 @@ def test_step7_and_8_retail_clean_certified_workflow(client):
 
 def test_step7_and_8_retail_buggy_not_certified_workflow(client):
     """Verifies Step 7 & 8: Retail Buggy variant produces NOT_CERTIFIED with pinpointed counterexamples."""
-    res_run = client.post("/api/v1/certification/run", json={
-        "benchmark_id": "retail_discount_pricing",
-        "benchmark_variant": "buggy_threshold_v2",
-        "discovery_mode": "CONTROLLED",
-        "preferred_provider": "auto",
-    })
+    res_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "buggy_threshold_v2",
+            "discovery_mode": "CONTROLLED",
+            "preferred_provider": "auto",
+            "force_recompute": True,
+        },
+    )
     assert res_run.status_code == 200
     art = res_run.json()
 
     assert art["status"] == "NOT_CERTIFIED"
     assert art["metrics"]["regression_case_count"] > 0
     assert len(art["regressions"]) > 0
-    # Verify counterexamples contain required fields
     for reg in art["regressions"]:
         assert reg["input_id"] != ""
         assert reg["input_values"] is not None
@@ -126,13 +288,35 @@ def test_step7_and_8_retail_buggy_not_certified_workflow(client):
         assert reg["oracle_id"] != ""
 
 
+def test_step7_and_8_retail_full_beacon_clean_workflow(client):
+    """Verifies Step 7 & 8: Retail in FULL_BEACON mode discovers and validates oracles with truthful provenance."""
+    res_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "FULL_BEACON",
+            "preferred_provider": "offline",
+        },
+    )
+    assert res_run.status_code == 200
+    art = res_run.json()
+
+    assert art["context"]["evaluation_mode"] == "FULL_BEACON"
+    assert art["status"] in ("CERTIFIED", "CERTIFIED_WITH_WARNINGS", "INCONCLUSIVE", "INSUFFICIENT_COVERAGE")
+    assert art["oracle_source_type"] in ("FULL_BEACON_DISCOVERED", "FULL_BEACON_OFFLINE_FALLBACK")
+
+
 def test_step9_per_oracle_breakdown_and_counterexamples(client):
     """Verifies Step 9: Per-Oracle drill-down summaries and counterexamples endpoints."""
-    res_run = client.post("/api/v1/certification/run", json={
-        "benchmark_id": "payroll_tax_calculator",
-        "benchmark_variant": "clean_v2",
-        "discovery_mode": "CONTROLLED",
-    })
+    res_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "payroll_tax_calculator",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
     cert_id = res_run.json()["certification_id"]
 
     # Oracles summary endpoint
@@ -150,11 +334,14 @@ def test_step9_per_oracle_breakdown_and_counterexamples(client):
 
 def test_step9_case_explorer_filters(client):
     """Verifies Step 9: Execution Case Explorer filtering by classification."""
-    res_run = client.post("/api/v1/certification/run", json={
-        "benchmark_id": "retail_discount_pricing",
-        "benchmark_variant": "buggy_operator_v2",
-        "discovery_mode": "CONTROLLED",
-    })
+    res_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "buggy_operator_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
     cert_id = res_run.json()["certification_id"]
 
     # 1. Filter ALL
@@ -175,11 +362,14 @@ def test_step9_case_explorer_filters(client):
 
 def test_step9_cryptographic_verification_report(client):
     """Verifies Step 9: Cryptographic 8-point integrity report."""
-    res_run = client.post("/api/v1/certification/run", json={
-        "benchmark_id": "retail_discount_pricing",
-        "benchmark_variant": "clean_v2",
-        "discovery_mode": "CONTROLLED",
-    })
+    res_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
     cert_id = res_run.json()["certification_id"]
 
     res_ver = client.post(f"/api/v1/certification/{cert_id}/verify")
@@ -198,11 +388,14 @@ def test_step9_cryptographic_verification_report(client):
 
 def test_step9_export_dossier_consistency(client):
     """Verifies Step 9: Export dossier alignment across JSON, Markdown, and CSV."""
-    res_run = client.post("/api/v1/certification/run", json={
-        "benchmark_id": "payroll_tax_calculator",
-        "benchmark_variant": "clean_v2",
-        "discovery_mode": "CONTROLLED",
-    })
+    res_run = client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "payroll_tax_calculator",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
     cert_id = res_run.json()["certification_id"]
 
     # JSON export
@@ -226,17 +419,23 @@ def test_step9_export_dossier_consistency(client):
 def test_tab2_certification_history_benchmark_filtering(client):
     """Verifies Tab 2: Historical artifacts are benchmark-aware and isolated."""
     # Run Retail
-    client.post("/api/v1/certification/run", json={
-        "benchmark_id": "retail_discount_pricing",
-        "benchmark_variant": "clean_v2",
-        "discovery_mode": "CONTROLLED",
-    })
+    client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "retail_discount_pricing",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
     # Run Medical
-    client.post("/api/v1/certification/run", json={
-        "benchmark_id": "medical_triage",
-        "benchmark_variant": "clean_v2",
-        "discovery_mode": "CONTROLLED",
-    })
+    client.post(
+        "/api/v1/certification/run",
+        json={
+            "benchmark_id": "medical_triage",
+            "benchmark_variant": "clean_v2",
+            "discovery_mode": "CONTROLLED",
+        },
+    )
 
     # Query Retail history
     res_ret = client.get("/api/v1/certification/artifacts?benchmark_id=retail_discount_pricing")
