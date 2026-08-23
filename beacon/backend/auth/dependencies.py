@@ -100,37 +100,82 @@ async def get_current_active_user(
 
 
 def require_project_permission(permission: Permission, project_id_param: str = "project_id"):
-    """FastAPI dependency factory enforcing project membership and role permission.
+    """FastAPI dependency factory enforcing authoritative project membership and role permissions.
 
-    Resolves target project_id from query params, path params, request JSON body, or artifact registry.
-    - System Admins hold all permissions across all projects.
-    - Project Members are verified against their assigned role permissions.
-    - Cross-project requests or insufficient role permissions return HTTP 403 Forbidden.
+    Authoritatively resolves target project_id from:
+    1. Authoritative backend resource (CertificationArtifact, CustomDataset, CertificationJob) if resource ID is present.
+    2. Request query parameters or path parameters.
+    3. Request JSON body.
+    
+    Security rules:
+    - Never uses a fallback such as 'default_project' when the project cannot be resolved.
+    - System Admins hold universal permissions across all projects.
+    - Project Members are verified against their assigned role permissions in the authoritative target project.
+    - If the project cannot be resolved or membership is missing, access is denied (HTTP 403 Forbidden).
     """
 
     async def _dependency(
         request: Request,
         user: User = Depends(get_current_user),
     ) -> User:
-        # 1. Resolve project_id from request
-        target_project_id = (
-            request.query_params.get(project_id_param)
-            or request.path_params.get(project_id_param)
-            or request.query_params.get("benchmark_id")
-            or request.path_params.get("benchmark_id")
+        # 1. System Admin bypasses project boundary checks
+        if user.is_system_admin:
+            return user
+
+        # 2. Authoritative Resource-First Resolution:
+        # Check path and query params for resource identifiers
+        cert_id = (
+            request.path_params.get("certification_id")
+            or request.path_params.get("run_id")
+            or request.query_params.get("certification_id")
+            or request.query_params.get("run_id")
+        )
+        dataset_id = (
+            request.path_params.get("dataset_id")
+            or request.query_params.get("dataset_id")
+        )
+        job_id = (
+            request.path_params.get("job_id")
+            or request.query_params.get("job_id")
         )
 
-        if not target_project_id:
-            cert_id = request.path_params.get("certification_id") or request.path_params.get("run_id")
-            if cert_id:
-                try:
-                    from certification import certification_repository
-                    art = certification_repository.get_artifact(cert_id)
-                    if art and art.project_id:
-                        target_project_id = art.project_id
-                except Exception:
-                    pass
+        target_project_id: Optional[str] = None
 
+        if cert_id:
+            try:
+                from certification import certification_repository
+                art = certification_repository.get_artifact(cert_id)
+                if art and art.project_id:
+                    target_project_id = art.project_id
+            except Exception:
+                pass
+        elif dataset_id:
+            try:
+                from ingestion.dataset_registry import user_dataset_registry
+                ds = user_dataset_registry.get_dataset_metadata(dataset_id)
+                if ds and ds.project_id:
+                    target_project_id = ds.project_id
+            except Exception:
+                pass
+        elif job_id:
+            try:
+                from operations import certification_job_tracker
+                job = certification_job_tracker.get_job(job_id)
+                if job and job.project_id:
+                    target_project_id = job.project_id
+            except Exception:
+                pass
+
+        # 3. Direct project / benchmark parameters from query / path
+        if not target_project_id:
+            target_project_id = (
+                request.query_params.get(project_id_param)
+                or request.path_params.get(project_id_param)
+                or request.query_params.get("benchmark_id")
+                or request.path_params.get("benchmark_id")
+            )
+
+        # 4. Resolve from JSON request body if present
         if not target_project_id and request.method in ("POST", "PUT", "PATCH"):
             try:
                 body_bytes = await request.body()
@@ -138,21 +183,61 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                     import json
                     body_json = json.loads(body_bytes.decode("utf-8"))
                     if isinstance(body_json, dict):
-                        target_project_id = (
-                            body_json.get(project_id_param)
-                            or body_json.get("benchmark_id")
-                        )
+                        b_cert_id = body_json.get("certification_id") or body_json.get("run_id")
+                        b_ds_id = body_json.get("dataset_id")
+                        b_job_id = body_json.get("job_id")
+
+                        if b_cert_id:
+                            try:
+                                from certification import certification_repository
+                                art = certification_repository.get_artifact(b_cert_id)
+                                if art and art.project_id:
+                                    target_project_id = art.project_id
+                            except Exception:
+                                pass
+                        elif b_ds_id:
+                            try:
+                                from ingestion.dataset_registry import user_dataset_registry
+                                ds = user_dataset_registry.get_dataset_metadata(b_ds_id)
+                                if ds and ds.project_id:
+                                    target_project_id = ds.project_id
+                            except Exception:
+                                pass
+                        elif b_job_id:
+                            try:
+                                from operations import certification_job_tracker
+                                job = certification_job_tracker.get_job(b_job_id)
+                                if job and job.project_id:
+                                    target_project_id = job.project_id
+                            except Exception:
+                                pass
+
+                        if not target_project_id:
+                            target_project_id = (
+                                body_json.get(project_id_param)
+                                or body_json.get("benchmark_id")
+                            )
             except Exception:
                 pass
 
+        # 5. Strict rejection if target project cannot be resolved (NO DEFAULT FALLBACK)
         if not target_project_id:
-            target_project_id = "default_project"
+            audit_logger.log(
+                project_id="UNKNOWN",
+                action=AuditAction.ACCESS_DENIED,
+                status="FAIL",
+                details={
+                    "user_id": user.user_id,
+                    "username": user.username,
+                    "reason": "Target project could not be determined",
+                },
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Forbidden: Target project could not be resolved or resource does not exist.",
+            )
 
-        # 2. System Admin bypasses project boundary checks
-        if user.is_system_admin:
-            return user
-
-        # 3. Lookup User's Memberships for the Target Project
+        # 6. Lookup User's Memberships for the Target Project
         memberships = auth_repository.get_user_memberships(user.user_id)
         # Check direct match or benchmark_ prefix match
         proj_membership = next(
@@ -183,7 +268,7 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                 detail=f"Forbidden: User '{user.username}' is not a member of project '{target_project_id}'",
             )
 
-        # 4. Verify Role Permission
+        # 7. Verify Role Permission
         if not role_has_permission(proj_membership.role, permission):
             audit_logger.log(
                 project_id=target_project_id,

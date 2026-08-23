@@ -164,9 +164,9 @@ class CertificationContext(BaseModel):
     """
     model_config = {"protected_namespaces": ()}
 
-    benchmark_id: str = "default_project"
+    benchmark_id: str = "retail_discount_pricing"
     benchmark_version: str = "1.0.0"
-    benchmark_name: str = "Default Project"
+    benchmark_name: str = "Retail & Wholesale Discount Pricing Engine"
     benchmark_provenance: str = "CONTROLLED"  # "CONTROLLED", "REALISTIC_SYNTHETIC", "PUBLIC_STATUTORY", "AUTHENTIC_PUBLIC_MIGRATION"
     dataset_id: str = "default"
     dataset_version: str = "1.0.0"
@@ -396,7 +396,7 @@ class CertificationArtifact(BaseModel):
     model_config = {"frozen": True, "protected_namespaces": ()}
 
     certification_id: str
-    project_id: str = "default_project"
+    project_id: str = ""
     benchmark_id: Optional[str] = None
     evaluation_mode: Optional[str] = "CONTROLLED"
     modernization_variant: Optional[str] = "clean_v2"

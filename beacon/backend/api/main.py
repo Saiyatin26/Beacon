@@ -453,7 +453,7 @@ from benchmarks.models import DiscoveryMode, BenchmarkValidationRequest
 from benchmarks.registry import benchmark_registry
 
 class CertificationRunRequest(BaseModel):
-    project_id: str = "default_project"
+    project_id: Optional[str] = None
     benchmark_id: Optional[str] = None
     benchmark_variant: Optional[str] = "clean_v2"
     discovery_mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED"
@@ -599,7 +599,7 @@ def run_certification_v1(
             logger.warning(f"Could not load dataset for benchmark {request.benchmark_id}: {exc}")
 
         field_bounds = bench_spec.field_bounds
-        proj_id = request.project_id if request.project_id != "default_project" else f"benchmark_{request.benchmark_id}"
+        proj_id = request.project_id or f"benchmark_{request.benchmark_id}"
 
         prov_cat = bench_spec.provenance_category.value if hasattr(bench_spec.provenance_category, "value") else str(bench_spec.provenance_category)
         mod_prov = bench_spec.modernization_provenance.get(variant, "INDEPENDENT_REIMPLEMENTATION")

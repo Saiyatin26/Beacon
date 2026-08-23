@@ -114,14 +114,11 @@ import uuid
 
 def get_signing_secret() -> str:
     """Retrieves the configured JWT secret key.
-    Fails safely in production if missing.
+    Fails safely if missing or empty without fallback to hardcoded secrets.
     """
     secret = getattr(settings, "jwt_secret_key", "") or os.environ.get("JWT_SECRET_KEY", "") or os.environ.get("BEACON_JWT_SECRET", "")
-    if not secret:
-        env = getattr(settings, "beacon_env", "production").lower()
-        if env == "production":
-            raise RuntimeError("CRITICAL SECURITY ERROR: JWT_SECRET_KEY environment variable is mandatory in production mode.")
-        secret = "beacon_dev_test_secure_signing_secret_key_2026"
+    if not secret or len(secret.strip()) == 0:
+        raise RuntimeError("JWT_SECRET_KEY is missing or invalid.")
     return secret
 
 

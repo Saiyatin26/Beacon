@@ -579,3 +579,101 @@ def test_security_headers_present():
     assert res.headers.get("X-Frame-Options") == "DENY"
     assert res.headers.get("X-XSS-Protection") == "1; mode=block"
     assert "max-age=" in res.headers.get("Strict-Transport-Security", "")
+
+
+# ==============================================================================
+# 10. Phase 17 Final Security Corrections & Hardening
+# ==============================================================================
+
+def test_jwt_secret_validation_production_missing_fails(monkeypatch):
+    from operations.startup import validate_startup_configuration
+    from common.config import settings
+
+    monkeypatch.setattr(settings, "beacon_env", "production")
+    monkeypatch.setattr(settings, "jwt_secret_key", "")
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BEACON_JWT_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        validate_startup_configuration()
+    assert "JWT_SECRET_KEY is missing or invalid" in str(excinfo.value)
+
+
+def test_jwt_secret_validation_production_empty_fails(monkeypatch):
+    from operations.startup import validate_startup_configuration
+    from common.config import settings
+
+    monkeypatch.setattr(settings, "beacon_env", "production")
+    monkeypatch.setattr(settings, "jwt_secret_key", "   ")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        validate_startup_configuration()
+    assert "JWT_SECRET_KEY is missing or invalid" in str(excinfo.value)
+
+
+def test_jwt_secret_validation_production_valid_passes(monkeypatch):
+    from operations.startup import validate_startup_configuration
+    from common.config import settings
+
+    monkeypatch.setattr(settings, "beacon_env", "production")
+    monkeypatch.setattr(settings, "jwt_secret_key", "a_very_secure_long_production_test_secret_key_2026")
+
+    diag = validate_startup_configuration()
+    assert diag["status"] == "SUCCESS"
+    assert diag["checks"]["security"]["auth_required"] is True
+    assert "secret" not in str(diag)
+
+
+def test_no_hardcoded_jwt_secret_fallback(monkeypatch):
+    from auth.security import get_signing_secret
+    from common.config import settings
+
+    monkeypatch.setattr(settings, "jwt_secret_key", "")
+    monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
+    monkeypatch.delenv("BEACON_JWT_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        get_signing_secret()
+    assert "JWT_SECRET_KEY is missing or invalid" in str(excinfo.value)
+
+
+def test_require_project_permission_no_default_project_fallback():
+    # Login as Alice (member of proj_retail_pilot only)
+    alice_login = client.post("/api/v1/auth/login", json={"username": "alice_certifier", "password": "AliceCert2026!"})
+    alice_token = alice_login.json()["access_token"]
+
+    # Attempt to request operational metrics without project_id or benchmark_id
+    res = client.get("/api/v1/operations/metrics", headers={"Authorization": f"Bearer {alice_token}"})
+    # Must reject safely (403 or 400), NEVER fall back to 'default_project'
+    assert res.status_code in (400, 403)
+    if res.status_code == 403:
+        assert "default_project" not in res.json()["detail"].lower()
+
+
+def test_client_supplied_project_id_cannot_override_resource_ownership():
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
+
+    # 1. Admin creates a run for payroll_tax_calculator (project: benchmark_payroll_tax_calculator)
+    res_payroll = client.post(
+        "/api/v1/certification/run",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "payroll_tax_calculator", "target_variant": "clean_v2", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
+    )
+    assert res_payroll.status_code == 200
+    payroll_cert_id = res_payroll.json()["certification_id"]
+
+    # 2. Alice (only a member of proj_retail_pilot) tries to access payroll artifact evidence
+    # while passing project_id=proj_retail_pilot in the query string
+    alice_login = client.post("/api/v1/auth/login", json={"username": "alice_certifier", "password": "AliceCert2026!"})
+    alice_token = alice_login.json()["access_token"]
+
+    ev_res = client.get(
+        f"/api/v1/evidence/dossiers/{payroll_cert_id}?project_id=proj_retail_pilot",
+        headers={"Authorization": f"Bearer {alice_token}"},
+    )
+    # The server MUST resolve the real resource project (benchmark_payroll_tax_calculator)
+    # and reject Alice because she is not a member of benchmark_payroll_tax_calculator!
+    assert ev_res.status_code == 403
+    assert "not a member of project" in ev_res.json()["detail"].lower()
+

@@ -6,6 +6,7 @@ Never outputs secrets, API keys, or private authorization credentials.
 
 import logging
 import hashlib
+import os
 import sqlite3
 from typing import Any
 
@@ -107,10 +108,17 @@ def validate_startup_configuration() -> dict[str, Any]:
 
     # 8. Authentication & Security Configuration Check
     env = getattr(settings, "beacon_env", "production").lower()
-    if env == "production" and not getattr(settings, "jwt_secret_key", ""):
-        logger.critical("Startup check failed: JWT_SECRET_KEY is mandatory in production environment.")
-        raise RuntimeError("Mandatory security configuration failure: JWT_SECRET_KEY missing in production.")
+    jwt_secret = getattr(settings, "jwt_secret_key", "") or os.environ.get("JWT_SECRET_KEY", "") or os.environ.get("BEACON_JWT_SECRET", "")
     
+    if env == "production":
+        if not jwt_secret or len(jwt_secret.strip()) == 0 or len(jwt_secret) < 16:
+            logger.critical("Startup check failed: JWT_SECRET_KEY is missing or invalid in production environment.")
+            raise RuntimeError("JWT_SECRET_KEY is missing or invalid.")
+    elif getattr(settings, "auth_required", True):
+        if not jwt_secret or len(jwt_secret.strip()) == 0:
+            logger.critical("Startup check failed: JWT_SECRET_KEY is missing or invalid.")
+            raise RuntimeError("JWT_SECRET_KEY is missing or invalid.")
+
     diagnostics["checks"]["security"] = {
         "auth_required": getattr(settings, "auth_required", True),
         "jwt_algorithm": getattr(settings, "jwt_algorithm", "HS256"),
