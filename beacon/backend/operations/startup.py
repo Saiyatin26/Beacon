@@ -105,5 +105,17 @@ def validate_startup_configuration() -> dict[str, Any]:
         "allowed_origins_count": len(settings.cors_origins),
     }
 
+    # 8. Authentication & Security Configuration Check
+    env = getattr(settings, "beacon_env", "production").lower()
+    if env == "production" and not getattr(settings, "jwt_secret_key", ""):
+        logger.critical("Startup check failed: JWT_SECRET_KEY is mandatory in production environment.")
+        raise RuntimeError("Mandatory security configuration failure: JWT_SECRET_KEY missing in production.")
+    
+    diagnostics["checks"]["security"] = {
+        "auth_required": getattr(settings, "auth_required", True),
+        "jwt_algorithm": getattr(settings, "jwt_algorithm", "HS256"),
+        "environment": env,
+    }
+
     logger.info("BEACON startup configuration validation completed successfully.")
     return diagnostics

@@ -60,24 +60,25 @@ export default function App() {
     }
   });
   const [loginModalOpen, setLoginModalOpen] = useState(false);
-  const [loginUsername, setLoginUsername] = useState("alice_certifier");
-  const [loginPassword, setLoginPassword] = useState("AliceCert2026!");
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState(null);
 
-  // Authenticated API client wrapper
+  // Authenticated API client wrapper (uses native window.fetch)
   const authFetch = async (url, options = {}) => {
     const token = authToken || sessionStorage.getItem("beacon_token");
     const headers = { ...(options.headers || {}) };
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
-    const res = await authFetch(url, { ...options, headers });
+    const res = await window.fetch(url, { ...options, headers });
     if (res.status === 401) {
       setAuthToken(null);
       setCurrentUser(null);
       sessionStorage.removeItem("beacon_token");
       sessionStorage.removeItem("beacon_user");
+      setLoginModalOpen(true);
       setError("Authentication required or session expired. Please sign in.");
     } else if (res.status === 403) {
       const errData = await res.clone().json().catch(() => ({}));
@@ -86,10 +87,25 @@ export default function App() {
     return res;
   };
 
+  const getCurrentRole = () => {
+    if (!currentUser) return null;
+    if (currentUser.is_system_admin) return "SYSTEM_ADMIN";
+    const currentProj = activeTab === "custom" ? customProjectId : selectedBenchmarkId;
+    const m = (currentUser.memberships || []).find(
+      (mem) =>
+        mem.project_id === currentProj ||
+        mem.project_id === `benchmark_${currentProj}` ||
+        (currentProj && currentProj.startsWith("benchmark_") && mem.project_id === currentProj.replace("benchmark_", ""))
+    );
+    return m ? m.role : "VIEWER";
+  };
+
+  const currentRole = getCurrentRole();
+
   const userHasPermission = (permission) => {
     if (!currentUser) return false;
-    if (currentUser.is_superuser) return true;
-    const role = currentUser.memberships?.[0]?.role;
+    if (currentUser.is_system_admin) return true;
+    const role = getCurrentRole();
     if (!role) return false;
     if (role === "SYSTEM_ADMIN" || role === "PROJECT_ADMIN") return true;
     if (role === "CERTIFIER") return permission === "VIEW" || permission === "CERTIFY";
@@ -97,8 +113,6 @@ export default function App() {
     if (role === "VIEWER") return permission === "VIEW";
     return false;
   };
-
-  const currentRole = currentUser?.memberships?.[0]?.role || (currentUser?.is_superuser ? "SYSTEM_ADMIN" : "VIEWER");
 
   const quickLogin = async (username, password) => {
     setLoginBusy(true);
@@ -141,12 +155,7 @@ export default function App() {
     setNotice("You have signed out.");
   };
 
-  // Auto-authenticate as default certifier on initial load if not present
-  useEffect(() => {
-    if (!authToken) {
-      quickLogin("alice_certifier", "AliceCert2026!").catch(() => {});
-    }
-  }, []);
+// Initial state: User authenticates via secure login screen
 
   // Navigation Tabs
   const [activeTab, setActiveTab] = useState("benchmark"); // benchmark, history, audit, drift, loan_demo
@@ -365,9 +374,30 @@ export default function App() {
     }
   };
 
-  const exportEvidenceDossier = (certId, format) => {
+  const exportEvidenceDossier = async (certId, format) => {
     if (!certId) return;
-    window.open(`${API_BASE}/api/v1/evidence/dossiers/${certId}/export?format=${format}`, "_blank");
+    try {
+      setBusy(true);
+      const res = await authFetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/export?format=${format}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Evidence export failed.");
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `evidence_dossier_${certId}.${format === "markdown" ? "md" : format}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setNotice(`Exported evidence dossier (${format.toUpperCase()}) successfully.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Phase 14: Dry-Run Preview
@@ -780,9 +810,30 @@ export default function App() {
   };
 
   // Export Certification Dossier (JSON / Markdown / CSV)
-  const exportDossier = (certId, format) => {
+  const exportDossier = async (certId, format) => {
     if (!certId) return;
-    window.open(`${API_BASE}/api/v1/certification/${certId}/export?format=${format}`, "_blank");
+    try {
+      setBusy(true);
+      const res = await authFetch(`${API_BASE}/api/v1/certification/${certId}/export?format=${format}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Certification export failed.");
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `certification_${certId}.${format === "markdown" ? "md" : format}`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+      setNotice(`Exported certification artifact (${format.toUpperCase()}) successfully.`);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
 
   // Run Legacy Loan Demo (isolated)
@@ -847,7 +898,7 @@ export default function App() {
                 {/* Quick Role Switcher Buttons */}
                 <div style={{ display: "flex", gap: "4px", marginLeft: "6px", borderLeft: "1px solid #475569", paddingLeft: "8px" }}>
                   <button
-                    onClick={() => quickLogin("bob_viewer", "BobView2026!")}
+                    onClick={() => { setLoginUsername("bob_viewer"); setLoginPassword(""); setLoginModalOpen(true); }}
                     title="Switch to Viewer (Bob)"
                     style={{
                       background: currentRole === "VIEWER" ? "#2563eb" : "#334155",
@@ -863,7 +914,7 @@ export default function App() {
                     👁️ Viewer
                   </button>
                   <button
-                    onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
+                    onClick={() => { setLoginUsername("alice_certifier"); setLoginPassword(""); setLoginModalOpen(true); }}
                     title="Switch to Certifier (Alice)"
                     style={{
                       background: currentRole === "CERTIFIER" ? "#2563eb" : "#334155",
@@ -879,7 +930,7 @@ export default function App() {
                     ⚡ Certifier
                   </button>
                   <button
-                    onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
+                    onClick={() => { setLoginUsername("carol_auditor"); setLoginPassword(""); setLoginModalOpen(true); }}
                     title="Switch to Auditor (Carol)"
                     style={{
                       background: currentRole === "AUDITOR" ? "#2563eb" : "#334155",
@@ -895,7 +946,7 @@ export default function App() {
                     📋 Auditor
                   </button>
                   <button
-                    onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
+                    onClick={() => { setLoginUsername("dave_admin"); setLoginPassword(""); setLoginModalOpen(true); }}
                     title="Switch to Project Admin (Dave)"
                     style={{
                       background: currentRole === "PROJECT_ADMIN" ? "#2563eb" : "#334155",
@@ -3436,7 +3487,7 @@ export default function App() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                 <button
                   type="button"
-                  onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
+                  onClick={() => { setLoginUsername("alice_certifier"); setLoginPassword(""); setLoginModalOpen(true); }}
                   disabled={loginBusy}
                   style={{
                     background: "#eff6ff",
@@ -3454,7 +3505,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => quickLogin("bob_viewer", "BobView2026!")}
+                  onClick={() => { setLoginUsername("bob_viewer"); setLoginPassword(""); setLoginModalOpen(true); }}
                   disabled={loginBusy}
                   style={{
                     background: "#f8fafc",
@@ -3472,7 +3523,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
+                  onClick={() => { setLoginUsername("carol_auditor"); setLoginPassword(""); setLoginModalOpen(true); }}
                   disabled={loginBusy}
                   style={{
                     background: "#fff7ed",
@@ -3490,7 +3541,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
+                  onClick={() => { setLoginUsername("dave_admin"); setLoginPassword(""); setLoginModalOpen(true); }}
                   disabled={loginBusy}
                   style={{
                     background: "#f0fdf4",

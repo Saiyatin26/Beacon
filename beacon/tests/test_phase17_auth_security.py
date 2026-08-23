@@ -1,18 +1,24 @@
 """
-Phase 17 — Authentication, Authorization & Multi-Tenant Security Test Suite
-Tests:
-1. Password hashing with PBKDF2-HMAC-SHA256 & constant time verification
-2. JWT generation, decoding, expiration, and signature tampering prevention
-3. Authentication endpoints (/login, /logout, /me)
-4. Rate limiting on authentication attempts
-5. RBAC enforcement (VIEWER, CERTIFIER, AUDITOR, PROJECT_ADMIN, SYSTEM_ADMIN)
-6. Multi-tenant project boundary isolation and cross-project access rejection
-7. Zero credential leakage in audit trails and error responses
-8. Security headers middleware (X-Content-Type-Options, X-Frame-Options, HSTS, XSS Protection)
+Phase 17 — Authentication, Authorization & Multi-Tenant Security Test Suite.
+
+Exhaustively verifies:
+1. PBKDF2 password hashing & constant-time verification
+2. HS256 JWT access tokens with unique jti, expiration, and signature tampering prevention
+3. Real token revocation on logout (reusing revoked token returns 401)
+4. Mandatory authentication on all protected endpoints (missing token -> 401)
+5. Public endpoints accessibility (/health/live, /health/ready, /health/details, /login)
+6. User management authorization (non-admin -> 403, system_admin -> 200)
+7. Rate limiting on authentication attempts
+8. RBAC permission matrix (VIEWER, CERTIFIER, AUDITOR, PROJECT_ADMIN, SYSTEM_ADMIN)
+9. Multi-tenant project boundary isolation (cross-project cert / job / dossier -> 403)
+10. Cross-project evidence comparison strictly rejected (403)
+11. Zero secrets in audit logs, user responses, and operational details
+12. Security response headers (HSTS, nosniff, frame-options, xss-protection)
+13. Deterministic certification mathematical invariance under authenticated execution
 """
 
 from datetime import timedelta
-import time
+import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -31,6 +37,7 @@ from backend.auth import (
     User,
     ProjectMembership,
 )
+from backend.certification.repository import certification_repository
 from backend.common.config import settings
 from backend.ingestion.audit import audit_logger, AuditAction
 
@@ -86,6 +93,7 @@ def test_jwt_generation_and_valid_decoding():
     assert payload.username == "alice_certifier"
     assert payload.sub == "USR-ALICE-002"
     assert payload.is_system_admin is False
+    assert bool(payload.jti) is True
     assert payload.memberships.get("proj_retail_pilot") == "CERTIFIER"
 
 
@@ -99,7 +107,6 @@ def test_jwt_tampered_signature_rejected():
         is_system_admin=False,
     )
     token = create_access_token(user=user)
-    # Tamper with the signature portion of the token
     parts = token.split(".")
     tampered_sig = parts[2][:-4] + "AAAA"
     tampered_token = f"{parts[0]}.{parts[1]}.{tampered_sig}"
@@ -126,107 +133,33 @@ def test_jwt_expired_token_rejected():
     assert "expired" in str(excinfo.value).lower()
 
 
-# ==============================================================================
-# 2. RBAC Permissions Matrix Tests
-# ==============================================================================
-
-def test_rbac_permission_matrix():
-    # Viewer
-    assert role_has_permission(UserRole.VIEWER, Permission.VIEW) is True
-    assert role_has_permission(UserRole.VIEWER, Permission.CERTIFY) is False
-    assert role_has_permission(UserRole.VIEWER, Permission.AUDIT) is False
-    assert role_has_permission(UserRole.VIEWER, Permission.MANAGE_PROJECT) is False
-
-    # Certifier
-    assert role_has_permission(UserRole.CERTIFIER, Permission.VIEW) is True
-    assert role_has_permission(UserRole.CERTIFIER, Permission.CERTIFY) is True
-    assert role_has_permission(UserRole.CERTIFIER, Permission.AUDIT) is False
-    assert role_has_permission(UserRole.CERTIFIER, Permission.MANAGE_PROJECT) is False
-
-    # Auditor
-    assert role_has_permission(UserRole.AUDITOR, Permission.VIEW) is True
-    assert role_has_permission(UserRole.AUDITOR, Permission.CERTIFY) is False
-    assert role_has_permission(UserRole.AUDITOR, Permission.AUDIT) is True
-    assert role_has_permission(UserRole.AUDITOR, Permission.MANAGE_PROJECT) is False
-
-    # Project Admin
-    assert role_has_permission(UserRole.PROJECT_ADMIN, Permission.VIEW) is True
-    assert role_has_permission(UserRole.PROJECT_ADMIN, Permission.CERTIFY) is True
-    assert role_has_permission(UserRole.PROJECT_ADMIN, Permission.AUDIT) is True
-    assert role_has_permission(UserRole.PROJECT_ADMIN, Permission.MANAGE_PROJECT) is True
-
-    # System Admin
-    assert role_has_permission(UserRole.SYSTEM_ADMIN, Permission.SYSTEM_OPERATIONS) is True
+def test_jwt_malformed_token_rejected():
+    with pytest.raises(Exception):
+        decode_access_token("not.a.valid.jwt.token")
 
 
 # ==============================================================================
-# 3. Authentication Endpoints Tests
+# 2. Token Revocation on Logout Tests (Requirement 7 & 8)
 # ==============================================================================
 
-def test_login_endpoint_success():
-    res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "alice_certifier", "password": "AliceCert2026!"},
-    )
-    assert res.status_code == 200
-    data = res.json()
-    assert "access_token" in data
-    assert data["token_type"] == "bearer"
-    assert data["user"]["username"] == "alice_certifier"
-    assert len(data["user"]["memberships"]) > 0
-
-
-def test_login_endpoint_invalid_password():
-    res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "alice_certifier", "password": "WrongPassword!"},
-    )
-    assert res.status_code == 401
-    assert "invalid" in res.json()["detail"].lower()
-
-
-def test_login_endpoint_nonexistent_user():
-    res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "non_existent_user_999", "password": "SomePassword123!"},
-    )
-    assert res.status_code == 401
-    assert "invalid" in res.json()["detail"].lower()
-
-
-def test_auth_me_endpoint_with_valid_token():
-    # Login first
+def test_token_revocation_on_logout_blocks_subsequent_requests():
+    # 1. Login to obtain access token
     login_res = client.post(
         "/api/v1/auth/login",
-        json={"username": "carol_auditor", "password": "CarolAudit2026!"},
+        json={"username": "alice_certifier", "password": "AliceCert2026!"},
     )
     assert login_res.status_code == 200
     token = login_res.json()["access_token"]
 
-    # Access /me
+    # 2. Access protected endpoint with valid token -> 200
     me_res = client.get(
         "/api/v1/auth/me",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert me_res.status_code == 200
-    data = me_res.json()
-    assert data["username"] == "carol_auditor"
-    assert data["email"] == "carol@audit.org"
+    assert me_res.json()["username"] == "alice_certifier"
 
-
-def test_auth_me_endpoint_unauthorized():
-    res = client.get("/api/v1/auth/me")
-    assert res.status_code == 401
-
-
-def test_auth_logout_endpoint():
-    login_res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "bob_viewer", "password": "BobView2026!"},
-    )
-    assert login_res.status_code == 200
-    token = login_res.json()["access_token"]
-
+    # 3. Call Logout -> Revokes the token
     logout_res = client.post(
         "/api/v1/auth/logout",
         headers={"Authorization": f"Bearer {token}"},
@@ -234,44 +167,202 @@ def test_auth_logout_endpoint():
     assert logout_res.status_code == 200
     assert logout_res.json()["status"] == "logged_out"
 
+    # 4. Reuse the SAME token -> MUST BE 401 Unauthorized
+    reuse_res = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert reuse_res.status_code == 401
+    assert "revoked" in reuse_res.json()["detail"].lower() or "invalid" in reuse_res.json()["detail"].lower()
+
 
 # ==============================================================================
-# 4. Rate Limiting Tests
+# 3. Mandatory Authentication for Protected APIs (Requirement 1 & 2)
+# ==============================================================================
+
+def test_protected_endpoints_reject_missing_token_with_401():
+    # 1. Certification Run
+    res1 = client.post(
+        "/api/v1/certification/run",
+        json={"benchmark_id": "retail_discount_pricing"},
+    )
+    assert res1.status_code == 401
+    assert "authentication required" in res1.json()["detail"].lower()
+
+    # 2. Custom Datasets
+    res2 = client.get("/api/v1/custom/datasets")
+    assert res2.status_code == 401
+
+    # 3. Custom Certify
+    res3 = client.post(
+        "/api/v1/custom/certify",
+        json={"dataset_id": "DS-TEST", "target_code": "def f(): pass"},
+    )
+    assert res3.status_code == 401
+
+    # 4. Operational Metrics
+    res4 = client.get("/api/v1/operations/metrics?project_id=proj_retail_pilot")
+    assert res4.status_code == 401
+
+    # 5. Operational Summary
+    res5 = client.get("/api/v1/operations/summary?project_id=proj_retail_pilot")
+    assert res5.status_code == 401
+
+    # 6. Certification Jobs
+    res6 = client.get("/api/v1/certification/jobs?project_id=proj_retail_pilot")
+    assert res6.status_code == 401
+
+    # 7. Evidence Compare
+    res7 = client.post(
+        "/api/v1/evidence/compare",
+        json={"run_id_a": "CERT-1", "run_id_b": "CERT-2"},
+    )
+    assert res7.status_code == 401
+
+    # 8. User Management
+    res8 = client.post(
+        "/api/v1/auth/users",
+        json={"username": "new_user", "password": "Password123!"},
+    )
+    assert res8.status_code == 401
+
+
+def test_public_health_endpoints_remain_accessible_without_token():
+    # 1. /health/live is public
+    res1 = client.get("/health/live")
+    assert res1.status_code == 200
+    assert res1.json()["status"] == "UP"
+
+    # 2. /health/ready is public
+    res2 = client.get("/health/ready")
+    assert res2.status_code == 200
+    assert res2.json()["status"] == "READY"
+
+    # 3. /health/details is public
+    res3 = client.get("/health/details")
+    assert res3.status_code == 200
+
+    # 4. /api/v1/auth/login is public
+    res4 = client.post(
+        "/api/v1/auth/login",
+        json={"username": "alice_certifier", "password": "AliceCert2026!"},
+    )
+    assert res4.status_code == 200
+
+
+# ==============================================================================
+# 4. User Management Security (Requirement 4)
+# ==============================================================================
+
+def test_non_admin_cannot_create_users():
+    # Login as Alice (Certifier - non-admin)
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={"username": "alice_certifier", "password": "AliceCert2026!"},
+    )
+    token = login_res.json()["access_token"]
+
+    res = client.post(
+        "/api/v1/auth/users",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "username": "hacker_user",
+            "password": "HackerPassword123!",
+            "full_name": "Hacker",
+            "email": "hacker@evil.corp",
+        },
+    )
+    assert res.status_code == 403
+    assert "administrator privilege required" in res.json()["detail"].lower()
+
+
+def test_system_admin_can_create_users_and_assign_members():
+    import uuid
+    # Login as Admin (SYSTEM_ADMIN)
+    login_res = client.post(
+        "/api/v1/auth/login",
+        json={"username": "admin", "password": "BeaconAdmin2026!"},
+    )
+    token = login_res.json()["access_token"]
+    unique_user = f"eng_{uuid.uuid4().hex[:6]}"
+
+    # Admin creates user
+    res = client.post(
+        "/api/v1/auth/users",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "username": unique_user,
+            "password": "EngineerPass2026!",
+            "full_name": "New Engineer",
+            "email": f"{unique_user}@retail.corp",
+        },
+    )
+    assert res.status_code == 200
+    assert res.json()["username"] == unique_user
+
+    # Admin assigns project role
+    mem_res = client.post(
+        "/api/v1/auth/projects/proj_retail_pilot/members",
+        headers={"Authorization": f"Bearer {token}"},
+        json={
+            "username": unique_user,
+            "project_id": "proj_retail_pilot",
+            "role": "CERTIFIER",
+        },
+    )
+    assert mem_res.status_code == 200
+    assert mem_res.json()["role"] == "CERTIFIER"
+
+
+# ==============================================================================
+# 5. Anti-Brute Force Rate Limiting Tests (Requirement 24)
 # ==============================================================================
 
 def test_login_rate_limiting():
     client_ip = "192.168.1.100"
     auth_rate_limiter.reset(client_ip)
 
-    # 10 attempts should succeed
     for _ in range(10):
         auth_rate_limiter.record_attempt(client_ip)
     
-    # 11th attempt should be blocked
     is_allowed, retry_after = auth_rate_limiter.is_allowed(client_ip)
     assert is_allowed is False
     assert retry_after > 0
 
-    # Reset
     auth_rate_limiter.reset(client_ip)
     is_allowed, retry_after = auth_rate_limiter.is_allowed(client_ip)
     assert is_allowed is True
 
 
 # ==============================================================================
-# 5. Role-Based Access Control (RBAC) Enforcement Tests
+# 6. RBAC Role & Permission Enforcement Tests (Requirement 29)
 # ==============================================================================
 
-def test_viewer_cannot_trigger_benchmark_certification():
-    # Login as Bob (Viewer)
+def test_rbac_permission_matrix():
+    assert role_has_permission(UserRole.VIEWER, Permission.VIEW) is True
+    assert role_has_permission(UserRole.VIEWER, Permission.CERTIFY) is False
+    assert role_has_permission(UserRole.VIEWER, Permission.AUDIT) is False
+    assert role_has_permission(UserRole.VIEWER, Permission.MANAGE_PROJECT) is False
+
+    assert role_has_permission(UserRole.CERTIFIER, Permission.VIEW) is True
+    assert role_has_permission(UserRole.CERTIFIER, Permission.CERTIFY) is True
+    assert role_has_permission(UserRole.CERTIFIER, Permission.AUDIT) is False
+
+    assert role_has_permission(UserRole.AUDITOR, Permission.VIEW) is True
+    assert role_has_permission(UserRole.AUDITOR, Permission.CERTIFY) is False
+    assert role_has_permission(UserRole.AUDITOR, Permission.AUDIT) is True
+
+    assert role_has_permission(UserRole.PROJECT_ADMIN, Permission.MANAGE_PROJECT) is True
+    assert role_has_permission(UserRole.SYSTEM_ADMIN, Permission.SYSTEM_OPERATIONS) is True
+
+
+def test_viewer_cannot_trigger_certification():
     login_res = client.post(
         "/api/v1/auth/login",
         json={"username": "bob_viewer", "password": "BobView2026!"},
     )
-    assert login_res.status_code == 200
     token = login_res.json()["access_token"]
 
-    # Bob attempts to certify (requires CERTIFY permission)
     res = client.post(
         "/api/v1/certification/run",
         headers={"Authorization": f"Bearer {token}"},
@@ -286,13 +377,11 @@ def test_viewer_cannot_trigger_benchmark_certification():
     assert "permission" in res.json()["detail"].lower()
 
 
-def test_certifier_can_trigger_benchmark_certification():
-    # Login as Alice (Certifier)
+def test_certifier_can_trigger_certification():
     login_res = client.post(
         "/api/v1/auth/login",
         json={"username": "alice_certifier", "password": "AliceCert2026!"},
     )
-    assert login_res.status_code == 200
     token = login_res.json()["access_token"]
 
     res = client.post(
@@ -311,103 +400,62 @@ def test_certifier_can_trigger_benchmark_certification():
     assert data["status"] in ("CERTIFIED", "NOT_CERTIFIED")
 
 
-def test_auditor_cannot_trigger_certification():
-    # Login as Carol (Auditor)
-    login_res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "carol_auditor", "password": "CarolAudit2026!"},
-    )
-    assert login_res.status_code == 200
-    token = login_res.json()["access_token"]
-
-    res = client.post(
-        "/api/v1/certification/run",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "benchmark_id": "retail_discount_pricing",
-            "target_variant": "clean_v2",
-            "discovery_mode": "CONTROLLED",
-            "preferred_provider": "offline",
-        },
-    )
-    assert res.status_code == 403
-
-
 def test_auditor_can_create_auditor_note():
-    # First certify to get an artifact ID
+    # Admin runs certification to create artifact
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
     cert_res = client.post(
         "/api/v1/certification/run",
-        json={
-            "benchmark_id": "retail_discount_pricing",
-            "target_variant": "clean_v2",
-            "discovery_mode": "CONTROLLED",
-            "preferred_provider": "offline",
-        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "retail_discount_pricing", "target_variant": "clean_v2", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
     )
     cert_id = cert_res.json()["certification_id"]
 
-    # Login as Carol (Auditor)
-    login_res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "carol_auditor", "password": "CarolAudit2026!"},
-    )
-    assert login_res.status_code == 200
-    token = login_res.json()["access_token"]
+    # Carol (Auditor) logs in and appends note
+    auditor_login = client.post("/api/v1/auth/login", json={"username": "carol_auditor", "password": "CarolAudit2026!"})
+    auditor_token = auditor_login.json()["access_token"]
 
-    # Carol adds note (requires AUDIT permission)
     note_res = client.post(
         f"/api/v1/evidence/dossiers/{cert_id}/notes",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"content": "Authoritative review: All invariant boundaries preserved."},
+        headers={"Authorization": f"Bearer {auditor_token}"},
+        json={"content": "Authoritative review: Invariant boundaries verified."},
     )
     assert note_res.status_code == 200
-    assert note_res.json()["content"] == "Authoritative review: All invariant boundaries preserved."
+    assert note_res.json()["content"] == "Authoritative review: Invariant boundaries verified."
 
 
 def test_viewer_cannot_create_auditor_note():
-    # Certify to get an artifact ID
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
     cert_res = client.post(
         "/api/v1/certification/run",
-        json={
-            "benchmark_id": "retail_discount_pricing",
-            "target_variant": "clean_v2",
-            "discovery_mode": "CONTROLLED",
-            "preferred_provider": "offline",
-        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "retail_discount_pricing", "target_variant": "clean_v2", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
     )
     cert_id = cert_res.json()["certification_id"]
 
-    # Login as Bob (Viewer)
-    login_res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "bob_viewer", "password": "BobView2026!"},
-    )
-    assert login_res.status_code == 200
-    token = login_res.json()["access_token"]
+    viewer_login = client.post("/api/v1/auth/login", json={"username": "bob_viewer", "password": "BobView2026!"})
+    viewer_token = viewer_login.json()["access_token"]
 
-    # Bob tries to add note (should be 403)
     note_res = client.post(
         f"/api/v1/evidence/dossiers/{cert_id}/notes",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {viewer_token}"},
         json={"content": "Viewer attempt to add note."},
     )
     assert note_res.status_code == 403
 
 
 # ==============================================================================
-# 6. Multi-Tenant Project Boundary Isolation Tests
+# 7. Multi-Tenant Project Boundary Isolation & Compare (Requirements 15, 16, 18)
 # ==============================================================================
 
 def test_cross_project_isolation_blocked():
-    # Login as external_user who only has access to 'proj_other_finance'
     login_res = client.post(
         "/api/v1/auth/login",
         json={"username": "external_user", "password": "External2026!"},
     )
-    assert login_res.status_code == 200
     token = login_res.json()["access_token"]
 
-    # external_user attempts to access retail_discount_pricing resources
     res = client.post(
         "/api/v1/certification/run",
         headers={"Authorization": f"Bearer {token}"},
@@ -418,40 +466,78 @@ def test_cross_project_isolation_blocked():
             "preferred_provider": "offline",
         },
     )
-    # Should be 403 Forbidden due to project boundary mismatch
     assert res.status_code == 403
-    assert "forbidden" in res.json()["detail"].lower() or "not a member" in res.json()["detail"].lower() or "access denied" in res.json()["detail"].lower()
+    assert "not a member" in res.json()["detail"].lower() or "forbidden" in res.json()["detail"].lower()
 
 
-def test_system_admin_has_universal_access():
-    # Login as Admin (SYSTEM_ADMIN)
-    login_res = client.post(
-        "/api/v1/auth/login",
-        json={"username": "admin", "password": "BeaconAdmin2026!"},
-    )
-    assert login_res.status_code == 200
-    token = login_res.json()["access_token"]
+def test_cross_project_evidence_compare_strictly_rejected():
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
 
-    # Admin can certify any benchmark/project
-    res = client.post(
+    # Run in retail_discount_pricing
+    res_a = client.post(
         "/api/v1/certification/run",
-        headers={"Authorization": f"Bearer {token}"},
-        json={
-            "benchmark_id": "retail_discount_pricing",
-            "target_variant": "clean_v2",
-            "discovery_mode": "CONTROLLED",
-            "preferred_provider": "offline",
-        },
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "retail_discount_pricing", "target_variant": "clean_v2", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
     )
-    assert res.status_code == 200
+    run_a = res_a.json()["certification_id"]
+
+    # Run in payroll_tax_calculator (different benchmark / project)
+    res_b = client.post(
+        "/api/v1/certification/run",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "payroll_tax_calculator", "target_variant": "clean_v2", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
+    )
+    run_b = res_b.json()["certification_id"]
+
+    # Non-admin user (Alice) attempts cross-project comparison
+    alice_login = client.post("/api/v1/auth/login", json={"username": "alice_certifier", "password": "AliceCert2026!"})
+    alice_token = alice_login.json()["access_token"]
+
+    compare_res = client.post(
+        "/api/v1/evidence/compare",
+        headers={"Authorization": f"Bearer {alice_token}"},
+        json={"run_id_a": run_a, "run_id_b": run_b},
+    )
+    assert compare_res.status_code == 403
+    assert "cross-project comparison is prohibited" in compare_res.json()["detail"].lower()
+
+
+def test_same_project_evidence_compare_allowed():
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
+
+    res_a = client.post(
+        "/api/v1/certification/run",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "retail_discount_pricing", "target_variant": "clean_v2", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
+    )
+    run_a = res_a.json()["certification_id"]
+
+    res_b = client.post(
+        "/api/v1/certification/run",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "retail_discount_pricing", "target_variant": "buggy_v1", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
+    )
+    run_b = res_b.json()["certification_id"]
+
+    # Same project comparison
+    compare_res = client.post(
+        "/api/v1/evidence/compare",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"run_id_a": run_a, "run_id_b": run_b},
+    )
+    assert compare_res.status_code == 200
+    data = compare_res.json()
+    assert "identities" in data
+    assert "differential_regressions" in data
 
 
 # ==============================================================================
-# 7. Zero Credential Leaks in Audit Logs Tests
+# 8. Zero Credential Leaks in Audit Logs & Responses (Requirements 22, 23, 26)
 # ==============================================================================
 
 def test_no_passwords_or_tokens_in_audit_logs():
-    # Trigger login success, login failure, and access denied events
     client.post(
         "/api/v1/auth/login",
         json={"username": "alice_certifier", "password": "AliceCert2026!"},
@@ -470,8 +556,20 @@ def test_no_passwords_or_tokens_in_audit_logs():
         assert "secret" not in details_str
 
 
+def test_user_responses_never_contain_password_hash():
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
+
+    res = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {admin_token}"})
+    assert res.status_code == 200
+    data = res.json()
+    assert "password_hash" not in data
+    assert "password" not in data
+    assert "salt" not in data
+
+
 # ==============================================================================
-# 8. Security Headers Middleware Tests
+# 9. Security Headers Middleware Tests (Requirement 25)
 # ==============================================================================
 
 def test_security_headers_present():

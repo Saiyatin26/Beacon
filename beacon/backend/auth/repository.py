@@ -27,6 +27,7 @@ class AuthRepository:
         self._memory_users: dict[str, User] = {}  # user_id -> User
         self._memory_usernames: dict[str, str] = {}  # username.lower() -> user_id
         self._memory_memberships: dict[str, list[ProjectMembership]] = {}  # user_id -> list
+        self._revoked_jtis: set[str] = set()  # in-memory cache of revoked token JTIs
         self._init_db()
         self._seed_default_users()
 
@@ -55,14 +56,28 @@ class AuthRepository:
                         PRIMARY KEY (user_id, project_id)
                     )
                 """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS revoked_tokens (
+                        jti TEXT PRIMARY KEY,
+                        user_id TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL,
+                        revoked_at INTEGER NOT NULL
+                    )
+                """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_memberships_proj ON project_memberships(project_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_revoked_exp ON revoked_tokens(expires_at)")
                 conn.commit()
         except Exception as exc:
             logger.warning(f"Could not initialize SQLite auth tables: {exc}")
 
     def _seed_default_users(self):
         """Seeds initial development and test users if database is empty."""
+        import os
+        from common.config import settings
+        env = getattr(settings, "beacon_env", "production").lower()
+        if env == "production" and not os.getenv("BEACON_ALLOW_DEMO_SEEDING"):
+            return
         try:
             if self.get_user_by_username("admin"):
                 return
@@ -369,11 +384,50 @@ class AuthRepository:
             pass
         return sorted(list(users_map.values()), key=lambda u: u.username)
 
+    def revoke_token(self, jti: str, user_id: str, expires_at: int) -> None:
+        """Revokes a JWT access token by registering its unique jti in persistent storage and memory cache."""
+        if not jti:
+            return
+        self._revoked_jtis.add(jti)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO revoked_tokens (jti, user_id, expires_at, revoked_at) VALUES (?, ?, ?, ?)",
+                    (jti, user_id, expires_at, now_ts),
+                )
+                conn.commit()
+        except Exception as exc:
+            logger.debug(f"SQLite revoke_token note: {exc}")
+
+    def is_token_revoked(self, jti: str) -> bool:
+        """Checks whether a token's jti is revoked in memory cache or SQLite."""
+        if not jti:
+            return False
+        if jti in self._revoked_jtis:
+            return True
+        try:
+            now_ts = int(datetime.now(timezone.utc).timestamp())
+            with sqlite3.connect(self._db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT jti, expires_at FROM revoked_tokens WHERE jti = ?",
+                    (jti,),
+                )
+                row = cursor.fetchone()
+                if row:
+                    self._revoked_jtis.add(row[0])
+                    return True
+        except Exception as exc:
+            logger.debug(f"SQLite is_token_revoked note: {exc}")
+        return False
+
     def clear(self):
         """Clears memory state and re-seeds default users (used for test isolation)."""
         self._memory_users.clear()
         self._memory_usernames.clear()
         self._memory_memberships.clear()
+        self._revoked_jtis.clear()
         self._seed_default_users()
 
 

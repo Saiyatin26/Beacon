@@ -10,11 +10,12 @@ Provides:
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 from common.config import settings
 from ingestion.audit import AuditAction, audit_logger
 from .dependencies import (
+    extract_bearer_token,
     get_current_active_user,
     get_current_user,
     require_project_permission,
@@ -33,7 +34,7 @@ from .models import (
 )
 from .rate_limiter import auth_rate_limiter
 from .repository import auth_repository
-from .security import create_access_token, verify_password
+from .security import create_access_token, decode_access_token, verify_password
 
 logger = logging.getLogger(__name__)
 
@@ -134,19 +135,31 @@ async def login_endpoint(req: LoginRequest, request: Request):
 
 
 @auth_router.post("/logout")
-async def logout_endpoint(user: Optional[User] = Depends(get_current_user)):
-    """Logs out the active user session and creates an audit record."""
-    if user:
-        audit_logger.log(
-            project_id="system",
-            action=AuditAction.LOGOUT,
-            status="SUCCESS",
-            details={
-                "user_id": user.user_id,
-                "username": user.username,
-            },
-        )
-    return {"status": "logged_out", "message": "Session invalidated successfully."}
+async def logout_endpoint(
+    request: Request,
+    user: User = Depends(get_current_user),
+    authorization: Optional[str] = Header(None),
+):
+    """Logs out the active user session, revokes the token, and creates an audit record."""
+    token = extract_bearer_token(authorization)
+    if token:
+        try:
+            payload = decode_access_token(token, verify_exp=False)
+            if payload.jti:
+                auth_repository.revoke_token(payload.jti, user.user_id, payload.exp)
+        except Exception as exc:
+            logger.debug(f"Logout token decode note: {exc}")
+
+    audit_logger.log(
+        project_id="system",
+        action=AuditAction.LOGOUT,
+        status="SUCCESS",
+        details={
+            "user_id": user.user_id,
+            "username": user.username,
+        },
+    )
+    return {"status": "logged_out", "message": "Session invalidated and token revoked successfully."}
 
 
 @auth_router.get("/me", response_model=UserProfileResponse)
@@ -169,7 +182,7 @@ async def get_current_user_profile(user: User = Depends(get_current_active_user)
 @auth_router.post("/users", response_model=UserProfileResponse)
 async def create_user_endpoint(
     req: CreateUserRequest,
-    current_admin: Optional[User] = Depends(require_system_admin),
+    current_admin: User = Depends(require_system_admin),
 ):
     """Provisions a new user. Restricted to SYSTEM_ADMIN."""
     existing = auth_repository.get_user_by_username(req.username)
@@ -200,7 +213,7 @@ async def create_user_endpoint(
 async def assign_project_member_endpoint(
     project_id: str,
     req: AssignProjectRoleRequest,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.MANAGE_PROJECT)),
+    current_user: User = Depends(require_project_permission(Permission.MANAGE_PROJECT)),
 ):
     """Assigns or updates a user's role in a project tenant."""
     target_user = auth_repository.get_user_by_username(req.username)

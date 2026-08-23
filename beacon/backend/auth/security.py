@@ -109,12 +109,19 @@ def _base64url_decode(data: str) -> bytes:
 # JWT Bearer Token Encoding & Decoding (HS256)
 # ==============================================================================
 
+import uuid
+
+
 def get_signing_secret() -> str:
-    """Retrieves the configured JWT secret key or falls back to server setting."""
-    secret = getattr(settings, "jwt_secret_key", "") or os.environ.get("BEACON_JWT_SECRET", "")
+    """Retrieves the configured JWT secret key.
+    Fails safely in production if missing.
+    """
+    secret = getattr(settings, "jwt_secret_key", "") or os.environ.get("JWT_SECRET_KEY", "") or os.environ.get("BEACON_JWT_SECRET", "")
     if not secret:
-        # Stable deterministic fallback for development/test environments
-        secret = "beacon_default_secure_signing_secret_key_ph17_production_2026"
+        env = getattr(settings, "beacon_env", "production").lower()
+        if env == "production":
+            raise RuntimeError("CRITICAL SECURITY ERROR: JWT_SECRET_KEY environment variable is mandatory in production mode.")
+        secret = "beacon_dev_test_secure_signing_secret_key_2026"
     return secret
 
 
@@ -124,12 +131,13 @@ def create_access_token(
     expires_delta: Optional[timedelta] = None,
     secret_key: Optional[str] = None,
 ) -> str:
-    """Generates a cryptographically signed HS256 JWT access token."""
+    """Generates a cryptographically signed HS256 JWT access token with unique jti."""
     key = secret_key or get_signing_secret()
     now = datetime.now(timezone.utc)
     expire_minutes = getattr(settings, "jwt_access_token_expire_minutes", 60)
     delta = expires_delta or timedelta(minutes=expire_minutes)
     exp = now + delta
+    jti = uuid.uuid4().hex
 
     # Map memberships to dictionary {project_id: role_name}
     membership_dict = {}
@@ -145,6 +153,7 @@ def create_access_token(
         "sub": user.user_id,
         "username": user.username,
         "is_system_admin": bool(user.is_system_admin),
+        "jti": jti,
         "memberships": membership_dict,
         "iat": int(now.timestamp()),
         "exp": int(exp.timestamp()),
@@ -169,7 +178,7 @@ def decode_access_token(
     secret_key: Optional[str] = None,
     verify_exp: bool = True,
 ) -> TokenPayload:
-    """Decodes, verifies signature, and checks expiration of an HS256 JWT access token."""
+    """Decodes, verifies signature, expiration, and revocation status of an HS256 JWT access token."""
     if not token or not isinstance(token, str):
         raise InvalidTokenError("Token is empty or not a string")
 
@@ -217,11 +226,19 @@ def decode_access_token(
         if now_ts > int(exp):
             raise TokenExpiredError(f"Token has expired (exp: {exp}, now: {now_ts})")
 
-    # 5. Build TokenPayload
+    # 5. Verify Revocation Status
+    jti = str(payload_data.get("jti", ""))
+    if jti:
+        from .repository import auth_repository
+        if auth_repository.is_token_revoked(jti):
+            raise InvalidTokenError("Authentication token has been revoked (logged out)")
+
+    # 6. Build TokenPayload
     return TokenPayload(
         sub=str(payload_data.get("sub", "")),
         username=str(payload_data.get("username", "")),
         is_system_admin=bool(payload_data.get("is_system_admin", False)),
+        jti=jti,
         memberships=payload_data.get("memberships", {}),
         iat=int(payload_data.get("iat", 0)),
         exp=int(payload_data.get("exp", 0)),

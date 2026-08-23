@@ -91,6 +91,7 @@ class TokenPayload(BaseModel):
     sub: str  # user_id
     username: str
     is_system_admin: bool = False
+    jti: str = ""  # Unique Token ID for revocation tracking
     memberships: dict[str, str] = Field(default_factory=dict)  # project_id -> role string
     iat: int = 0
     exp: int = 0

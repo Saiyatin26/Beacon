@@ -249,7 +249,7 @@ def health():
 def get_certification_job_endpoint(
     job_id: str,
     project_id: str,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Retrieves operational lifecycle state for a certification job.
     project_id is required and enforced server-side for project isolation.
@@ -268,7 +268,7 @@ def get_certification_job_endpoint(
 def list_certification_jobs_endpoint(
     project_id: str,
     limit: int = 50,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Lists recent operational certification jobs scoped to the given project.
     project_id is required and enforced server-side — the server only returns
@@ -281,7 +281,7 @@ def list_certification_jobs_endpoint(
 @app.get("/api/v1/operations/metrics")
 def get_operations_metrics_endpoint(
     project_id: str,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Returns aggregated runtime counters, latency averages, and error metrics
     scoped to the given project. project_id is required.
@@ -293,7 +293,7 @@ def get_operations_metrics_endpoint(
 @app.get("/api/v1/operations/summary")
 def get_operations_summary_endpoint(
     project_id: str,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Returns high-level operational system summary scoped to the given project.
     project_id is required.
@@ -556,7 +556,7 @@ def get_benchmark_manifest(
 @app.post("/api/v1/certification/run")
 def run_certification_v1(
     request: CertificationRunRequest,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.CERTIFY)),
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
 ):
     """Executes a policy-driven behavioral certification run using registered ImplementationAdapters or Benchmarks."""
     # 1. Benchmark Resolution Mode
@@ -869,7 +869,7 @@ def list_certification_artifacts(
     project_id: Optional[str] = None,
     benchmark_id: Optional[str] = None,
     limit: int = 50,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Lists historical immutable CertificationArtifacts filtered by project or benchmark."""
     artifacts = certification_repository.list_artifacts(project_id=project_id, benchmark_id=benchmark_id, limit=limit)
@@ -889,7 +889,7 @@ def verify_certification_artifact_endpoint(certification_id: str):
 def get_certification_artifact(
     certification_id: str,
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Retrieves a single CertificationArtifact by ID."""
     artifact = certification_repository.get_artifact(certification_id)
@@ -1189,7 +1189,7 @@ def preview_custom_dataset(request: DatasetIngestionRequest):
 @app.post("/api/v1/custom/datasets/upload")
 def upload_custom_dataset(
     request: DatasetIngestionRequest,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.CERTIFY)),
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
 ):
     """Authoritatively validates, canonicalizes, registers, and manifests a user-supplied dataset."""
     raw_bytes_len = len(request.raw_content.encode("utf-8")) if isinstance(request.raw_content, str) else 0
@@ -1224,7 +1224,7 @@ def upload_custom_dataset(
 def list_custom_datasets(
     project_id: Optional[str] = None,
     limit: int = 50,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Lists registered custom dataset manifests with project namespace isolation."""
     manifests = user_dataset_registry.list_datasets(project_id=project_id, limit=limit)
@@ -1235,7 +1235,7 @@ def list_custom_datasets(
 def get_custom_dataset(
     dataset_id: str,
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Retrieves metadata only for a single custom dataset manifest without exposing raw/stored data."""
     manifest = user_dataset_registry.get_manifest(dataset_id)
@@ -1269,7 +1269,7 @@ def get_custom_dataset(
 def delete_custom_dataset(
     dataset_id: str,
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.MANAGE_PROJECT)),
+    current_user: User = Depends(require_project_permission(Permission.MANAGE_PROJECT)),
 ):
     """Deletes a custom dataset and its stored records."""
     if project_id:
@@ -1492,7 +1492,7 @@ def compute_custom_config_fingerprint(
 @app.post("/api/v1/custom/preflight")
 def validate_custom_certification(
     req: CustomPreflightRequest,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Performs authoritative pre-flight validation on user dataset, schema, allowlisted adapters,
     explicit OracleSet binding, compatibility, policy, and privacy boundaries.
@@ -1686,7 +1686,7 @@ def validate_custom_certification(
 @app.post("/api/v1/custom/certify")
 def run_custom_certification(
     req: CustomCertificationRunRequest,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.CERTIFY)),
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
 ):
     """Certifies custom user-supplied dataset using the authoritative deterministic CertificationEngine.
     Enforces authoritative configuration fingerprint match against pre-flight, explicit OracleSet binding,
@@ -2026,7 +2026,7 @@ def list_custom_audit_events(
     project_id: Optional[str] = None,
     dataset_id: Optional[str] = None,
     limit: int = 50,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.AUDIT)),
+    current_user: User = Depends(require_project_permission(Permission.AUDIT)),
 ):
     """Lists audit events for custom dataset ingestion and certification."""
     events = audit_logger.list_events(project_id=project_id, dataset_id=dataset_id, limit=limit)
@@ -2064,7 +2064,7 @@ class RunCompareRequest(BaseModel):
 def get_evidence_dossier_endpoint(
     certification_id: str,
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Retrieves a unified, immutable Evidence Dossier for a specific certification run."""
     try:
@@ -2083,7 +2083,7 @@ def explain_certification_endpoint(
     use_llm: bool = False,
     preferred_provider: str = "offline",
     allow_external_llm: bool = False,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Generates an authoritative, structured explanation directly from the Evidence Dossier."""
     try:
@@ -2105,7 +2105,7 @@ def explain_certification_endpoint(
 def get_traceability_graph_endpoint(
     certification_id: str,
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Returns a directed traceability graph connecting Dataset -> Input Set -> Implementations
     -> OracleSet -> Evaluations -> Counterexamples -> Policy -> Artifact -> Hash."""
@@ -2123,7 +2123,7 @@ def get_traceability_graph_endpoint(
 def get_evidence_timeline_endpoint(
     certification_id: str,
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Returns the immutable chronological audit timeline for a certification run."""
     try:
@@ -2138,7 +2138,7 @@ def get_evidence_timeline_endpoint(
 @app.post("/api/v1/evidence/verify/{certification_id}")
 def verify_evidence_endpoint(
     certification_id: str,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Authoritatively reconstructs cryptographic hashes and verifies artifact integrity."""
     artifact = certification_repository.get_artifact(certification_id)
@@ -2163,7 +2163,7 @@ def verify_evidence_endpoint(
 def add_auditor_note_endpoint(
     certification_id: str,
     req: AuditorNoteCreateRequest,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.AUDIT)),
+    current_user: User = Depends(require_project_permission(Permission.AUDIT)),
 ):
     """Appends an isolated human auditor note without altering artifact hashes or certification status."""
     artifact = certification_repository.get_artifact(certification_id)
@@ -2187,7 +2187,7 @@ def add_auditor_note_endpoint(
 def list_auditor_notes_endpoint(
     certification_id: str,
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Lists human reviewer notes with project isolation."""
     artifact = certification_repository.get_artifact(certification_id)
@@ -2202,8 +2202,40 @@ def list_auditor_notes_endpoint(
 
 
 @app.post("/api/v1/evidence/compare")
-def compare_runs_endpoint(req: RunCompareRequest):
-    """Performs side-by-side differential analysis between two certification runs."""
+def compare_runs_endpoint(
+    req: RunCompareRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Performs side-by-side differential analysis between two certification runs.
+    Server-side resolves both runs and strictly enforces project isolation.
+    """
+    art_a = certification_repository.get_artifact(req.run_id_a)
+    if not art_a:
+        raise HTTPException(status_code=404, detail=f"Certification run '{req.run_id_a}' not found.")
+    art_b = certification_repository.get_artifact(req.run_id_b)
+    if not art_b:
+        raise HTTPException(status_code=404, detail=f"Certification run '{req.run_id_b}' not found.")
+
+    # If caller is not a system administrator: strictly enforce project ownership and membership
+    if not current_user.is_system_admin:
+        if art_a.project_id != art_b.project_id:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: Cross-project comparison is prohibited. Run A belongs to '{art_a.project_id}', Run B belongs to '{art_b.project_id}'.",
+            )
+        memberships = auth_repository.get_user_memberships(current_user.user_id)
+        user_has_access = any(
+            m.project_id == art_a.project_id
+            or m.project_id == f"benchmark_{art_a.project_id}"
+            or (art_a.project_id.startswith("benchmark_") and m.project_id == art_a.project_id.replace("benchmark_", ""))
+            for m in memberships
+        )
+        if not user_has_access:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: User '{current_user.username}' is not a member of project '{art_a.project_id}'.",
+            )
+
     try:
         comparison = compare_certification_runs(req.run_id_a, req.run_id_b)
         return comparison
@@ -2216,7 +2248,7 @@ def export_evidence_dossier_endpoint(
     certification_id: str,
     format: Literal["json", "markdown", "csv"] = "json",
     project_id: Optional[str] = None,
-    current_user: Optional[User] = Depends(require_project_permission(Permission.VIEW)),
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Exports complete, auditable Evidence Dossier with export audit logging and zero secrets."""
     try:
