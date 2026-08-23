@@ -214,7 +214,12 @@ def decode_access_token(
     except Exception as exc:
         raise InvalidTokenError(f"Malformed token payload JSON: {exc}") from exc
 
-    # 4. Verify Expiration
+    # 4. Verify Token Type (must be 'access')
+    token_type = payload_data.get("token_type")
+    if token_type != "access":
+        raise InvalidTokenError(f"Invalid token type '{token_type}'; expected 'access'")
+
+    # 5. Verify Expiration
     if verify_exp:
         exp = payload_data.get("exp")
         if exp is None:

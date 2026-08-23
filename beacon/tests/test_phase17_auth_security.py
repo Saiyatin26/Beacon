@@ -677,3 +677,160 @@ def test_client_supplied_project_id_cannot_override_resource_ownership():
     assert ev_res.status_code == 403
     assert "not a member of project" in ev_res.json()["detail"].lower()
 
+
+# ==============================================================================
+# 11. Final Phase 17 Route-Surface Protection & Token Type Hardening Tests
+# ==============================================================================
+
+def test_jwt_wrong_or_missing_token_type_rejected():
+    import json, hmac, hashlib
+    from datetime import datetime, timezone
+    from auth.security import _base64url_encode, get_signing_secret
+
+    key = get_signing_secret()
+    header = {"alg": "HS256", "typ": "JWT"}
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+
+    # Case 1: token_type is "refresh"
+    payload_refresh = {
+        "sub": "user_test_123",
+        "username": "test_refresh",
+        "is_system_admin": False,
+        "memberships": {},
+        "iat": now_ts,
+        "exp": now_ts + 3600,
+        "token_type": "refresh",
+    }
+    h_b = _base64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    p_b = _base64url_encode(json.dumps(payload_refresh, separators=(",", ":")).encode("utf-8"))
+    sig = _base64url_encode(hmac.new(key.encode("utf-8"), f"{h_b}.{p_b}".encode("utf-8"), hashlib.sha256).digest())
+    token_refresh = f"{h_b}.{p_b}.{sig}"
+
+    res = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token_refresh}"})
+    assert res.status_code == 401
+    assert "token" in res.json()["detail"].lower()
+
+    # Case 2: missing token_type claim
+    payload_no_type = {
+        "sub": "user_test_123",
+        "username": "test_no_type",
+        "is_system_admin": False,
+        "memberships": {},
+        "iat": now_ts,
+        "exp": now_ts + 3600,
+    }
+    p_b2 = _base64url_encode(json.dumps(payload_no_type, separators=(",", ":")).encode("utf-8"))
+    sig2 = _base64url_encode(hmac.new(key.encode("utf-8"), f"{h_b}.{p_b2}".encode("utf-8"), hashlib.sha256).digest())
+    token_no_type = f"{h_b}.{p_b2}.{sig2}"
+
+    res2 = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token_no_type}"})
+    assert res2.status_code == 401
+    assert "token" in res2.json()["detail"].lower()
+
+
+def test_all_certification_endpoints_protected_against_unauthenticated_and_cross_project():
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
+
+    # 1. Create certification run for retail_discount_pricing (project: benchmark_retail_discount_pricing)
+    run_res = client.post(
+        "/api/v1/certification/run",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"benchmark_id": "retail_discount_pricing", "target_variant": "clean_v2", "discovery_mode": "CONTROLLED", "preferred_provider": "offline"},
+    )
+    assert run_res.status_code == 200
+    cert_id = run_res.json()["certification_id"]
+
+    # 2. Setup user charlie (member of proj_other ONLY)
+    client.post(
+        "/api/v1/auth/users",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"username": "charlie_other", "password": "CharlieOther2026!", "full_name": "Charlie Other", "email": "charlie@other.test"},
+    )
+    client.post(
+        "/api/v1/auth/projects/proj_other_isolated/members",
+        headers={"Authorization": f"Bearer {admin_token}"},
+        json={"username": "charlie_other", "role": "VIEWER"},
+    )
+    charlie_login = client.post("/api/v1/auth/login", json={"username": "charlie_other", "password": "CharlieOther2026!"})
+    charlie_token = charlie_login.json()["access_token"]
+
+    # 3. Setup user bob (member of proj_retail_pilot and benchmark_retail_discount_pricing)
+    bob_login = client.post("/api/v1/auth/login", json={"username": "bob_viewer", "password": "BobView2026!"})
+    bob_token = bob_login.json()["access_token"]
+
+    endpoints_to_test = [
+        ("GET", f"/api/v1/certification/{cert_id}/report"),
+        ("GET", f"/api/v1/certification/{cert_id}/oracles"),
+        ("GET", f"/api/v1/certification/{cert_id}/counterexamples"),
+        ("GET", f"/api/v1/certification/{cert_id}/cases"),
+        ("GET", f"/api/v1/certification/{cert_id}/input_set"),
+        ("GET", f"/api/v1/certification/{cert_id}/export"),
+        ("POST", f"/api/v1/certification/{cert_id}/verify"),
+        ("GET", f"/api/v1/certification/{cert_id}/verify_reproducibility"),
+    ]
+
+    for method, path in endpoints_to_test:
+        # A. Unauthenticated -> 401
+        if method == "GET":
+            unauth_res = client.get(path)
+        else:
+            unauth_res = client.post(path)
+        assert unauth_res.status_code == 401, f"Expected 401 for unauthenticated {method} {path}, got {unauth_res.status_code}"
+
+        # B. Cross-project user (Charlie) -> 403
+        if method == "GET":
+            cross_res = client.get(path, headers={"Authorization": f"Bearer {charlie_token}"})
+        else:
+            cross_res = client.post(path, headers={"Authorization": f"Bearer {charlie_token}"})
+        assert cross_res.status_code == 403, f"Expected 403 for cross-project {method} {path}, got {cross_res.status_code}"
+
+        # C. Authorized user (Bob) -> 200
+        if method == "GET":
+            auth_res = client.get(path, headers={"Authorization": f"Bearer {bob_token}"})
+        else:
+            auth_res = client.post(path, headers={"Authorization": f"Bearer {bob_token}"})
+        assert auth_res.status_code == 200, f"Expected 200 for authorized {method} {path}, got {auth_res.status_code}"
+
+
+def test_custom_preview_and_validate_security():
+    admin_login = client.post("/api/v1/auth/login", json={"username": "admin", "password": "BeaconAdmin2026!"})
+    admin_token = admin_login.json()["access_token"]
+
+    alice_login = client.post("/api/v1/auth/login", json={"username": "alice_certifier", "password": "AliceCert2026!"})
+    alice_token = alice_login.json()["access_token"]
+
+    charlie_login = client.post("/api/v1/auth/login", json={"username": "charlie_other", "password": "CharlieOther2026!"})
+    charlie_token = charlie_login.json()["access_token"]
+
+    sample_csv = "age,income,risk_level\n25,50000,LOW\n45,120000,HIGH\n"
+    preview_req = {
+        "project_id": "proj_retail_pilot",
+        "dataset_name": "Test Security Preview",
+        "data_format": "CSV",
+        "provenance_category": "PROPRIETARY",
+        "raw_content": sample_csv,
+        "intended_domain": "retail",
+    }
+
+    # 1. Preview Unauthenticated -> 401
+    p_unauth = client.post("/api/v1/custom/datasets/preview", json=preview_req)
+    assert p_unauth.status_code == 401
+
+    # 2. Preview Cross-Project (Charlie is in proj_other_isolated, sending proj_retail_pilot) -> 403
+    p_cross = client.post(
+        "/api/v1/custom/datasets/preview",
+        headers={"Authorization": f"Bearer {charlie_token}"},
+        json=preview_req,
+    )
+    assert p_cross.status_code == 403
+
+    # 3. Preview Authorized (Alice is member of proj_retail_pilot) -> 200
+    p_auth = client.post(
+        "/api/v1/custom/datasets/preview",
+        headers={"Authorization": f"Bearer {alice_token}"},
+        json=preview_req,
+    )
+    assert p_auth.status_code == 200
+    assert p_auth.json()["validation_passed"] is True
+

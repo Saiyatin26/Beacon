@@ -877,7 +877,10 @@ def list_certification_artifacts(
 
 
 @app.post("/api/v1/certification/{certification_id}/verify")
-def verify_certification_artifact_endpoint(certification_id: str):
+def verify_certification_artifact_endpoint(
+    certification_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Cryptographically validates complete 8-point integrity of a certification artifact and its inputs."""
     report = certification_repository.verify_certification_run_integrity(certification_id)
     if report.get("status") == "FAIL" and any("not found" in e for e in report.get("errors", [])):
@@ -901,7 +904,11 @@ def get_certification_artifact(
 
 
 @app.get("/api/v1/certification/{certification_id}/report")
-def get_certification_report(certification_id: str, format: Literal["html", "markdown", "json"] = "html"):
+def get_certification_report(
+    certification_id: str,
+    format: Literal["html", "markdown", "json"] = "html",
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Retrieves a human-readable HTML or Markdown audit report."""
     from fastapi.responses import HTMLResponse, PlainTextResponse
 
@@ -919,7 +926,10 @@ def get_certification_report(certification_id: str, format: Literal["html", "mar
 
 
 @app.get("/api/v1/certification/{certification_id}/oracles")
-def get_certification_oracles(certification_id: str):
+def get_certification_oracles(
+    certification_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Retrieves per-oracle verification summaries for drill-down."""
     artifact = certification_repository.get_artifact(certification_id)
     if artifact is None:
@@ -928,7 +938,10 @@ def get_certification_oracles(certification_id: str):
 
 
 @app.get("/api/v1/certification/{certification_id}/counterexamples")
-def get_certification_counterexamples(certification_id: str):
+def get_certification_counterexamples(
+    certification_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Retrieves exact counterexamples / regressions produced by certification."""
     artifact = certification_repository.get_artifact(certification_id)
     if artifact is None:
@@ -964,14 +977,23 @@ def evaluate_drift_endpoint(request: DriftEvaluateRequest):
 
 
 @app.get("/api/v1/certification/{certification_id}/cases")
-def get_certification_cases(certification_id: str, limit: int = 100, offset: int = 0, classification: Optional[str] = None):
+def get_certification_cases(
+    certification_id: str,
+    limit: int = 100,
+    offset: int = 0,
+    classification: Optional[str] = None,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Retrieves paginated test cases for a certification run."""
     cases = certification_repository.list_certification_cases(certification_id, limit, offset, classification)
     return {"cases": [c.model_dump(mode="json") for c in cases]}
 
 
 @app.get("/api/v1/certification/{certification_id}/input_set")
-def get_certification_input_set(certification_id: str):
+def get_certification_input_set(
+    certification_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Retrieves the full InputSet used by a certification run."""
     artifact = certification_repository.get_artifact(certification_id)
     if not artifact:
@@ -988,6 +1010,7 @@ from fastapi.responses import JSONResponse, Response
 def export_certification_dossier(
     certification_id: str,
     format: Literal["json", "markdown", "csv"] = "json",
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Exports a complete, auditable certification dossier in JSON, Markdown, or CSV format with complete context and zero secrets."""
     artifact = certification_repository.get_artifact(certification_id)
@@ -1103,7 +1126,10 @@ def export_certification_dossier(
 
 
 @app.post("/api/v1/certification/{certification_id}/verify")
-def verify_certification_artifact(certification_id: str):
+def verify_certification_artifact(
+    certification_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Cryptographically validates complete 8-point integrity of a certification artifact and its inputs."""
     report = certification_repository.verify_certification_run_integrity(certification_id)
     if report.get("status") == "FAIL" and any("not found" in e for e in report.get("errors", [])):
@@ -1112,9 +1138,12 @@ def verify_certification_artifact(certification_id: str):
 
 
 @app.get("/api/v1/certification/{certification_id}/verify_reproducibility")
-def verify_certification_reproducibility(certification_id: str):
+def verify_certification_reproducibility(
+    certification_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Backward-compatible endpoint for checking artifact and input-set integrity."""
-    return verify_certification_artifact(certification_id)
+    return verify_certification_artifact(certification_id, current_user=current_user)
 
 
 # ==============================================================================
@@ -1168,7 +1197,10 @@ class CustomCertificationRunRequest(BaseModel):
 
 
 @app.post("/api/v1/custom/datasets/preview", response_model=DatasetPreview)
-def preview_custom_dataset(request: DatasetIngestionRequest):
+def preview_custom_dataset(
+    request: DatasetIngestionRequest,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     """Dry-run preview that parses, sanitizes, and extracts schema/checksum without persisting."""
     preview = dataset_validator.create_preview(request)
     audit_logger.log(
@@ -1424,14 +1456,17 @@ def discover_custom_oracle_set(
 def list_custom_oracle_sets(domain: Optional[str] = None):
     """Lists registered, frozen OracleSets available for explicit custom certification binding."""
     from oracle.registry import registry as oracle_reg
-    for bid in ["retail_discount_pricing", "loan_approval", "payroll_tax", "medical_triage"]:
-        try:
-            s = benchmark_registry.get_or_create_oracle_set(bid, mode="CONTROLLED")
-            if s:
-                oracle_reg.register_oracle_set(s)
-        except Exception:
-            pass
     sets = oracle_reg.list_oracle_sets(domain=domain)
+    if not sets:
+        for bid in ["retail_discount_pricing", "loan_approval", "payroll_tax", "medical_triage"]:
+            try:
+                s = benchmark_registry.get_or_create_oracle_set(bid, mode="CONTROLLED")
+                if s:
+                    oracle_reg.register_oracle_set(s)
+            except Exception:
+                pass
+        sets = oracle_reg.list_oracle_sets(domain=domain)
+
     return {
         "oracle_sets": [
             {
