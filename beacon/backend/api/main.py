@@ -876,18 +876,6 @@ def list_certification_artifacts(
     return {"artifacts": [a.model_dump(mode="json") for a in artifacts]}
 
 
-@app.post("/api/v1/certification/{certification_id}/verify")
-def verify_certification_artifact_endpoint(
-    certification_id: str,
-    current_user: User = Depends(require_project_permission(Permission.VIEW)),
-):
-    """Cryptographically validates complete 8-point integrity of a certification artifact and its inputs."""
-    report = certification_repository.verify_certification_run_integrity(certification_id)
-    if report.get("status") == "FAIL" and any("not found" in e for e in report.get("errors", [])):
-        raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
-    return report
-
-
 @app.get("/api/v1/certification/{certification_id}")
 def get_certification_artifact(
     certification_id: str,
