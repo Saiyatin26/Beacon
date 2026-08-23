@@ -27,6 +27,15 @@ const badgeStyle = (bg, color, border) => ({
   border: `1px solid ${border || bg}`,
 });
 
+
+const roleBadgeStyles = {
+  SYSTEM_ADMIN: { bg: "#fdf4ff", border: "#c084fc", color: "#6b21a8", label: "👑 System Admin" },
+  PROJECT_ADMIN: { bg: "#f0fdf4", border: "#4ade80", color: "#15803d", label: "🛡️ Project Admin" },
+  CERTIFIER: { bg: "#eff6ff", border: "#60a5fa", color: "#1d4ed8", label: "⚡ Certifier" },
+  AUDITOR: { bg: "#fff7ed", border: "#fb923c", color: "#c2410c", label: "📋 Auditor" },
+  VIEWER: { bg: "#f8fafc", border: "#94a3b8", color: "#475569", label: "👁️ Viewer" },
+};
+
 const statusBadgeStyles = {
   CERTIFIED: { bg: "#ecfdf5", border: "#10b981", color: "#065f46", text: "CERTIFIED" },
   CERTIFIED_WITH_WARNINGS: { bg: "#fffbeb", border: "#f59e0b", color: "#92400e", text: "CERTIFIED WITH WARNINGS" },
@@ -38,6 +47,107 @@ const statusBadgeStyles = {
 };
 
 export default function App() {
+  // =========================================================================
+  // Phase 17: Authentication, RBAC & Multi-Tenant Security State
+  // =========================================================================
+  const [authToken, setAuthToken] = useState(() => sessionStorage.getItem("beacon_token") || null);
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = sessionStorage.getItem("beacon_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [loginUsername, setLoginUsername] = useState("alice_certifier");
+  const [loginPassword, setLoginPassword] = useState("AliceCert2026!");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState(null);
+
+  // Authenticated API client wrapper
+  const authFetch = async (url, options = {}) => {
+    const token = authToken || sessionStorage.getItem("beacon_token");
+    const headers = { ...(options.headers || {}) };
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`;
+    }
+    const res = await authFetch(url, { ...options, headers });
+    if (res.status === 401) {
+      setAuthToken(null);
+      setCurrentUser(null);
+      sessionStorage.removeItem("beacon_token");
+      sessionStorage.removeItem("beacon_user");
+      setError("Authentication required or session expired. Please sign in.");
+    } else if (res.status === 403) {
+      const errData = await res.clone().json().catch(() => ({}));
+      setError(errData.detail || "Access Denied (403): You do not have permission for this project or operation.");
+    }
+    return res;
+  };
+
+  const userHasPermission = (permission) => {
+    if (!currentUser) return false;
+    if (currentUser.is_superuser) return true;
+    const role = currentUser.memberships?.[0]?.role;
+    if (!role) return false;
+    if (role === "SYSTEM_ADMIN" || role === "PROJECT_ADMIN") return true;
+    if (role === "CERTIFIER") return permission === "VIEW" || permission === "CERTIFY";
+    if (role === "AUDITOR") return permission === "VIEW" || permission === "AUDIT";
+    if (role === "VIEWER") return permission === "VIEW";
+    return false;
+  };
+
+  const currentRole = currentUser?.memberships?.[0]?.role || (currentUser?.is_superuser ? "SYSTEM_ADMIN" : "VIEWER");
+
+  const quickLogin = async (username, password) => {
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || "Authentication failed.");
+      }
+      const data = await res.json();
+      setAuthToken(data.access_token);
+      setCurrentUser(data.user);
+      sessionStorage.setItem("beacon_token", data.access_token);
+      sessionStorage.setItem("beacon_user", JSON.stringify(data.user));
+      setLoginModalOpen(false);
+      setNotice(`Signed in as ${data.user.full_name} (${data.user.memberships?.[0]?.role || "SYSTEM_ADMIN"})`);
+    } catch (err) {
+      setLoginError(err.message);
+    } finally {
+      setLoginBusy(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (authToken) {
+      await fetch(`${API_BASE}/api/v1/auth/logout`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${authToken}` },
+      }).catch(() => {});
+    }
+    setAuthToken(null);
+    setCurrentUser(null);
+    sessionStorage.removeItem("beacon_token");
+    sessionStorage.removeItem("beacon_user");
+    setNotice("You have signed out.");
+  };
+
+  // Auto-authenticate as default certifier on initial load if not present
+  useEffect(() => {
+    if (!authToken) {
+      quickLogin("alice_certifier", "AliceCert2026!").catch(() => {});
+    }
+  }, []);
+
   // Navigation Tabs
   const [activeTab, setActiveTab] = useState("benchmark"); // benchmark, history, audit, drift, loan_demo
 
@@ -133,7 +243,7 @@ export default function App() {
   const loadOperationsSummary = async () => {
     setOperationsLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/operations/summary`);
+      const res = await authFetch(`${API_BASE}/api/v1/operations/summary`);
       if (res.ok) {
         const data = await res.json();
         setOperationsSummary(data);
@@ -188,10 +298,10 @@ export default function App() {
     setDossierCertId(certId);
     try {
       const [dRes, eRes, gRes, nRes] = await Promise.all([
-        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}`),
-        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/explain`),
-        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/graph`),
-        fetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/notes`),
+        authFetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}`),
+        authFetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/explain`),
+        authFetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/graph`),
+        authFetch(`${API_BASE}/api/v1/evidence/dossiers/${certId}/notes`),
       ]);
       if (dRes.ok) setDossierData(await dRes.json());
       if (eRes.ok) setDossierExplanation(await eRes.json());
@@ -213,7 +323,7 @@ export default function App() {
   const handleAddAuditorNote = async () => {
     if (!dossierCertId || !newNoteContent.trim()) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/evidence/dossiers/${dossierCertId}/notes`, {
+      const res = await authFetch(`${API_BASE}/api/v1/evidence/dossiers/${dossierCertId}/notes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -237,7 +347,7 @@ export default function App() {
     setComparingRuns(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/evidence/compare`, {
+      const res = await authFetch(`${API_BASE}/api/v1/evidence/compare`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ run_id_a: compareRunA, run_id_b: compareRunB }),
@@ -266,7 +376,7 @@ export default function App() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/custom/datasets/preview`, {
+      const res = await authFetch(`${API_BASE}/api/v1/custom/datasets/preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -302,7 +412,7 @@ export default function App() {
     setNotice(null);
     invalidateCustomState();
     try {
-      const res = await fetch(`${API_BASE}/api/v1/custom/datasets/upload`, {
+      const res = await authFetch(`${API_BASE}/api/v1/custom/datasets/upload`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -337,7 +447,7 @@ export default function App() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/custom/validate`, {
+      const res = await authFetch(`${API_BASE}/api/v1/custom/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -376,7 +486,7 @@ export default function App() {
     setNotice(null);
     setCustomCryptographicProof(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/custom/certify`, {
+      const res = await authFetch(`${API_BASE}/api/v1/custom/certify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -417,7 +527,7 @@ export default function App() {
   const handleVerifyCustomIntegrity = async (certId) => {
     if (!certId) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/certification/${certId}/verify`, { method: "POST" });
+      const res = await authFetch(`${API_BASE}/api/v1/certification/${certId}/verify`, { method: "POST" });
       if (res.ok) {
         const data = await res.json();
         setCustomCryptographicProof(data);
@@ -432,7 +542,7 @@ export default function App() {
     setBenchmarksLoadingState("loading");
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/benchmarks`);
+      const res = await authFetch(`${API_BASE}/api/v1/benchmarks`);
       if (!res.ok) {
         throw new Error(`Server returned HTTP ${res.status}`);
       }
@@ -465,7 +575,7 @@ export default function App() {
       const url = benchmarkId
         ? `${API_BASE}/api/v1/certification/artifacts?benchmark_id=${benchmarkId}`
         : `${API_BASE}/api/v1/certification/artifacts`;
-      const res = await fetch(url);
+      const res = await authFetch(url);
       if (res.ok) {
         const data = await res.json();
         setHistoricalArtifacts(data.artifacts || []);
@@ -479,7 +589,7 @@ export default function App() {
   const loadDrift = async (benchmarkId) => {
     try {
       const url = benchmarkId ? `${API_BASE}/drift?benchmark_id=${benchmarkId}` : `${API_BASE}/drift`;
-      const res = await fetch(url);
+      const res = await authFetch(url);
       if (res.ok) {
         const data = await res.json();
         setDriftSamples(data.samples || []);
@@ -493,9 +603,9 @@ export default function App() {
   const loadLoanDemoData = async () => {
     try {
       const [runsRes, invRes, driftRes] = await Promise.all([
-        fetch(`${API_BASE}/runs`),
-        fetch(`${API_BASE}/demo/invariants`),
-        fetch(`${API_BASE}/drift?benchmark_id=loan`),
+        authFetch(`${API_BASE}/runs`),
+        authFetch(`${API_BASE}/demo/invariants`),
+        authFetch(`${API_BASE}/drift?benchmark_id=loan`),
       ]);
       if (runsRes.ok) {
         const d = await runsRes.json();
@@ -565,7 +675,7 @@ export default function App() {
   const targetArtifact = viewingHistoricalArtifact || activeResult;
   useEffect(() => {
     if (targetArtifact?.certification_id) {
-      fetch(`${API_BASE}/api/v1/certification/${targetArtifact.certification_id}/cases?classification=${caseFilter}`)
+      authFetch(`${API_BASE}/api/v1/certification/${targetArtifact.certification_id}/cases?classification=${caseFilter}`)
         .then((res) => res.json())
         .then((data) => setActiveCases(data.cases || []))
         .catch(console.error);
@@ -581,7 +691,7 @@ export default function App() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`${API_BASE}/api/v1/benchmarks/${selectedBenchmarkId}/validate`, {
+      const res = await authFetch(`${API_BASE}/api/v1/benchmarks/${selectedBenchmarkId}/validate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -623,7 +733,7 @@ export default function App() {
     setViewingHistoricalArtifact(null);
 
     try {
-      const res = await fetch(`${API_BASE}/api/v1/certification/run`, {
+      const res = await authFetch(`${API_BASE}/api/v1/certification/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -659,7 +769,7 @@ export default function App() {
   const verifyArtifactIntegrity = async (certId) => {
     if (!certId) return;
     try {
-      const res = await fetch(`${API_BASE}/api/v1/certification/${certId}/verify`, { method: "POST" });
+      const res = await authFetch(`${API_BASE}/api/v1/certification/${certId}/verify`, { method: "POST" });
       if (res.ok) {
         const data = await res.json();
         setCryptographicProof(data);
@@ -680,7 +790,7 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/demo/run`, {
+      const res = await authFetch(`${API_BASE}/demo/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ implementation }),
@@ -707,20 +817,140 @@ export default function App() {
   return (
     <div style={{ minHeight: "100vh", background: "#f8fafc", color: "#1e293b", fontFamily: "'Inter', sans-serif" }}>
       {/* Top Header */}
-      <header style={{ background: "#0f172a", color: "#f8fafc", padding: "16px 28px", borderBottom: "1px solid #1e293b" }}>
-        <div style={{ maxWidth: "1440px", margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+      <header style={{ background: "#0f172a", color: "#f8fafc", padding: "14px 28px", borderBottom: "1px solid #1e293b" }}>
+        <div style={{ maxWidth: "1440px", margin: "0 auto", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <span style={{ fontSize: "24px" }}>🛡️</span>
             <div>
-              <h1 style={{ margin: 0, fontSize: "20px", fontWeight: "700", letterSpacing: "-0.5px" }}>BEACON</h1>
-              <p style={{ margin: 0, fontSize: "12px", color: "#94a3b8" }}>
+              <h1 style={{ margin: 0, fontSize: "19px", fontWeight: "700", letterSpacing: "-0.5px" }}>BEACON</h1>
+              <p style={{ margin: 0, fontSize: "11px", color: "#94a3b8" }}>
                 Behavioral Equivalence Assurance & Cryptographic Oracle Notarization
               </p>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-            <span style={badgeStyle("#1e293b", "#38bdf8", "#334155")}>Phase 13 Hardened Release</span>
-            <span style={badgeStyle("#1e293b", "#a7f3d0", "#334155")}>Deterministic Reproducibility</span>
+
+          {/* Phase 17 Role Switcher & User Identity Bar */}
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+            {currentUser ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "10px", background: "#1e293b", padding: "6px 12px", borderRadius: "10px", border: "1px solid #334155" }}>
+                <span style={{ fontSize: "13px", fontWeight: "600", color: "#f1f5f9" }}>
+                  👤 {currentUser.full_name || currentUser.username}
+                </span>
+                <span style={badgeStyle(
+                  roleBadgeStyles[currentRole]?.bg || "#f1f5f9",
+                  roleBadgeStyles[currentRole]?.color || "#0f172a",
+                  roleBadgeStyles[currentRole]?.border || "#cbd5e1"
+                )}>
+                  {roleBadgeStyles[currentRole]?.label || currentRole}
+                </span>
+
+                {/* Quick Role Switcher Buttons */}
+                <div style={{ display: "flex", gap: "4px", marginLeft: "6px", borderLeft: "1px solid #475569", paddingLeft: "8px" }}>
+                  <button
+                    onClick={() => quickLogin("bob_viewer", "BobView2026!")}
+                    title="Switch to Viewer (Bob)"
+                    style={{
+                      background: currentRole === "VIEWER" ? "#2563eb" : "#334155",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "3px 7px",
+                      borderRadius: "4px",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                    }}
+                  >
+                    👁️ Viewer
+                  </button>
+                  <button
+                    onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
+                    title="Switch to Certifier (Alice)"
+                    style={{
+                      background: currentRole === "CERTIFIER" ? "#2563eb" : "#334155",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "3px 7px",
+                      borderRadius: "4px",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ⚡ Certifier
+                  </button>
+                  <button
+                    onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
+                    title="Switch to Auditor (Carol)"
+                    style={{
+                      background: currentRole === "AUDITOR" ? "#2563eb" : "#334155",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "3px 7px",
+                      borderRadius: "4px",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                    }}
+                  >
+                    📋 Auditor
+                  </button>
+                  <button
+                    onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
+                    title="Switch to Project Admin (Dave)"
+                    style={{
+                      background: currentRole === "PROJECT_ADMIN" ? "#2563eb" : "#334155",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "3px 7px",
+                      borderRadius: "4px",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                    }}
+                  >
+                    🛡️ Admin
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleLogout}
+                  style={{
+                    background: "transparent",
+                    color: "#ef4444",
+                    border: "1px solid #7f1d1d",
+                    padding: "3px 8px",
+                    borderRadius: "6px",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    marginLeft: "4px",
+                  }}
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setLoginModalOpen(true)}
+                style={{
+                  background: "#2563eb",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "6px 14px",
+                  borderRadius: "8px",
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  cursor: "pointer",
+                }}
+              >
+                🔐 Sign In / Change Role
+              </button>
+            )}
+
+            <div style={{ display: "flex", gap: "6px" }}>
+              <span style={badgeStyle("#1e293b", "#38bdf8", "#334155")}>Phase 17 RBAC</span>
+              <span style={badgeStyle("#1e293b", "#a7f3d0", "#334155")}>Multi-Tenant</span>
+            </div>
           </div>
         </div>
       </header>
@@ -3152,6 +3382,175 @@ export default function App() {
           </div>
         )}
       </main>
+  
+      {/* Phase 17 Authentication & Login Modal */}
+      {loginModalOpen && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: "rgba(15, 23, 42, 0.75)",
+          backdropFilter: "blur(4px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          zIndex: 9999,
+        }}>
+          <div style={{
+            background: "#ffffff",
+            borderRadius: "16px",
+            padding: "28px",
+            width: "440px",
+            maxWidth: "90vw",
+            boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.2)",
+            border: "1px solid #e2e8f0",
+          }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <span style={{ fontSize: "24px" }}>🔐</span>
+                <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#0f172a" }}>Sign In to BEACON</h3>
+              </div>
+              <button
+                onClick={() => setLoginModalOpen(false)}
+                style={{ background: "transparent", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748b" }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ margin: "0 0 16px 0", fontSize: "13px", color: "#64748b" }}>
+              Authenticate with your credentials or select a quick demo profile to evaluate role-based access controls.
+            </p>
+
+            {loginError && (
+              <div style={{ background: "#fef2f2", border: "1px solid #ef4444", color: "#991b1b", padding: "10px", borderRadius: "8px", fontSize: "12px", marginBottom: "16px" }}>
+                ⚠️ {loginError}
+              </div>
+            )}
+
+            {/* Quick Demo Profiles */}
+            <div style={{ marginBottom: "18px" }}>
+              <div style={{ fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "8px" }}>1-Click Demo Profiles:</div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
+                  disabled={loginBusy}
+                  style={{
+                    background: "#eff6ff",
+                    border: "1px solid #60a5fa",
+                    color: "#1d4ed8",
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  ⚡ Alice (Certifier)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => quickLogin("bob_viewer", "BobView2026!")}
+                  disabled={loginBusy}
+                  style={{
+                    background: "#f8fafc",
+                    border: "1px solid #94a3b8",
+                    color: "#475569",
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  👁️ Bob (Viewer)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
+                  disabled={loginBusy}
+                  style={{
+                    background: "#fff7ed",
+                    border: "1px solid #fb923c",
+                    color: "#c2410c",
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  📋 Carol (Auditor)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
+                  disabled={loginBusy}
+                  style={{
+                    background: "#f0fdf4",
+                    border: "1px solid #4ade80",
+                    color: "#15803d",
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    textAlign: "left",
+                  }}
+                >
+                  🛡️ Dave (Admin)
+                </button>
+              </div>
+            </div>
+
+            <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "14px", marginTop: "14px" }}>
+              <div style={{ fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "8px" }}>Custom Credentials:</div>
+              <div style={{ marginBottom: "10px" }}>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "4px" }}>Username</label>
+                <input
+                  type="text"
+                  value={loginUsername}
+                  onChange={(e) => setLoginUsername(e.target.value)}
+                  style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                />
+              </div>
+              <div style={{ marginBottom: "16px" }}>
+                <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#64748b", marginBottom: "4px" }}>Password</label>
+                <input
+                  type="password"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => quickLogin(loginUsername, loginPassword)}
+                disabled={loginBusy}
+                style={{
+                  width: "100%",
+                  background: "#2563eb",
+                  color: "#ffffff",
+                  border: "none",
+                  padding: "10px",
+                  borderRadius: "8px",
+                  fontSize: "13px",
+                  fontWeight: "600",
+                  cursor: loginBusy ? "not-allowed" : "pointer",
+                }}
+              >
+                {loginBusy ? "Authenticating..." : "Sign In"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
