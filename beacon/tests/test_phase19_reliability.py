@@ -27,9 +27,11 @@ from operations import (
     CertificationJob,
     certification_job_tracker,
     operational_metrics,
+    IdempotencyManager,
     idempotency_manager,
     classify_failure,
     execute_with_retry,
+
     with_timeout,
     recover_interrupted_operations,
     StateTransitionError,
@@ -610,39 +612,210 @@ def test_timeout_stale_worker_cannot_write_success():
 def test_concurrent_idempotency_same_key_single_execution(client, member_token_proj_a):
     """Verifies that two concurrent requests with the same idempotency key execute exactly
     one certification run, and do not execute duplicate background work.
+    Asserts deterministically that execution_count == 1.
     """
     import concurrent.futures
+    import threading
+    from certification import certification_engine
+
+    original_certify = certification_engine.certify
+
+    execution_count = 0
+    exec_lock = threading.Lock()
+
+    first_started = threading.Event()
+    allow_first_to_finish = threading.Event()
+
+    def instrumented_certify(*args, **kwargs):
+        nonlocal execution_count
+        with exec_lock:
+            execution_count += 1
+        first_started.set()
+        # Hold execution until the second request has definitely reached the idempotency check
+        allow_first_to_finish.wait(timeout=5.0)
+        return original_certify(*args, **kwargs)
 
     run_payload = {
         "benchmark_id": "loan_demo",
         "evaluation_mode": "CONTROLLED",
         "target_variant": "clean",
-        "idempotency_key": "CONCURRENT-IDEM-KEY-001",
+        "idempotency_key": "CONCURRENT-EXEC-ONCE-KEY",
         "force_recompute": False,
     }
 
-    def make_request():
+    def make_req_a():
         return client.post(
             "/api/v1/certification/run?project_id=proj_a",
             json=run_payload,
             headers={"Authorization": f"Bearer {member_token_proj_a}"},
         )
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(make_request)
-        f2 = executor.submit(make_request)
-        r1 = f1.result(timeout=15.0)
-        r2 = f2.result(timeout=15.0)
+    def make_req_b():
+        # Ensure Request A is actively holding the IN_PROGRESS state in database
+        first_started.wait(timeout=5.0)
+        res = client.post(
+            "/api/v1/certification/run?project_id=proj_a",
+            json=run_payload,
+            headers={"Authorization": f"Bearer {member_token_proj_a}"},
+        )
+        allow_first_to_finish.set()
+        return res
+
+    try:
+        certification_engine.certify = instrumented_certify
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            f1 = executor.submit(make_req_a)
+            f2 = executor.submit(make_req_b)
+            r1 = f1.result(timeout=15.0)
+            r2 = f2.result(timeout=15.0)
+    finally:
+        allow_first_to_finish.set()
+        certification_engine.certify = original_certify
 
     # Both requests must return valid status (200 OK or 202 In-Progress)
     assert r1.status_code in (200, 202)
     assert r2.status_code in (200, 202)
 
-    # At least one request got 200 with completed artifact
-    res_200 = r1.json() if r1.status_code == 200 else r2.json()
-    assert "certification_id" in res_200
-    assert res_200["benchmark_id"] == "loan_demo"
+    # CRITICAL INVARIANT: The underlying certification execution happened EXACTLY ONCE
+    assert execution_count == 1, f"Expected certify() to be called exactly once, but was called {execution_count} times."
 
+
+def test_failed_idempotency_record_not_treated_as_in_progress(client, member_token_proj_a):
+    """Verifies that a previously failed operation is explicitly returned as FAILED
+    and is NEVER incorrectly treated as IN_PROGRESS.
+    """
+    key = "FAILED-IDEM-TEST-KEY-001"
+    run_payload = {
+        "benchmark_id": "loan_demo",
+        "evaluation_mode": "CONTROLLED",
+        "target_variant": "clean",
+        "idempotency_key": key,
+        "force_recompute": False,
+    }
+
+    # 1. Simulate an initial operation that records a failure
+    idempotency_manager.check_or_reserve(
+        project_id="proj_a",
+        endpoint="/api/v1/certification/run",
+        idempotency_key=key,
+        request_payload=run_payload,
+    )
+    idempotency_manager.record_failed(
+        project_id="proj_a",
+        endpoint="/api/v1/certification/run",
+        idempotency_key=key,
+        request_payload=run_payload,
+        error_message="Simulated dependency failure during probe execution",
+        status_code=500,
+    )
+
+    # 2. Second request with the same idempotency key and same payload
+    cached_data, cached_status = idempotency_manager.check_or_reserve(
+        project_id="proj_a",
+        endpoint="/api/v1/certification/run",
+        idempotency_key=key,
+        request_payload=run_payload,
+    )
+
+    # Must return the stored failure and status code 500
+    assert cached_status == 500
+    assert cached_data is not None
+    assert cached_data.get("status") == "FAILED"
+    assert cached_data.get("status") != "IN_PROGRESS"
+    assert "Simulated dependency failure" in cached_data.get("detail", "")
+
+
+def test_failed_idempotency_different_payload_returns_409(client, member_token_proj_a):
+    """Verifies that reusing a failed operation's idempotency key with a DIFFERENT payload
+    is still rejected with HTTP 409 Conflict.
+    """
+    key = "FAILED-IDEM-CONFLICT-KEY-002"
+    payload_1 = {"benchmark_id": "loan_demo", "target_variant": "clean"}
+    payload_2 = {"benchmark_id": "loan_demo", "target_variant": "buggy_rate"}
+
+    idempotency_manager.check_or_reserve(
+        project_id="proj_a",
+        endpoint="/api/v1/certification/run",
+        idempotency_key=key,
+        request_payload=payload_1,
+    )
+    idempotency_manager.record_failed(
+        project_id="proj_a",
+        endpoint="/api/v1/certification/run",
+        idempotency_key=key,
+        request_payload=payload_1,
+        error_message="Failure 1",
+    )
+
+    # Reusing the same key with different payload must raise IdempotencyConflictError (409)
+    with pytest.raises(IdempotencyConflictError):
+        idempotency_manager.check_or_reserve(
+            project_id="proj_a",
+            endpoint="/api/v1/certification/run",
+            idempotency_key=key,
+            request_payload=payload_2,
+        )
+
+
+def test_database_atomic_reservation_prevents_duplicate_ownership():
+    """Verifies that SQLite unique constraint on PRIMARY KEY prevents two concurrent callers
+    from both becoming the reservation owner, without relying on in-process threading locks.
+    """
+    import tempfile
+    import os
+
+    # Create a temporary SQLite database to test raw DB-level isolation
+    with tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False) as tf:
+        temp_db = tf.name
+
+    try:
+        mgr1 = IdempotencyManager(db_path=temp_db)
+        mgr2 = IdempotencyManager(db_path=temp_db)
+
+        # mgr1 clears its in-memory cache to force pure DB check
+        mgr1._memory_cache.clear()
+        mgr2._memory_cache.clear()
+
+        payload = {"data": "test_atomic_reservation"}
+
+        # First reservation: mgr1 becomes owner
+        res1, status1 = mgr1.check_or_reserve(
+            project_id="proj_atomic",
+            endpoint="/api/v1/test",
+            idempotency_key="ATOMIC-KEY-1",
+            request_payload=payload,
+        )
+        assert res1 is None and status1 is None  # Winner/owner receives (None, None)
+
+        # Clear mgr2's in-memory cache to simulate an independent OS process
+        mgr2._memory_cache.clear()
+
+        # Second reservation: mgr2 attempts to reserve same key -> DB conflict detected
+        res2, status2 = mgr2.check_or_reserve(
+            project_id="proj_atomic",
+            endpoint="/api/v1/test",
+            idempotency_key="ATOMIC-KEY-1",
+            request_payload=payload,
+            wait_timeout=0.2,
+        )
+
+        # mgr2 must NOT become owner; receives IN_PROGRESS (202) rather than (None, None)
+        assert status2 == 202
+        assert res2["status"] == "IN_PROGRESS"
+
+        # Verify the database row was NOT replaced or corrupted
+        with sqlite3.connect(temp_db) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as cnt FROM operations_idempotency WHERE idempotency_key = 'ATOMIC-KEY-1'")
+            row = cursor.fetchone()
+            assert row["cnt"] == 1
+    finally:
+        if os.path.exists(temp_db):
+            try:
+                os.remove(temp_db)
+            except Exception:
+                pass
 
 
 def test_real_dependency_transient_retry_success():
@@ -704,5 +877,6 @@ def test_real_dependency_permanent_failure_no_retry():
 
     assert attempts == 1
     assert exc_info.value.code == 401
+
 
 

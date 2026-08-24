@@ -782,7 +782,10 @@ def run_certification_v1(
                 request_payload=request,
             )
             if cached_data is not None:
+                if cached_status and cached_status != 200:
+                    return JSONResponse(status_code=cached_status, content=cached_data)
                 return cached_data
+
 
         existing_artifact = certification_repository.get_by_request_identity(request_identity, project_id=proj_id)
         if existing_artifact is None:
@@ -1949,7 +1952,10 @@ def run_custom_certification(
                 request_payload=req,
             )
             if cached_data is not None:
+                if cached_status and cached_status != 200:
+                    return JSONResponse(status_code=cached_status, content=cached_data)
                 return cached_data
+
 
         existing_artifact = certification_repository.get_by_request_identity(request_identity)
         if existing_artifact is not None:

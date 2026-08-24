@@ -11,7 +11,9 @@ import logging
 from pathlib import Path
 import sqlite3
 import threading
+import time
 from typing import Any, Optional, Tuple
+
 
 from .errors import IdempotencyConflictError
 from .logging_config import log_operational_event, scrub_secrets
@@ -107,7 +109,7 @@ class IdempotencyManager:
         """Checks if an operation has already been executed or is currently running with this idempotency key.
 
         Returns:
-            (response_data, status_code) if cached completed result exists or in-progress status,
+            (response_data, status_code) if cached completed/failed result exists or in-progress status,
             (None, None) if this is a new operation reserved for execution by the caller.
 
         Raises:
@@ -118,36 +120,74 @@ class IdempotencyManager:
 
         scoped_key = self._make_scoped_key(project_id, endpoint, idempotency_key)
         req_hash = compute_canonical_request_hash(request_payload)
+        now = datetime.now(timezone.utc).isoformat()
         event_to_wait: Optional[threading.Event] = None
 
         with self._lock:
-            # 1. Check in-memory cache
-            entry = self._memory_cache.get(scoped_key)
+            # 1. Attempt atomic DB-level reservation using unique PRIMARY KEY insert (no INSERT OR REPLACE)
+            is_owner = False
+            try:
+                with sqlite3.connect(self._db_path, timeout=10.0) as conn:
+                    conn.execute("""
+                        INSERT INTO operations_idempotency (
+                            scoped_key, project_id, endpoint, idempotency_key,
+                            request_hash, status, response_json, status_code, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, 'IN_PROGRESS', NULL, NULL, ?, ?)
+                    """, (
+                        scoped_key, project_id, endpoint, idempotency_key,
+                        req_hash, now, now
+                    ))
+                    conn.commit()
+                is_owner = True
+            except sqlite3.IntegrityError:
+                # Key already exists in database; this is a duplicate or subsequent request
+                is_owner = False
+            except Exception as exc:
+                logger.warning(f"Error during atomic idempotency reservation: {exc}")
+                if scoped_key not in self._memory_cache:
+                    is_owner = True
 
-            # 2. Check SQLite database if not in memory
-            if not entry:
-                try:
-                    with sqlite3.connect(self._db_path) as conn:
-                        conn.row_factory = sqlite3.Row
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            "SELECT * FROM operations_idempotency WHERE scoped_key = ?",
-                            (scoped_key,),
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            entry = dict(row)
-                            self._memory_cache[scoped_key] = entry
-                except Exception as exc:
-                    logger.warning(f"Error querying operations_idempotency: {exc}")
-
-            if not entry:
-                # First time seeing this key: atomically reserve in-progress
-                self._reserve_in_progress(scoped_key, project_id, endpoint, idempotency_key, req_hash)
+            if is_owner:
+                # First time seeing this key: caller becomes the single reservation owner
+                self._memory_cache[scoped_key] = {
+                    "scoped_key": scoped_key,
+                    "project_id": project_id,
+                    "endpoint": endpoint,
+                    "idempotency_key": idempotency_key,
+                    "request_hash": req_hash,
+                    "status": "IN_PROGRESS",
+                    "response_json": None,
+                    "status_code": None,
+                    "created_at": now,
+                    "updated_at": now,
+                }
                 self._completion_events[scoped_key] = threading.Event()
                 return None, None
 
-            # 3. Key exists: compare canonical request hash
+            # 2. Key exists: load existing row from SQLite
+            entry = None
+            try:
+                with sqlite3.connect(self._db_path, timeout=10.0) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT * FROM operations_idempotency WHERE scoped_key = ?",
+                        (scoped_key,),
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        entry = dict(row)
+                        self._memory_cache[scoped_key] = entry
+            except Exception as exc:
+                logger.warning(f"Error querying operations_idempotency: {exc}")
+
+            if not entry:
+                entry = self._memory_cache.get(scoped_key)
+
+            if not entry:
+                return None, None
+
+            # 3. Compare canonical request hash: different payload -> 409 Conflict
             stored_hash = entry["request_hash"]
             if stored_hash != req_hash:
                 err_msg = (
@@ -178,8 +218,11 @@ class IdempotencyManager:
                     },
                 )
 
-            # 4. Same request hash: if COMPLETED, return cached response
-            if entry.get("status") == "COMPLETED" and entry.get("response_json"):
+            # 4. Same request hash: inspect status
+            status = entry.get("status")
+
+            # 4a. COMPLETED: return cached successful response
+            if status == "COMPLETED" and entry.get("response_json"):
                 try:
                     cached_data = json.loads(entry["response_json"])
                     status_code = entry.get("status_code", 200)
@@ -195,45 +238,103 @@ class IdempotencyManager:
                 except Exception as exc:
                     logger.warning(f"Failed to decode cached idempotency response: {exc}")
 
-            # 5. Same request hash and IN_PROGRESS: concurrent duplicate request!
-            # Coordinate with winning in-progress thread
+            # 4b. FAILED: return stored failure explicitly (never treat as IN_PROGRESS!)
+            if status == "FAILED":
+                failed_data = {}
+                if entry.get("response_json"):
+                    try:
+                        failed_data = json.loads(entry["response_json"])
+                    except Exception:
+                        failed_data = {"status": "FAILED", "detail": "Prior operation failed."}
+                else:
+                    failed_data = {"status": "FAILED", "detail": "Prior operation failed."}
+                status_code = entry.get("status_code", 500)
+                log_operational_event(
+                    event="idempotent_failure_replayed",
+                    project_id=project_id,
+                    level=logging.WARNING,
+                    logger_name="beacon.idempotency",
+                    outcome="FAILED_REPLAYED",
+                    message=f"Replayed existing failed status for idempotency key '{idempotency_key}'",
+                )
+                return failed_data, status_code
+
+            # 4c. IN_PROGRESS: concurrent duplicate request!
             event_to_wait = self._completion_events.get(scoped_key)
             if not event_to_wait:
                 event_to_wait = threading.Event()
                 self._completion_events[scoped_key] = event_to_wait
 
-        # Outside the lock: wait for the winning in-progress thread to complete
+        # Outside the lock: wait for the winning in-progress thread/process to complete
         if event_to_wait is not None:
             logger.info(
                 f"Concurrent duplicate request for idempotency key '{idempotency_key}' "
                 f"waiting up to {wait_timeout}s for in-progress operation to complete."
             )
-            event_to_wait.wait(timeout=wait_timeout)
+            poll_interval = 0.05
+            elapsed = 0.0
+            while elapsed < wait_timeout:
+                if event_to_wait.is_set():
+                    break
+                time.sleep(poll_interval)
+                elapsed += poll_interval
 
-            # Re-check state after waiting
-            with self._lock:
-                try:
-                    with sqlite3.connect(self._db_path) as conn:
-                        conn.row_factory = sqlite3.Row
-                        cursor = conn.cursor()
-                        cursor.execute(
-                            "SELECT * FROM operations_idempotency WHERE scoped_key = ?",
-                            (scoped_key,),
-                        )
-                        row = cursor.fetchone()
-                        if row:
-                            entry = dict(row)
-                            self._memory_cache[scoped_key] = entry
-                except Exception as exc:
-                    logger.warning(f"Error querying operations_idempotency: {exc}")
-
-                if entry.get("status") == "COMPLETED" and entry.get("response_json"):
+                # Periodic DB check for cross-process completion
+                with self._lock:
                     try:
-                        cached_data = json.loads(entry["response_json"])
-                        status_code = entry.get("status_code", 200)
-                        return cached_data, status_code
+                        with sqlite3.connect(self._db_path, timeout=5.0) as conn:
+                            conn.row_factory = sqlite3.Row
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT * FROM operations_idempotency WHERE scoped_key = ?",
+                                (scoped_key,),
+                            )
+                            row = cursor.fetchone()
+                            if row:
+                                entry = dict(row)
+                                self._memory_cache[scoped_key] = entry
+                                if entry.get("status") in ("COMPLETED", "FAILED"):
+                                    break
                     except Exception:
                         pass
+
+            # Final check of state after waiting
+            with self._lock:
+                entry = self._memory_cache.get(scoped_key)
+                if not entry:
+                    try:
+                        with sqlite3.connect(self._db_path, timeout=5.0) as conn:
+                            conn.row_factory = sqlite3.Row
+                            cursor = conn.cursor()
+                            cursor.execute(
+                                "SELECT * FROM operations_idempotency WHERE scoped_key = ?",
+                                (scoped_key,),
+                            )
+                            row = cursor.fetchone()
+                            if row:
+                                entry = dict(row)
+                                self._memory_cache[scoped_key] = entry
+                    except Exception:
+                        pass
+
+                if entry:
+                    if entry.get("status") == "COMPLETED" and entry.get("response_json"):
+                        try:
+                            cached_data = json.loads(entry["response_json"])
+                            status_code = entry.get("status_code", 200)
+                            return cached_data, status_code
+                        except Exception:
+                            pass
+                    elif entry.get("status") == "FAILED":
+                        failed_data = {}
+                        if entry.get("response_json"):
+                            try:
+                                failed_data = json.loads(entry["response_json"])
+                            except Exception:
+                                failed_data = {"status": "FAILED", "detail": "Prior operation failed."}
+                        else:
+                            failed_data = {"status": "FAILED", "detail": "Prior operation failed."}
+                        return failed_data, entry.get("status_code", 500)
 
                 # If still IN_PROGRESS after wait, return 202 Accepted (NEVER return None to prevent duplicate execution)
                 return (
@@ -247,43 +348,6 @@ class IdempotencyManager:
 
         return None, None
 
-    def _reserve_in_progress(
-        self,
-        scoped_key: str,
-        project_id: str,
-        endpoint: str,
-        idempotency_key: str,
-        request_hash: str,
-    ) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        entry = {
-            "scoped_key": scoped_key,
-            "project_id": project_id,
-            "endpoint": endpoint,
-            "idempotency_key": idempotency_key,
-            "request_hash": request_hash,
-            "status": "IN_PROGRESS",
-            "response_json": None,
-            "status_code": None,
-            "created_at": now,
-            "updated_at": now,
-        }
-        self._memory_cache[scoped_key] = entry
-        try:
-            with sqlite3.connect(self._db_path) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO operations_idempotency (
-                        scoped_key, project_id, endpoint, idempotency_key,
-                        request_hash, status, response_json, status_code, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    scoped_key, project_id, endpoint, idempotency_key,
-                    request_hash, "IN_PROGRESS", None, None, now, now
-                ))
-                conn.commit()
-        except Exception as exc:
-            logger.warning(f"Could not reserve idempotency record: {exc}")
-
     def record_completed(
         self,
         project_id: str,
@@ -293,7 +357,7 @@ class IdempotencyManager:
         response_data: Any,
         status_code: int = 200,
     ) -> None:
-        """Atomically saves the completed response for an idempotency key."""
+        """Atomically updates the record to COMPLETED."""
         if not idempotency_key:
             return
 
@@ -326,16 +390,12 @@ class IdempotencyManager:
             self._memory_cache[scoped_key] = entry
 
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with sqlite3.connect(self._db_path, timeout=10.0) as conn:
                     conn.execute("""
-                        INSERT OR REPLACE INTO operations_idempotency (
-                            scoped_key, project_id, endpoint, idempotency_key,
-                            request_hash, status, response_json, status_code, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        scoped_key, project_id, endpoint, idempotency_key,
-                        req_hash, "COMPLETED", resp_json, status_code, now, now
-                    ))
+                        UPDATE operations_idempotency
+                        SET status = 'COMPLETED', response_json = ?, status_code = ?, updated_at = ?
+                        WHERE scoped_key = ?
+                    """, (resp_json, status_code, now, scoped_key))
                     conn.commit()
             except Exception as exc:
                 logger.warning(f"Could not persist completed idempotency record: {exc}")
@@ -352,15 +412,22 @@ class IdempotencyManager:
         idempotency_key: Optional[str],
         request_payload: Any,
         error_message: str = "Operation failed",
+        status_code: int = 500,
     ) -> None:
-        """Atomically saves the failure status and wakes up waiting concurrent requests."""
+        """Atomically updates the record to FAILED and wakes up waiting concurrent requests."""
         if not idempotency_key:
             return
 
         scoped_key = self._make_scoped_key(project_id, endpoint, idempotency_key)
         req_hash = compute_canonical_request_hash(request_payload)
         now = datetime.now(timezone.utc).isoformat()
-        err_json = json.dumps({"error": error_message})
+        safe_msg = scrub_secrets(str(error_message))
+        err_data = {
+            "status": "FAILED",
+            "detail": safe_msg,
+            "idempotency_key": idempotency_key,
+        }
+        err_json = json.dumps(err_data)
 
         with self._lock:
             entry = {
@@ -371,23 +438,19 @@ class IdempotencyManager:
                 "request_hash": req_hash,
                 "status": "FAILED",
                 "response_json": err_json,
-                "status_code": 500,
+                "status_code": status_code,
                 "created_at": now,
                 "updated_at": now,
             }
             self._memory_cache[scoped_key] = entry
 
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with sqlite3.connect(self._db_path, timeout=10.0) as conn:
                     conn.execute("""
-                        INSERT OR REPLACE INTO operations_idempotency (
-                            scoped_key, project_id, endpoint, idempotency_key,
-                            request_hash, status, response_json, status_code, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        scoped_key, project_id, endpoint, idempotency_key,
-                        req_hash, "FAILED", err_json, 500, now, now
-                    ))
+                        UPDATE operations_idempotency
+                        SET status = 'FAILED', response_json = ?, status_code = ?, updated_at = ?
+                        WHERE scoped_key = ?
+                    """, (err_json, status_code, now, scoped_key))
                     conn.commit()
             except Exception as exc:
                 logger.warning(f"Could not persist failed idempotency record: {exc}")
@@ -403,7 +466,7 @@ class IdempotencyManager:
             self._memory_cache.clear()
             self._completion_events.clear()
             try:
-                with sqlite3.connect(self._db_path) as conn:
+                with sqlite3.connect(self._db_path, timeout=10.0) as conn:
                     conn.execute("DELETE FROM operations_idempotency")
                     conn.commit()
             except Exception as exc:
@@ -412,4 +475,5 @@ class IdempotencyManager:
 
 # Module-level singleton
 idempotency_manager = IdempotencyManager()
+
 
