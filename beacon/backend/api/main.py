@@ -53,6 +53,8 @@ from oracle import registry, compile_candidate_to_oracle, OracleCompilationError
 from oracle.models import OracleSet
 from benchmarks.models import BenchmarkValidationResult
 
+from contextlib import asynccontextmanager
+
 from operations import (
     check_liveness,
     check_readiness,
@@ -60,6 +62,7 @@ from operations import (
     get_version_info,
     validate_startup_configuration,
     setup_structured_logging,
+    recover_interrupted_operations,
     RequestCorrelationMiddleware,
     WorkloadLimiterMiddleware,
     register_error_handlers,
@@ -97,50 +100,24 @@ FIELD_BOUNDS = {
     "annual_income": (10_000, 150_000),
 }
 
-app = FastAPI(title="BEACON API", version="0.2.0")
 
-# Phase 16 Middlewares
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=True,
-)
-app.add_middleware(RequestCorrelationMiddleware)
-app.add_middleware(WorkloadLimiterMiddleware)
-
-# Phase 17 Security Headers Middleware
-@app.middleware("http")
-async def security_headers_middleware(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    return response
-
-# Phase 16 Error Handlers
-register_error_handlers(app)
-
-# Phase 17 Authentication & RBAC Routes
-app.include_router(auth_router)
-
-
-@app.on_event("startup")
-def on_startup():
-    """Application startup: initializes structured logging, validates config,
-    and pre-loads controlled OracleSets into the oracle registry so that
-    /health/ready can be read-only (no state mutation in health checks).
-    """
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Modern FastAPI application lifespan context manager for startup & shutdown."""
+    # 1. Structured logging initialization
     setup_structured_logging()
+
+    # 2. Hardened configuration validation (fail-closed in production)
+    settings.validate(raise_on_error=(settings.beacon_env in ("production", "staging")))
     validate_startup_configuration()
-    # Pre-load controlled OracleSets so that /health/ready is purely read-only.
-    # benchmark_registry.refresh() is already called in __init__, which calls
-    # resolve_controlled_oracle_set() for every benchmark, registering them.
-    # This explicit call ensures OracleSets are available even if refresh() was
-    # called before the oracle registry was fully wired.
+
+    # 3. Safe interrupted operations recovery
+    try:
+        recover_interrupted_operations()
+    except Exception as _exc:
+        logger.warning(f"Startup interrupted operation recovery encountered non-fatal error: {_exc}")
+
+    # 4. Pre-load controlled OracleSets for read-only /health/ready
     try:
         from benchmarks import benchmark_registry as _br
         from oracle.registry import registry as _or
@@ -153,6 +130,51 @@ def on_startup():
                 logger.debug(f"Startup oracle pre-load for {_bench.benchmark_id}: {_exc}")
     except Exception as _exc:
         logger.warning(f"Startup oracle pre-load failed: {_exc}")
+
+    logger.info(f"BEACON v{settings.beacon_version} operational and ready [Environment: {settings.beacon_env}]")
+    yield
+
+    # 5. Graceful shutdown
+    logger.info("BEACON server shutdown initiated. Performing graceful cleanup...")
+    try:
+        operational_metrics.get_snapshot()
+    except Exception:
+        pass
+    logger.info("BEACON server shutdown completed cleanly.")
+
+
+app = FastAPI(title="BEACON API", version=settings.beacon_version, lifespan=lifespan)
+
+# Phase 16 Middlewares
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+    allow_credentials=True,
+)
+app.add_middleware(RequestCorrelationMiddleware)
+app.add_middleware(WorkloadLimiterMiddleware)
+
+# Phase 17 & 20 Security Headers & API Version Middleware
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["X-Beacon-Version"] = settings.beacon_version
+    return response
+
+
+# Phase 16 Error Handlers
+register_error_handlers(app)
+
+# Phase 17 Authentication & RBAC Routes
+app.include_router(auth_router)
+
 
 
 class DemoRunRequest(BaseModel):
@@ -224,6 +246,8 @@ def version_endpoint():
 
 
 @app.get("/health/live")
+@app.get("/live")
+@app.get("/api/v1/health/live")
 def liveness_endpoint():
     """Liveness probe: answers if BEACON process is running and responsive."""
     res = check_liveness()
@@ -231,6 +255,8 @@ def liveness_endpoint():
 
 
 @app.get("/health/ready")
+@app.get("/ready")
+@app.get("/api/v1/health/ready")
 def readiness_endpoint():
     """Readiness probe: answers if BEACON is currently able to accept certification work."""
     res = check_readiness()
@@ -240,6 +266,7 @@ def readiness_endpoint():
 
 
 @app.get("/health/details")
+@app.get("/api/v1/health/details")
 def health_details_endpoint(
     current_user: User = Depends(require_system_admin),
 ):
@@ -249,15 +276,19 @@ def health_details_endpoint(
 
 
 @app.get("/health")
+@app.get("/api/v1/health")
 def health():
-    """Legacy health endpoint for backwards compatibility."""
+    """Standard health endpoint returning liveness, readiness, version, and environment."""
     readiness = check_readiness()
     return {
         "status": "ok" if readiness.status == "READY" else "degraded",
         "liveness": "UP",
         "readiness": readiness.status,
+        "version": settings.beacon_version,
+        "environment": settings.beacon_env,
         "storage": "local SQLite",
     }
+
 
 
 @app.get("/api/v1/operations/system-metrics")

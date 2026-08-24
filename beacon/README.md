@@ -200,11 +200,14 @@ beacon/
 │   │   ├── models.py              DriftObservation, DriftEvent, DriftPolicy
 │   │   └── evaluator.py           Runtime observation evaluation against frozen OracleSet
 │   ├── cli.py             BEACON Command Line Interface
-│   └── api/               FastAPI REST API wiring all stages with audit & export endpoints
+│   └── api/               FastAPI REST API with modern lifespan, health/readiness probes & audit exports
 ├── frontend/              React + Vite + Recharts dashboard with 9-Step Production Workflow & Audit Trail
 ├── docs/                  Baseline documentation & architectural verification
+├── DEPLOYMENT.md          Comprehensive production deployment & topology guide
+├── RELEASE_CHECKLIST.md   Production release candidate verification checklist
+├── BACKUP_AND_RECOVERY.md SQLite backup, WAL snapshots & disaster recovery guide
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (192 passed tests)
+└── tests/                 Comprehensive pytest test suite (369+ passed tests)
 ```
 
 ---
@@ -215,12 +218,12 @@ beacon/
 ```powershell
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
 ### 2. Backend & Dashboard
 ```powershell
-# Terminal 1: Backend API
+# Terminal 1: Backend API (Development Mode)
 .\.venv\Scripts\python.exe -m uvicorn backend.api.main:app --reload --port 8000
 
 # Terminal 2: Frontend Dashboard
@@ -234,8 +237,12 @@ npm.cmd run dev
 .\.venv\Scripts\python.exe -m backend.cli certify --implementation buggy --format text
 ```
 
-### 4. Run Test Suite & Demo Pipeline
+### 4. Run Test Suite & Production Build
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -v
-.\.venv\Scripts\python.exe scripts/run_demo_pipeline.py
+# Run full automated test suite
+python -m pytest -q tests
+
+# Run frontend production build
+cd frontend && npm run build
 ```
+

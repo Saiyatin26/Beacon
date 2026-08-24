@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 
-// Environment-based API Base URL with safe development fallback
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+// Environment-based API Base URL with safe production & development defaults
+const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? "" : "http://localhost:8000");
+
 
 // Reusable Design Tokens & Styles
 const cardStyle = {

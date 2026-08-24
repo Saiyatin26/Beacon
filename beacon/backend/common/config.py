@@ -3,12 +3,37 @@ reading os.environ directly, so tuning the scoring defaults means editing .env,
 not hunting through every module."""
 
 import os
+from pathlib import Path
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
 
+BEACON_VERSION = "1.0.0"
+
+KNOWN_INSECURE_SECRETS = {
+    "",
+    "CHANGE_ME",
+    "secret",
+    "default_secret",
+    "jwt_secret_key",
+    "insecure-dev-key",
+    "your-secret-key-here",
+    "placeholder",
+}
+
+
+class ConfigurationError(ValueError):
+    """Raised when application configuration fails validation in production or development."""
+    pass
+
 
 class Settings:
+    """Centralized, hardened configuration settings for BEACON with environment validation."""
+
+    # Environment Mode: 'development', 'test', 'production'
+    beacon_env: str = os.getenv("BEACON_ENV", "development").lower()
+
     # Multi-Provider LLM Configuration (Phases 6 & 7 Provider Decoupling)
     llm_provider: str = os.getenv("LLM_PROVIDER", "auto").lower()
     allow_auto_fallback: bool = os.getenv("ALLOW_AUTO_FALLBACK", "true").lower() in ("true", "1", "yes")
@@ -50,7 +75,9 @@ class Settings:
     max_input_records: int = int(os.getenv("MAX_INPUT_RECORDS", "5000"))
     max_request_body_bytes: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(15 * 1024 * 1024)))
     max_concurrent_jobs: int = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))
-    beacon_env: str = os.getenv("BEACON_ENV", "production")
+
+    # Database Path
+    database_path: Optional[str] = os.getenv("BEACON_DATABASE_PATH", None)
 
     # CORS Allowed Origins
     cors_origins: list[str] = [
@@ -72,7 +99,7 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
     slow_request_threshold_ms: float = float(os.getenv("SLOW_REQUEST_THRESHOLD_MS", "2000.0"))
     metrics_enabled: bool = os.getenv("METRICS_ENABLED", "true").lower() in ("true", "1", "yes")
-    beacon_version: str = os.getenv("BEACON_VERSION", os.getenv("BUILD_VERSION", "1.0.0"))
+    beacon_version: str = os.getenv("BEACON_VERSION", os.getenv("BUILD_VERSION", BEACON_VERSION))
     api_version: str = "v1"
 
     # Phase 19 Reliability, Resilience, Lifecycle Management & Operational Safety
@@ -81,8 +108,66 @@ class Settings:
     retry_backoff_base_ms: float = float(os.getenv("RETRY_BACKOFF_BASE_MS", "100.0"))
     stale_operation_threshold_seconds: float = float(os.getenv("STALE_OPERATION_THRESHOLD_SECONDS", "300.0"))
 
+    def __init__(self) -> None:
+        # Development / test environment default safety fallback for JWT secret
+        if not self.jwt_secret_key and self.beacon_env in ("development", "test"):
+            self.jwt_secret_key = "beacon-dev-test-secret-key-do-not-use-in-production-12345"
+
+    def validate(self, raise_on_error: bool = True) -> list[str]:
+        """Validates configuration parameters. In production mode, enforces strict security
+        requirements and fail-closed semantics.
+        """
+        errors: list[str] = []
+
+        # 1. Environment mode check
+        valid_envs = ("development", "test", "production", "staging")
+        if self.beacon_env not in valid_envs:
+            errors.append(f"Invalid BEACON_ENV '{self.beacon_env}'. Must be one of: {valid_envs}")
+
+        # 2. Security validation
+        if self.auth_required:
+            if not self.jwt_secret_key or self.jwt_secret_key in KNOWN_INSECURE_SECRETS:
+                if self.beacon_env in ("production", "staging"):
+                    errors.append(
+                        "JWT_SECRET_KEY is required and must not be a known insecure default in production/staging environments."
+                    )
+            elif self.beacon_env in ("production", "staging") and len(self.jwt_secret_key) < 16:
+                errors.append("JWT_SECRET_KEY must be at least 16 characters long in production.")
+
+            if self.jwt_access_token_expire_minutes <= 0:
+                errors.append(f"JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be positive, got {self.jwt_access_token_expire_minutes}")
+
+        # 3. Resilience & Timeout bounds
+        if self.operation_timeout_seconds <= 0:
+            errors.append(f"OPERATION_TIMEOUT_SECONDS must be positive, got {self.operation_timeout_seconds}")
+
+        if self.max_retry_attempts < 0 or self.max_retry_attempts > 20:
+            errors.append(f"MAX_RETRY_ATTEMPTS must be between 0 and 20, got {self.max_retry_attempts}")
+
+        if self.retry_backoff_base_ms <= 0:
+            errors.append(f"RETRY_BACKOFF_BASE_MS must be positive, got {self.retry_backoff_base_ms}")
+
+        # 4. Workload limits
+        if self.max_dataset_size_bytes <= 0:
+            errors.append(f"MAX_DATASET_SIZE_BYTES must be positive, got {self.max_dataset_size_bytes}")
+
+        if self.max_request_body_bytes <= 0:
+            errors.append(f"MAX_REQUEST_BODY_BYTES must be positive, got {self.max_request_body_bytes}")
+
+        if not (0.0 <= self.confidence_threshold <= 1.0):
+            errors.append(f"CONFIDENCE_THRESHOLD must be between 0.0 and 1.0, got {self.confidence_threshold}")
+
+        # 5. CORS validation
+        if self.beacon_env in ("production", "staging") and "*" in self.cors_origins:
+            errors.append("CORS_ORIGINS must not contain wildcard '*' in production.")
+
+        if errors and raise_on_error:
+            raise ConfigurationError(f"Configuration validation failed:\n - " + "\n - ".join(errors))
+
+        return errors
 
 
 settings = Settings()
+
 
 

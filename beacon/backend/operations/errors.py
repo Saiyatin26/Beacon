@@ -49,11 +49,16 @@ class StandardErrorResponse(BaseModel):
     details: Optional[dict[str, Any]] = None
 
     def __init__(self, **data: Any):
-        if "detail" not in data and "message" in data:
+        if "message" in data and data["message"] is not None:
+            data["message"] = scrub_secrets(data["message"])
+        if "detail" in data and data["detail"] is not None:
+            data["detail"] = scrub_secrets(data["detail"])
+        elif "detail" not in data and "message" in data:
             data["detail"] = data["message"]
         elif "message" not in data and "detail" in data:
-            data["message"] = str(data["detail"])
+            data["message"] = data["detail"]
         super().__init__(**data)
+
 
 
 class BeaconOperationalError(Exception):
