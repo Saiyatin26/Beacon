@@ -72,17 +72,28 @@ All BEACON endpoints follow strict security classification:
 | :--- | :--- | :--- | :--- | :--- |
 | `/health/live`, `/live` | `GET` | **PUBLIC** | None | Process liveness and uptime check |
 | `/health/ready`, `/ready` | `GET` | **PUBLIC / CONTROLLED** | None | Read-only database & registry readiness check |
-| `/health` | `GET` | **PUBLIC** | None | Minimal safe operational status |
-| `/health/details` | `GET` | **SYSTEM-ADMIN** | Bearer Token (`SYSTEM_ADMIN` role) | Granular diagnostic inspection without secret leaks |
+| `/health` | `GET` | **PUBLIC** | None | Minimal safe operational status (`status`, `version`) |
 | `/api/v1/operations/version` | `GET` | **PUBLIC** | None | Safe service and version metadata |
-| `/api/auth/login` | `POST` | **PUBLIC** | Valid user credentials | Issue JWT access token |
-| `/api/v1/certification/run` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY` permission in target project) | Execute certification job with idempotency |
-| `/api/v1/certification/jobs/{id}` | `GET` | **PROJECT-SCOPED** | Bearer Token (`VIEW` permission in target project) | Inspect job progress and results |
-| `/api/v1/custom/datasets/upload` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY` permission in target project) | Upload and validate user dataset |
-| `/api/v1/custom/datasets/preview` | `POST` | **PROJECT-SCOPED** | Bearer Token (`VIEW` permission in target project) | Ingestion preview and schema validation |
-| `/api/oracles/compile` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY` permission in target project) | Compile and register invariant oracle |
-| `/api/v1/drift/evaluate` | `POST` | **PROJECT-SCOPED** | Bearer Token (`VIEW` permission in target project) | Run drift observation analysis |
-| `/api/v1/benchmarks` | `GET` | **PUBLIC** | None | List frozen standard benchmarks |
+| `/api/v1/benchmarks`, `{id}` | `GET` | **PUBLIC** | None | List frozen standard benchmarks and specifications |
+| `/api/v1/benchmarks/{id}/manifest` | `GET` | **PUBLIC** | None | Public benchmark manifest metadata |
+| `/api/auth/login` | `POST` | **PUBLIC** | Valid credentials | Issue JWT access token |
+| `/api/llm/status` | `GET` | **AUTHENTICATED** | Bearer Token | Provider availability status (no keys) |
+| `/api/oracles`, `{id}` | `GET` | **AUTHENTICATED** | Bearer Token | Registered language-independent oracle catalog |
+| `/api/oracle-sets`, `{id}` | `GET` | **AUTHENTICATED** | Bearer Token | Frozen OracleSets definitions |
+| `/api/v1/certification/run` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY`) | Execute certification job with idempotency |
+| `/api/v1/certification/jobs` | `GET` | **PROJECT-SCOPED** | Bearer Token (`VIEW`) | Inspect certification jobs |
+| `/api/v1/certification/{id}/*` | `GET/POST` | **PROJECT-SCOPED** | Bearer Token (`VIEW`) | Certificate reports, cases, oracles, counterexamples, verify |
+| `/api/v1/custom/datasets/upload` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY`) | Upload and validate user dataset |
+| `/api/v1/custom/datasets/preview` | `POST` | **PROJECT-SCOPED** | Bearer Token (`VIEW`) | Ingestion preview and schema validation |
+| `/api/v1/custom/datasets` | `GET` | **PROJECT-SCOPED** | Bearer Token (`VIEW`) | List project custom datasets |
+| `/api/v1/benchmarks/{id}/validate` | `POST/GET` | **PROJECT-SCOPED** | Bearer Token (`VIEW`) | Benchmark pre-flight validation |
+| `/api/oracles/compile` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY`) | Compile and register invariant oracle |
+| `/api/v1/drift/evaluate` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY`) | Run drift observation analysis |
+| `/runs`, `/runs/{id}` | `GET` | **PROJECT-SCOPED** | Bearer Token (`VIEW`) | Local/legacy certification runs |
+| `/drift` | `GET` | **PROJECT-SCOPED** | Bearer Token (`VIEW`) | Streaming drift samples |
+| `/demo/run`, `/drift/demo` | `POST` | **DEVELOPMENT-ONLY** | Bearer Token (`CERTIFY`) | Disabled in production/staging (`403 Forbidden`) |
+| `/health/details` | `GET` | **SYSTEM-ADMIN** | Bearer Token (`SYSTEM_ADMIN`) | Granular diagnostic inspection without secret leaks |
+| `/api/v1/operations/system-metrics` | `GET` | **SYSTEM-ADMIN** | Bearer Token (`SYSTEM_ADMIN`) | Real-time system telemetry and process stats |
 
 ---
 

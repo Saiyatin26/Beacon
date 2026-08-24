@@ -295,4 +295,74 @@ def test_dataset_upload_prohibited_secrets_rejected(client):
         assert res.status_code in (400, 401, 403, 422)
 
 
+# ==============================================================================
+# 7. Endpoint Authorization & Security Classification Regression Tests
+# ==============================================================================
+
+def test_drift_evaluate_endpoint_requires_auth(client):
+    """Verifies POST /api/v1/drift/evaluate requires valid authentication/permissions."""
+    payload = {
+        "observation_id": "obs-001",
+        "oracle_set_id": "set-loan-approval",
+        "inputs": {"credit_score": 720, "loan_amount": 250000},
+        "outputs": {"approved": True},
+    }
+    res = client.post("/api/v1/drift/evaluate", json=payload)
+    assert res.status_code in (401, 403)
+
+
+def test_demo_endpoints_disabled_in_production(client, monkeypatch):
+    """Verifies demo endpoints (/demo/run, /drift/demo, /demo/invariants) are disabled in production."""
+    monkeypatch.setattr(settings, "beacon_env", "production")
+    
+    # 1. POST /demo/run
+    res_run = client.post("/demo/run", json={"implementation": "buggy"})
+    assert res_run.status_code in (401, 403)
+    
+    # 2. POST /drift/demo
+    res_drift = client.post("/drift/demo", json={"baseline_run_id": "run-1", "implementation": "buggy"})
+    assert res_drift.status_code in (401, 403)
+    
+    # 3. GET /demo/invariants
+    res_inv = client.get("/demo/invariants")
+    assert res_inv.status_code in (401, 403)
+
+
+def test_benchmark_validate_endpoint_requires_auth(client):
+    """Verifies POST /api/v1/benchmarks/{id}/validate requires authentication."""
+    res = client.post("/api/v1/benchmarks/loan_approval/validate")
+    assert res.status_code in (401, 403)
+
+
+def test_runs_and_drift_endpoints_require_auth(client):
+    """Verifies /runs and /drift endpoints require authentication."""
+    # Unauthenticated /runs
+    res_runs = client.get("/runs")
+    assert res_runs.status_code in (401, 403)
+
+    # Unauthenticated /runs/{id}
+    res_run = client.get("/runs/run-test-id")
+    assert res_run.status_code in (401, 403)
+
+    # Unauthenticated /drift
+    res_drift = client.get("/drift")
+    assert res_drift.status_code in (401, 403)
+
+
+def test_llm_status_and_oracle_catalog_require_auth(client):
+    """Verifies /api/llm/status and oracle catalog endpoints require authentication."""
+    # /api/llm/status
+    res_llm = client.get("/api/llm/status")
+    assert res_llm.status_code in (401, 403)
+
+    # /api/oracles
+    res_orc = client.get("/api/oracles")
+    assert res_orc.status_code in (401, 403)
+
+    # /api/oracle-sets
+    res_sets = client.get("/api/oracle-sets")
+    assert res_sets.status_code in (401, 403)
+
+
+
 

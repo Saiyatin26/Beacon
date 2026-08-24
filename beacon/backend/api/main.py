@@ -395,8 +395,8 @@ from llm.manager import get_provider_manager
 
 
 @app.get("/api/llm/status")
-def get_llm_status():
-    """Returns sanitized multi-provider LLM status and availability."""
+def get_llm_status(current_user: User = Depends(get_current_active_user)):
+    """Returns sanitized multi-provider LLM status and availability for authenticated users."""
     manager = get_provider_manager()
     return manager.get_status()
 
@@ -407,14 +407,21 @@ from common.models import CandidateInvariant
 
 
 @app.get("/api/oracles")
-def list_oracles(domain: Optional[str] = None):
+def list_oracles(
+    domain: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),
+):
     """Lists registered canonical language-independent oracles."""
     oracles = registry.list_oracles(domain=domain)
     return {"oracles": [o.model_dump(mode="json") for o in oracles]}
 
 
 @app.get("/api/oracles/{oracle_id}")
-def get_oracle_endpoint(oracle_id: str, version: Optional[int] = None):
+def get_oracle_endpoint(
+    oracle_id: str,
+    version: Optional[int] = None,
+    current_user: User = Depends(get_current_active_user),
+):
     """Retrieves a specific versioned oracle definition."""
     oracle = registry.get_oracle(oracle_id, version=version)
     if oracle is None:
@@ -423,14 +430,20 @@ def get_oracle_endpoint(oracle_id: str, version: Optional[int] = None):
 
 
 @app.get("/api/oracle-sets")
-def list_oracle_sets_endpoint(domain: Optional[str] = None):
+def list_oracle_sets_endpoint(
+    domain: Optional[str] = None,
+    current_user: User = Depends(get_current_active_user),
+):
     """Lists frozen Oracle Sets."""
     sets = registry.list_oracle_sets(domain=domain)
     return {"oracle_sets": [s.model_dump(mode="json") for s in sets]}
 
 
 @app.get("/api/oracle-sets/{set_id}")
-def get_oracle_set_endpoint(set_id: str):
+def get_oracle_set_endpoint(
+    set_id: str,
+    current_user: User = Depends(get_current_active_user),
+):
     """Retrieves a frozen Oracle Set by ID."""
     oracle_set = registry.get_oracle_set(set_id)
     if oracle_set is None:
@@ -459,12 +472,18 @@ def compile_oracle_endpoint(
 
 
 @app.get("/runs")
-def list_runs(limit: int = 20):
+def list_runs(
+    limit: int = 20,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     return {"runs": local_store.list_runs(max(1, min(limit, 100)))}
 
 
 @app.get("/runs/{run_id}")
-def get_run(run_id: str):
+def get_run(
+    run_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     run = local_store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Certification run not found")
@@ -472,8 +491,18 @@ def get_run(run_id: str):
 
 
 @app.post("/demo/run")
-def run_demo(request: DemoRunRequest):
-    """Mine local rules, certify a sample implementation, and persist the report."""
+def run_demo(
+    request: DemoRunRequest,
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
+):
+    """Mine local rules, certify a sample implementation, and persist the report.
+    Disabled in production/staging environments.
+    """
+    if settings.beacon_env in ("production", "staging"):
+        raise HTTPException(
+            status_code=403,
+            detail="Demo endpoints are disabled in production and staging environments.",
+        )
     oracles, invariants = _sample_oracles()
     if not oracles:
         raise HTTPException(status_code=500, detail="No validated sample invariants were produced")
@@ -493,13 +522,28 @@ def run_demo(request: DemoRunRequest):
 
 
 @app.get("/demo/invariants")
-def list_demo_invariants():
+def list_demo_invariants(
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
+    if settings.beacon_env in ("production", "staging"):
+        raise HTTPException(
+            status_code=403,
+            detail="Demo endpoints are disabled in production and staging environments.",
+        )
     _, invariants = _sample_oracles()
     return {"invariants": [invariant.model_dump(mode="json") for invariant in invariants]}
 
 
 @app.post("/drift/demo")
-def check_demo_drift(request: DriftRequest):
+def check_demo_drift(
+    request: DriftRequest,
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
+):
+    if settings.beacon_env in ("production", "staging"):
+        raise HTTPException(
+            status_code=403,
+            detail="Demo endpoints are disabled in production and staging environments.",
+        )
     baseline = local_store.get_run(request.baseline_run_id)
     if baseline is None:
         raise HTTPException(status_code=404, detail="Baseline certification run not found")
@@ -519,13 +563,18 @@ def check_demo_drift(request: DriftRequest):
 
 
 @app.get("/drift")
-def list_drift_samples(limit: int = 100, benchmark_id: Optional[str] = None):
+def list_drift_samples(
+    limit: int = 100,
+    benchmark_id: Optional[str] = None,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
     all_samples = local_store.list_drift_samples(benchmark_id=benchmark_id, limit=max(1, min(limit, 500)))
     if benchmark_id:
         if benchmark_id in ("loan", "loan_approval"):
             return {"samples": [s for s in all_samples if s.get("benchmark_id") in ("loan", "loan_approval", None)]}
         return {"samples": [s for s in all_samples if s.get("benchmark_id") == benchmark_id]}
     return {"samples": all_samples}
+
 
 
 # ==============================================================================
@@ -592,8 +641,10 @@ def validate_benchmark_endpoint(
     target_variant: str = "clean_v2",
     preferred_provider: str = "auto",
     dataset_name: str = "default",
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Performs comprehensive pre-flight validation on a benchmark's adapters, schemas, dataset, and configuration."""
+
     mode = request.evaluation_mode if request and request.evaluation_mode else evaluation_mode
     variant = request.target_variant if request and request.target_variant else target_variant
     provider = request.preferred_provider if request and request.preferred_provider else preferred_provider
@@ -1073,8 +1124,12 @@ def get_certification_counterexamples(
 
 
 @app.post("/api/v1/drift/evaluate")
-def evaluate_drift_endpoint(request: DriftEvaluateRequest):
+def evaluate_drift_endpoint(
+    request: DriftEvaluateRequest,
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
+):
     """Evaluates a post-migration runtime observation against a frozen OracleSet."""
+
     oracle_set = registry.get_oracle_set(request.oracle_set_id)
     if oracle_set is None:
         raise HTTPException(
