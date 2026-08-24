@@ -14,6 +14,7 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
+from common.config import settings
 from certification.repository import certification_repository
 from benchmarks import benchmark_registry
 from oracle.registry import registry as oracle_registry
@@ -23,11 +24,20 @@ from llm.manager import get_provider_manager
 logger = logging.getLogger(__name__)
 
 
+class VersionInfoResponse(BaseModel):
+    """Safe, non-sensitive application version and runtime metadata."""
+    service: str = "BEACON"
+    version: str = Field(default_factory=lambda: getattr(settings, "beacon_version", "1.0.0"))
+    api_version: str = Field(default_factory=lambda: getattr(settings, "api_version", "v1"))
+    environment: str = Field(default_factory=lambda: getattr(settings, "beacon_env", "production"))
+    timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class LivenessResponse(BaseModel):
     status: Literal["UP", "DOWN"] = "UP"
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     service: str = "BEACON"
-    version: str = "1.0.0"
+    version: str = Field(default_factory=lambda: getattr(settings, "beacon_version", "1.0.0"))
 
 
 class DependencyStatus(BaseModel):
@@ -54,11 +64,17 @@ class HealthDetailsResponse(BaseModel):
     dependencies: dict[str, DependencyStatus]
 
 
+def get_version_info() -> VersionInfoResponse:
+    """Returns safe, non-sensitive version and build metadata."""
+    return VersionInfoResponse()
+
+
 def check_liveness() -> LivenessResponse:
     """Answers: Is the BEACON process alive and responding?
     Fast, non-blocking check that does not fail if external systems are unreachable.
     """
     return LivenessResponse(status="UP")
+
 
 
 def _get_oracleset_health() -> tuple[bool, str, dict[str, Any], Optional[str]]:

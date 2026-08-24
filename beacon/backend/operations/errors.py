@@ -113,10 +113,11 @@ def _map_http_status_to_category(status_code: int) -> ErrorCategory:
 
 def register_error_handlers(app: FastAPI) -> None:
     """Registers standard global exception handlers on the FastAPI application."""
+    from .metrics import operational_metrics
 
     @app.exception_handler(BeaconOperationalError)
     async def beacon_operational_error_handler(request: Request, exc: BeaconOperationalError):
-        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID", "")
+        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID") or "REQ-UNKNOWN"
         payload = StandardErrorResponse(
             error_code=exc.category.value,
             category=exc.category,
@@ -134,8 +135,13 @@ def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(HTTPException)
     @app.exception_handler(StarletteHTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
-        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID", "")
+        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID") or "REQ-UNKNOWN"
         category = _map_http_status_to_category(exc.status_code)
+
+        if exc.status_code == 401:
+            operational_metrics.record_auth_failure()
+        elif exc.status_code == 403:
+            operational_metrics.record_auth_denied()
         
         detail_msg = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
         payload = StandardErrorResponse(
@@ -153,11 +159,11 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID", "")
+        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID") or "REQ-UNKNOWN"
         sanitized_errors = []
         for err in exc.errors():
             loc = " -> ".join(str(l) for l in err.get("loc", []))
-            sanitized_errors.append({"field": loc, "issue": err.get("msg", "Invalid field value")})
+            sanitized_errors.append({"field": scrub_secrets(loc), "issue": scrub_secrets(err.get("msg", "Invalid field value"))})
 
         payload = StandardErrorResponse(
             error_code="VALIDATION_ERROR",
@@ -174,7 +180,7 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):
-        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID", "")
+        req_id = current_request_id.get() or request.headers.get("X-Correlation-ID") or request.headers.get("X-Request-ID") or "REQ-UNKNOWN"
         # Log the full exception with secret scrubbing on the server only
         logger.error(
             f"Unhandled server exception on {request.method} {request.url.path} (Request ID: {req_id}): {scrub_secrets(str(exc))}",
@@ -193,3 +199,4 @@ def register_error_handlers(app: FastAPI) -> None:
             content=payload.model_dump(mode="json"),
             headers={"X-Correlation-ID": req_id, "X-Request-ID": req_id},
         )
+

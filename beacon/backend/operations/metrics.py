@@ -1,7 +1,8 @@
 """Operational Metrics Collector for BEACON.
 
 Provides aggregated runtime statistics, throughput counters, latency averages,
-and error frequency metrics. Does NOT store raw customer inputs, secrets, or high-cardinality data.
+HTTP request metrics, and error frequency metrics.
+Does NOT store raw customer inputs, secrets, or uncontrolled high-cardinality data.
 """
 
 from datetime import datetime, timezone
@@ -15,7 +16,19 @@ class MetricsSnapshot(BaseModel):
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     service: str = "BEACON"
     
-    # Run Counters
+    # HTTP Request Metrics
+    http_requests_total: int = 0
+    http_requests_by_status: dict[str, int] = Field(default_factory=dict)
+    http_requests_by_method: dict[str, int] = Field(default_factory=dict)
+    avg_http_request_duration_ms: float = 0.0
+    slow_requests_count: int = 0
+    
+    # Security & Access Telemetry
+    auth_failures_total: int = 0
+    auth_denials_total: int = 0
+    rate_limit_hits_total: int = 0
+    
+    # Certification Run Counters
     certification_runs_total: int = 0
     certification_runs_successful: int = 0
     certification_runs_failed: int = 0
@@ -39,10 +52,23 @@ class MetricsSnapshot(BaseModel):
 
 
 class OperationalMetricsCollector:
-    """Thread-safe in-memory operational metrics collector."""
+    """Thread-safe in-memory operational metrics collector with bounded cardinality."""
 
     def __init__(self):
         self._lock = threading.RLock()
+        # HTTP Metrics
+        self._http_requests_total: int = 0
+        self._http_status_counts: dict[str, int] = {}
+        self._http_method_counts: dict[str, int] = {}
+        self._http_durations: list[float] = []
+        self._slow_requests_count: int = 0
+        
+        # Security Counters
+        self._auth_failures: int = 0
+        self._auth_denials: int = 0
+        self._rate_limit_hits: int = 0
+
+        # Certification Counters
         self._runs_total: int = 0
         self._runs_successful: int = 0
         self._runs_failed: int = 0
@@ -59,12 +85,57 @@ class OperationalMetricsCollector:
         self._preflight_durations: list[float] = []
         self._provider_latencies: list[float] = []
         self._active_jobs: int = 0
+
         # Project-level counters for scoped metrics
         self._project_runs: dict[str, int] = {}
         self._project_successful: dict[str, int] = {}
         self._project_failed: dict[str, int] = {}
         self._project_status_counts: dict[str, dict[str, int]] = {}
         self._project_durations: dict[str, list[float]] = {}
+        self._project_http_requests: dict[str, int] = {}
+
+    def record_http_request(
+        self,
+        method: str,
+        status_code: int,
+        duration_ms: float,
+        is_slow: bool = False,
+        project_id: Optional[str] = None,
+    ) -> None:
+        """Records an HTTP request lifecycle event with controlled, bounded dimensions."""
+        with self._lock:
+            self._http_requests_total += 1
+            
+            # Controlled method label (GET, POST, PUT, DELETE, etc.)
+            norm_method = (method or "UNKNOWN").upper()
+            self._http_method_counts[norm_method] = self._http_method_counts.get(norm_method, 0) + 1
+
+            # Controlled status class label (2xx, 3xx, 4xx, 5xx)
+            status_class = f"{status_code // 100}xx" if 100 <= status_code <= 599 else "other"
+            self._http_status_counts[status_class] = self._http_status_counts.get(status_class, 0) + 1
+
+            if is_slow:
+                self._slow_requests_count += 1
+
+            if duration_ms > 0:
+                self._http_durations.append(duration_ms)
+                if len(self._http_durations) > 1000:
+                    self._http_durations.pop(0)
+
+            if project_id:
+                self._project_http_requests[project_id] = self._project_http_requests.get(project_id, 0) + 1
+
+    def record_auth_failure(self) -> None:
+        with self._lock:
+            self._auth_failures += 1
+
+    def record_auth_denied(self) -> None:
+        with self._lock:
+            self._auth_denials += 1
+
+    def record_rate_limit_hit(self) -> None:
+        with self._lock:
+            self._rate_limit_hits += 1
 
     def record_job_started(self) -> None:
         with self._lock:
@@ -151,13 +222,22 @@ class OperationalMetricsCollector:
             self._export_failures += 1
 
     def get_snapshot(self) -> MetricsSnapshot:
-        """Returns a global aggregate snapshot (for backward compatibility)."""
+        """Returns a global aggregate snapshot (for backward compatibility and diagnostics)."""
         with self._lock:
             avg_cert = sum(self._cert_durations) / len(self._cert_durations) if self._cert_durations else 0.0
             avg_pref = sum(self._preflight_durations) / len(self._preflight_durations) if self._preflight_durations else 0.0
             avg_prov = sum(self._provider_latencies) / len(self._provider_latencies) if self._provider_latencies else 0.0
+            avg_http = sum(self._http_durations) / len(self._http_durations) if self._http_durations else 0.0
 
             return MetricsSnapshot(
+                http_requests_total=self._http_requests_total,
+                http_requests_by_status=dict(self._http_status_counts),
+                http_requests_by_method=dict(self._http_method_counts),
+                avg_http_request_duration_ms=round(avg_http, 2),
+                slow_requests_count=self._slow_requests_count,
+                auth_failures_total=self._auth_failures,
+                auth_denials_total=self._auth_denials,
+                rate_limit_hits_total=self._rate_limit_hits,
                 certification_runs_total=self._runs_total,
                 certification_runs_successful=self._runs_successful,
                 certification_runs_failed=self._runs_failed,
@@ -183,8 +263,10 @@ class OperationalMetricsCollector:
             status_breakdown = dict(self._project_status_counts.get(project_id, {}))
             durations = self._project_durations.get(project_id, [])
             avg_cert = sum(durations) / len(durations) if durations else 0.0
+            http_reqs = self._project_http_requests.get(project_id, 0)
             return {
                 "project_id": project_id,
+                "http_requests_total": http_reqs,
                 "certification_runs_total": runs,
                 "certification_runs_successful": successful,
                 "certification_runs_failed": failed,
@@ -196,6 +278,14 @@ class OperationalMetricsCollector:
     def clear(self) -> None:
         """Clears all metric counters (used for clean testing)."""
         with self._lock:
+            self._http_requests_total = 0
+            self._http_status_counts.clear()
+            self._http_method_counts.clear()
+            self._http_durations.clear()
+            self._slow_requests_count = 0
+            self._auth_failures = 0
+            self._auth_denials = 0
+            self._rate_limit_hits = 0
             self._runs_total = 0
             self._runs_successful = 0
             self._runs_failed = 0
@@ -215,7 +305,9 @@ class OperationalMetricsCollector:
             self._project_failed.clear()
             self._project_status_counts.clear()
             self._project_durations.clear()
+            self._project_http_requests.clear()
 
 
 # Module-level singleton
 operational_metrics = OperationalMetricsCollector()
+

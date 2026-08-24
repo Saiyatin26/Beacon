@@ -42,7 +42,7 @@ def configure_test_auth_isolation(request):
     """
     test_file_name = request.node.fspath.basename if hasattr(request.node, "fspath") else str(request.node.nodeid)
 
-    if "test_phase17" in test_file_name:
+    if "test_phase17" in test_file_name or "test_phase18" in test_file_name:
         # Strict mode: no dependency overrides; evaluate live authentication
         app.dependency_overrides.clear()
         auth_rate_limiter.clear()

@@ -71,16 +71,25 @@ class AuthRepository:
         except Exception as exc:
             logger.warning(f"Could not initialize SQLite auth tables: {exc}")
 
-    def _seed_default_users(self):
-        """Seeds initial development and test users if database is empty."""
+    def _seed_default_users(self, force: bool = False):
+        """Seeds initial development and test users if database is empty or force=True."""
         import os
         from common.config import settings
         env = getattr(settings, "beacon_env", "production").lower()
-        if env == "production" and not os.getenv("BEACON_ALLOW_DEMO_SEEDING"):
+        if env == "production" and not os.getenv("BEACON_ALLOW_DEMO_SEEDING") and not force:
             return
         try:
-            if self.get_user_by_username("admin"):
+            if not force and self.get_user_by_username("admin"):
                 return
+            if force:
+                try:
+                    with sqlite3.connect(self._db_path) as conn:
+                        conn.execute("DELETE FROM users WHERE username IN ('admin', 'alice_certifier', 'bob_viewer', 'carol_auditor', 'dave_admin', 'external_user')")
+                        conn.commit()
+                except Exception:
+                    pass
+
+
 
             # 1. System Admin
             admin_user = self.create_user(
@@ -428,7 +437,8 @@ class AuthRepository:
         self._memory_usernames.clear()
         self._memory_memberships.clear()
         self._revoked_jtis.clear()
-        self._seed_default_users()
+        self._seed_default_users(force=True)
+
 
 
 # Default singleton instance

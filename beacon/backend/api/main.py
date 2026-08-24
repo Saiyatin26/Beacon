@@ -57,6 +57,7 @@ from operations import (
     check_liveness,
     check_readiness,
     check_dependency_health,
+    get_version_info,
     validate_startup_configuration,
     setup_structured_logging,
     RequestCorrelationMiddleware,
@@ -203,12 +204,21 @@ def root():
         "live": "/health/live",
         "ready": "/health/ready",
         "details": "/health/details",
+        "version": "/api/v1/operations/version",
     }
 
 
 # ==============================================================================
-# Phase 16: Operational Health & Metrics Endpoints
+# Phase 16 & 18: Operational Health, Version & Metrics Endpoints
 # ==============================================================================
+
+@app.get("/api/v1/operations/version")
+@app.get("/version")
+def version_endpoint():
+    """Safe, non-sensitive version, build, and API environment metadata."""
+    res = get_version_info()
+    return res.model_dump(mode="json")
+
 
 @app.get("/health/live")
 def liveness_endpoint():
@@ -243,6 +253,17 @@ def health():
         "readiness": readiness.status,
         "storage": "local SQLite",
     }
+
+
+@app.get("/api/v1/operations/system-metrics")
+def get_system_operations_metrics_endpoint(
+    current_user: User = Depends(require_system_admin),
+):
+    """Returns global system-wide operational metrics (System Administrator only)."""
+    return operational_metrics.get_snapshot().model_dump(mode="json")
+
+
+
 
 
 @app.get("/api/v1/certification/jobs/{job_id}")

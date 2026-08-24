@@ -1,5 +1,6 @@
-"""FastAPI Middleware for Request Correlation and Workload Protection."""
+"""FastAPI Middleware for Request Correlation, Observability, and Workload Protection."""
 
+import logging
 import re
 import time
 import uuid
@@ -9,7 +10,10 @@ from starlette.requests import Request
 from starlette.responses import Response, JSONResponse
 
 from common.config import settings
-from .logging_config import current_request_id, current_project_id
+from .logging_config import current_request_id, current_project_id, current_user_id, log_operational_event, sanitize_log_string
+from .metrics import operational_metrics
+
+logger = logging.getLogger("beacon.operations.http")
 
 CORRELATION_ID_REGEX = re.compile(r"^[a-zA-Z0-9_\-]{4,64}$")
 
@@ -20,7 +24,9 @@ def get_correlation_id() -> str:
 
 
 class RequestCorrelationMiddleware(BaseHTTPMiddleware):
-    """Assigns and propagates correlation IDs across request execution contexts."""
+    """Assigns correlation IDs, measures monotonic duration, records operational metrics,
+    and logs request lifecycles with secret scrubbing.
+    """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         # 1. Extract or generate Correlation ID
@@ -41,14 +47,62 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
         # 3. Store in ContextVars
         token_req = current_request_id.set(request_id)
         token_proj = current_project_id.set(project_id)
+        token_user = current_user_id.set("")
 
         start_time = time.perf_counter()
+        status_code = 500
+        is_slow = False
+        elapsed_ms = 0.0
+
         try:
             response = await call_next(request)
+            status_code = response.status_code
+        except Exception:
+            status_code = 500
+            raise
         finally:
             elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+            slow_threshold = getattr(settings, "slow_request_threshold_ms", 2000.0)
+            is_slow = elapsed_ms >= slow_threshold
+
+            # Record operational HTTP metrics (low-cardinality labels)
+            if getattr(settings, "metrics_enabled", True):
+                operational_metrics.record_http_request(
+                    method=request.method,
+                    status_code=status_code,
+                    duration_ms=elapsed_ms,
+                    is_slow=is_slow,
+                    project_id=project_id or None,
+                )
+                if status_code == 401:
+                    operational_metrics.record_auth_failure()
+                elif status_code == 403:
+                    operational_metrics.record_auth_denied()
+
+
+            # Structured request logging
+            clean_path = sanitize_log_string(request.url.path)
+            log_level = logging.WARNING if (status_code >= 500 or is_slow) else logging.INFO
+            event_name = "slow_request_detected" if is_slow else "http_request_completed"
+
+            log_operational_event(
+                event=event_name,
+                level=log_level,
+                logger_name="beacon.operations.http",
+                project_id=project_id or None,
+                duration_ms=round(elapsed_ms, 2),
+                outcome=f"HTTP_{status_code}",
+                message=f"{request.method} {clean_path} returned {status_code} in {elapsed_ms:.2f}ms",
+                extra={
+                    "method": request.method,
+                    "path": clean_path,
+                    "status_code": status_code,
+                },
+            )
+
             current_request_id.reset(token_req)
             current_project_id.reset(token_proj)
+            current_user_id.reset(token_user)
 
         # 4. Attach headers to response
         response.headers["X-Correlation-ID"] = request_id
@@ -69,6 +123,7 @@ class WorkloadLimiterMiddleware(BaseHTTPMiddleware):
                 length_int = int(content_length)
                 if length_int > max_bytes:
                     req_id = get_correlation_id()
+                    operational_metrics.record_rate_limit_hit()
                     return JSONResponse(
                         status_code=413,
                         content={
@@ -84,3 +139,4 @@ class WorkloadLimiterMiddleware(BaseHTTPMiddleware):
                 pass
 
         return await call_next(request)
+

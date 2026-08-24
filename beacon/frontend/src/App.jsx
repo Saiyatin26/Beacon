@@ -73,16 +73,24 @@ export default function App() {
       headers["Authorization"] = `Bearer ${token}`;
     }
     const res = await window.fetch(url, { ...options, headers });
+    const reqId = res.headers.get("x-request-id") || res.headers.get("x-correlation-id");
+    const reqSuffix = reqId ? ` (Reference ID: ${reqId})` : "";
+
     if (res.status === 401) {
       setAuthToken(null);
       setCurrentUser(null);
       sessionStorage.removeItem("beacon_token");
       sessionStorage.removeItem("beacon_user");
       setLoginModalOpen(true);
-      setError("Authentication required or session expired. Please sign in.");
+      setError(`Authentication required or session expired. Please sign in.${reqSuffix}`);
     } else if (res.status === 403) {
       const errData = await res.clone().json().catch(() => ({}));
-      setError(errData.detail || "Access Denied (403): You do not have permission for this project or operation.");
+      const msg = errData.detail || errData.message || "Access Denied (403): You do not have permission for this project or operation.";
+      setError(`${msg}${reqSuffix}`);
+    } else if (res.status >= 500) {
+      const errData = await res.clone().json().catch(() => ({}));
+      const msg = errData.message || errData.detail || "An unexpected server error occurred.";
+      setError(`${msg}${reqSuffix}`);
     }
     return res;
   };

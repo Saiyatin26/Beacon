@@ -68,6 +68,14 @@ class Settings:
     jwt_access_token_expire_minutes: int = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
     auth_required: bool = os.getenv("BEACON_REQUIRE_AUTH", "true").lower() in ("true", "1", "yes")
 
+    # Phase 18 Observability & Operational Diagnostics Configuration
+    log_level: str = os.getenv("LOG_LEVEL", "INFO").upper()
+    slow_request_threshold_ms: float = float(os.getenv("SLOW_REQUEST_THRESHOLD_MS", "2000.0"))
+    metrics_enabled: bool = os.getenv("METRICS_ENABLED", "true").lower() in ("true", "1", "yes")
+    beacon_version: str = os.getenv("BEACON_VERSION", os.getenv("BUILD_VERSION", "1.0.0"))
+    api_version: str = "v1"
+
 
 settings = Settings()
+
 
