@@ -364,5 +364,125 @@ def test_llm_status_and_oracle_catalog_require_auth(client):
     assert res_sets.status_code in (401, 403)
 
 
+def test_root_endpoint_safe_metadata(client):
+    """Verifies that GET / returns safe public API metadata and does not disclose storage/environment/paths."""
+    import json
+    res = client.get("/")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["name"] == "BEACON API"
+    assert data["status"] == "ok"
+    assert data["health"] == "/health"
+    assert data["live"] == "/health/live"
+    assert data["ready"] == "/health/ready"
+    assert data["details"] == "/health/details"
+    assert data["version"] == "/api/v1/operations/version"
+
+    # Strict non-disclosure assertions
+    dump_str = json.dumps(data).lower()
+    assert "storage" not in data
+    assert "sqlite" not in dump_str
+    assert "mongodb" not in dump_str
+    assert "database" not in dump_str
+    assert "secret" not in dump_str
+    assert "password" not in dump_str
+
+
+def test_runs_project_scoping_and_cross_project_isolation(client, tmp_path, monkeypatch):
+    """Verifies that /runs and /runs/{run_id} enforce strict project scoping and cross-project isolation."""
+    from common.local_store import LocalStore
+    from common.models import CertificationRun
+    from auth import (
+        User,
+        UserRole,
+        auth_repository,
+        create_access_token,
+        ProjectMembership,
+    )
+    import uuid
+
+    # Isolated local store
+    db_file = tmp_path / "test_runs_scope.sqlite3"
+    store = LocalStore(db_file)
+    monkeypatch.setattr("api.main.local_store", store)
+
+    # 1. Create User A with membership in Project A
+    user_a = auth_repository.create_user(
+        user_id=f"usr-a-{uuid.uuid4().hex[:6]}",
+        username=f"user_a_{uuid.uuid4().hex[:6]}",
+        email="user_a@example.com",
+        password="UserAPassword2026!",
+        full_name="User A",
+    )
+    auth_repository.assign_user_to_project(user_a.user_id, "proj-alpha", UserRole.VIEWER)
+    token_a = create_access_token(user=user_a)
+    headers_a = {"Authorization": f"Bearer {token_a}"}
+
+    # 2. Create User B with membership in Project B
+    user_b = auth_repository.create_user(
+        user_id=f"usr-b-{uuid.uuid4().hex[:6]}",
+        username=f"user_b_{uuid.uuid4().hex[:6]}",
+        email="user_b@example.com",
+        password="UserBPassword2026!",
+        full_name="User B",
+    )
+    auth_repository.assign_user_to_project(user_b.user_id, "proj-beta", UserRole.VIEWER)
+    token_b = create_access_token(user=user_b)
+    headers_b = {"Authorization": f"Bearer {token_b}"}
+
+    # 3. Seed runs into LocalStore
+    run_a = CertificationRun(
+        run_id="run-alpha-001",
+        timestamp="2026-08-24T00:00:00Z",
+        equivalence_score=1.0,
+        total_checked=10,
+        total_violated=0,
+        results=[],
+    )
+    store.save_run(run_a, project_id="proj-alpha")
+
+    run_b = CertificationRun(
+        run_id="run-beta-001",
+        timestamp="2026-08-24T00:00:00Z",
+        equivalence_score=0.75,
+        total_checked=10,
+        total_violated=3,
+        results=[],
+    )
+    store.save_run(run_b, project_id="proj-beta")
+
+    # 4. Unauthenticated -> 401
+    assert client.get("/runs").status_code == 401
+    assert client.get("/runs/run-alpha-001").status_code == 401
+
+    # 5. User A queries Project A -> receives only Run A
+    res_a = client.get("/runs?project_id=proj-alpha", headers=headers_a)
+    assert res_a.status_code == 200
+    runs_a = res_a.json()["runs"]
+    assert len(runs_a) == 1
+    assert runs_a[0]["run_id"] == "run-alpha-001"
+    assert runs_a[0]["project_id"] == "proj-alpha"
+
+    # 6. User A querying Project B (unauthorized) -> 403 / 404
+    res_a_on_b = client.get("/runs?project_id=proj-beta", headers=headers_a)
+    assert res_a_on_b.status_code in (403, 404)
+
+    # 7. User A accesses Run A -> 200; accesses Run B -> 403 / 404
+    res_run_a = client.get("/runs/run-alpha-001", headers=headers_a)
+    assert res_run_a.status_code == 200
+    assert res_run_a.json()["run_id"] == "run-alpha-001"
+
+    res_run_b = client.get("/runs/run-beta-001", headers=headers_a)
+    assert res_run_b.status_code in (403, 404)
+
+    # 8. User B queries Project B -> receives only Run B
+    res_b = client.get("/runs?project_id=proj-beta", headers=headers_b)
+    assert res_b.status_code == 200
+    runs_b = res_b.json()["runs"]
+    assert len(runs_b) == 1
+    assert runs_b[0]["run_id"] == "run-beta-001"
+
+
+
 
 

@@ -35,6 +35,7 @@ class LocalStore:
                     equivalence_score REAL NOT NULL,
                     total_checked INTEGER NOT NULL,
                     total_violated INTEGER NOT NULL,
+                    project_id TEXT,
                     payload TEXT NOT NULL
                 );
                 CREATE TABLE IF NOT EXISTS drift_samples (
@@ -49,35 +50,54 @@ class LocalStore:
                 );
                 """
             )
+            # Add project_id column if table already existed without it
+            try:
+                connection.execute("ALTER TABLE certification_runs ADD COLUMN project_id TEXT")
+            except Exception:
+                pass
             # Add benchmark_id column if table already existed without it
             try:
                 connection.execute("ALTER TABLE drift_samples ADD COLUMN benchmark_id TEXT")
             except Exception:
                 pass
 
-    def save_run(self, run: CertificationRun) -> None:
+    def save_run(self, run: CertificationRun, project_id: str | None = None) -> None:
         payload = run.model_dump(mode="json")
+        resolved_proj = project_id or payload.get("project_id") or "loan_approval"
+        payload["project_id"] = resolved_proj
         with self._connect() as connection:
             connection.execute(
                 """INSERT OR REPLACE INTO certification_runs
-                (run_id, timestamp, equivalence_score, total_checked, total_violated, payload)
-                VALUES (?, ?, ?, ?, ?, ?)""",
+                (run_id, timestamp, equivalence_score, total_checked, total_violated, project_id, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (run.run_id, run.timestamp, run.equivalence_score, run.total_checked,
-                 run.total_violated, json.dumps(payload)),
+                 run.total_violated, resolved_proj, json.dumps(payload)),
             )
 
-    def list_runs(self, limit: int = 20) -> list[dict]:
+    def list_runs(self, limit: int = 20, project_id: str | None = None) -> list[dict]:
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT payload FROM certification_runs ORDER BY timestamp DESC LIMIT ?", (limit,)
-            ).fetchall()
+            if project_id:
+                rows = connection.execute(
+                    "SELECT payload FROM certification_runs WHERE project_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (project_id, limit),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT payload FROM certification_runs ORDER BY timestamp DESC LIMIT ?", (limit,)
+                ).fetchall()
         return [json.loads(row["payload"]) for row in rows]
 
-    def get_run(self, run_id: str) -> dict | None:
+    def get_run(self, run_id: str, project_id: str | None = None) -> dict | None:
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT payload FROM certification_runs WHERE run_id = ?", (run_id,)
-            ).fetchone()
+            if project_id:
+                row = connection.execute(
+                    "SELECT payload FROM certification_runs WHERE run_id = ? AND project_id = ?",
+                    (run_id, project_id),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT payload FROM certification_runs WHERE run_id = ?", (run_id,)
+                ).fetchone()
         return json.loads(row["payload"]) if row else None
 
     def save_drift_sample(self, sample: DriftSample) -> None:

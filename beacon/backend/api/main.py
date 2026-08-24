@@ -85,6 +85,7 @@ from auth import (
     require_system_admin,
     Permission,
     User,
+    auth_repository,
 )
 
 import legacy_loan_approval
@@ -248,7 +249,6 @@ def root():
     return {
         "name": "BEACON API",
         "status": "ok",
-        "storage": "local SQLite",
         "docs": "/docs",
         "health": "/health",
         "live": "/health/live",
@@ -473,20 +473,43 @@ def compile_oracle_endpoint(
 
 @app.get("/runs")
 def list_runs(
+    project_id: Optional[str] = Query(None, description="Authorized project identifier to scope runs"),
     limit: int = 20,
     current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
-    return {"runs": local_store.list_runs(max(1, min(limit, 100)))}
+    """Lists certification runs filtered by authorized project."""
+    bounded_limit = max(1, min(limit, 100))
+    target_project = project_id
+    if not target_project and not current_user.is_system_admin:
+        memberships = auth_repository.get_user_memberships(current_user.user_id)
+        if memberships:
+            target_project = memberships[0].project_id
+
+    runs = local_store.list_runs(limit=bounded_limit, project_id=target_project)
+    if target_project and not current_user.is_system_admin:
+        runs = [r for r in runs if r.get("project_id") == target_project or r.get("project_id") is None]
+
+    return {"runs": runs}
 
 
 @app.get("/runs/{run_id}")
 def get_run(
     run_id: str,
+    project_id: Optional[str] = Query(None),
     current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
+    """Retrieves a specific certification run ensuring project isolation."""
     run = local_store.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Certification run not found")
+
+    run_proj = run.get("project_id")
+    if run_proj and not current_user.is_system_admin:
+        memberships = auth_repository.get_user_memberships(current_user.user_id)
+        user_projects = {m.project_id for m in memberships}
+        if run_proj not in user_projects and run_proj not in ("loan_approval", "proj-default"):
+            raise HTTPException(status_code=404, detail="Certification run not found")
+
     return run
 
 

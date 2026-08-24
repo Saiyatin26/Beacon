@@ -152,6 +152,14 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                     target_project_id = art.project_id
             except Exception:
                 pass
+            if not target_project_id:
+                try:
+                    from api.main import local_store
+                    r = local_store.get_run(cert_id)
+                    if r and r.get("project_id"):
+                        target_project_id = r.get("project_id")
+                except Exception:
+                    pass
         elif dataset_id:
             try:
                 from ingestion.dataset_registry import user_dataset_registry
