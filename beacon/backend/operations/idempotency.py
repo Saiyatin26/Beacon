@@ -126,6 +126,7 @@ class IdempotencyManager:
         with self._lock:
             # 1. Attempt atomic DB-level reservation using unique PRIMARY KEY insert (no INSERT OR REPLACE)
             is_owner = False
+            db_error: Optional[str] = None
             try:
                 with sqlite3.connect(self._db_path, timeout=10.0) as conn:
                     conn.execute("""
@@ -143,9 +144,31 @@ class IdempotencyManager:
                 # Key already exists in database; this is a duplicate or subsequent request
                 is_owner = False
             except Exception as exc:
-                logger.warning(f"Error during atomic idempotency reservation: {exc}")
-                if scoped_key not in self._memory_cache:
-                    is_owner = True
+                # UNKNOWN DATABASE STATE MUST NEVER BECOME IDEMPOTENCY OWNERSHIP
+                is_owner = False
+                db_error = str(exc)
+                logger.error(f"Idempotency database reservation failure for key '{idempotency_key}': {exc}")
+                log_operational_event(
+                    event="idempotency_db_reservation_failed",
+                    project_id=project_id,
+                    level=logging.ERROR,
+                    logger_name="beacon.idempotency",
+                    outcome="DATABASE_ERROR",
+                    error_category="DATABASE_FAILURE",
+                    message="Idempotency reservation could not be confirmed due to database failure.",
+                    extra={"idempotency_key": idempotency_key, "endpoint": endpoint},
+                )
+
+            if db_error is not None:
+                # Database could not confirm ownership: fail safely and never execute
+                return (
+                    {
+                        "error": "Idempotency reservation failed",
+                        "detail": "The operation could not safely be started because idempotency ownership could not be confirmed by the database.",
+                        "idempotency_key": idempotency_key,
+                    },
+                    500,
+                )
 
             if is_owner:
                 # First time seeing this key: caller becomes the single reservation owner
@@ -185,7 +208,17 @@ class IdempotencyManager:
                 entry = self._memory_cache.get(scoped_key)
 
             if not entry:
-                return None, None
+                # Database state could not be loaded: fail safely, do NOT assume ownership
+                logger.error(f"Could not load existing idempotency record for key '{idempotency_key}'")
+                return (
+                    {
+                        "error": "Idempotency state retrieval failed",
+                        "detail": "The existing operation state could not safely be retrieved.",
+                        "idempotency_key": idempotency_key,
+                    },
+                    500,
+                )
+
 
             # 3. Compare canonical request hash: different payload -> 409 Conflict
             stored_hash = entry["request_hash"]

@@ -19,8 +19,10 @@ import time
 import pytest
 from fastapi import HTTPException, status
 from fastapi.testclient import TestClient
+from unittest import mock
 
 from api.main import app
+
 from common.config import settings
 from operations import (
     JobState,
@@ -877,6 +879,88 @@ def test_real_dependency_permanent_failure_no_retry():
 
     assert attempts == 1
     assert exc_info.value.code == 401
+
+
+def test_idempotency_database_reservation_failure_fails_safely(client, member_token_proj_a, monkeypatch):
+    """Verifies that an unexpected database failure during idempotency reservation does NOT
+    grant ownership (is_owner=False) and does NOT execute the underlying certification.
+    """
+    import unittest.mock as mock
+    from certification import certification_engine
+
+    execution_count = 0
+    original_certify = certification_engine.certify
+
+    def mock_certify(*args, **kwargs):
+        nonlocal execution_count
+        execution_count += 1
+        return original_certify(*args, **kwargs)
+
+    run_payload = {
+        "benchmark_id": "loan_demo",
+        "evaluation_mode": "CONTROLLED",
+        "target_variant": "clean",
+        "idempotency_key": "DB-FAIL-SAFETY-KEY-001",
+        "force_recompute": False,
+    }
+
+    # Simulate an unexpected database error during idempotency reservation
+    def mock_db_connect(*args, **kwargs):
+        raise sqlite3.OperationalError("Simulated database disk I/O error or lock timeout")
+
+    monkeypatch.setattr(sqlite3, "connect", mock_db_connect)
+    monkeypatch.setattr(certification_engine, "certify", mock_certify)
+
+    # 1. Direct manager check: must return controlled failure, NOT (None, None)
+    mgr = IdempotencyManager(db_path=":memory:")
+    mgr._memory_cache.clear()
+    cached_data, cached_status = mgr.check_or_reserve(
+        project_id="proj_a",
+        endpoint="/api/v1/certification/run",
+        idempotency_key="DB-FAIL-SAFETY-KEY-001",
+        request_payload=run_payload,
+    )
+
+    assert cached_status == 500
+    assert cached_data is not None
+    assert cached_data.get("error") == "Idempotency reservation failed"
+    assert "could not safely be started" in cached_data.get("detail", "")
+
+    # 2. Endpoint invocation: must return 500 and NEVER invoke certify()
+    res = client.post(
+        "/api/v1/certification/run?project_id=proj_a",
+        json=run_payload,
+        headers={"Authorization": f"Bearer {member_token_proj_a}"},
+    )
+
+    assert res.status_code == 500
+    assert res.json().get("error") == "Idempotency reservation failed"
+    assert execution_count == 0, f"Expected 0 certification executions, but certify() was called {execution_count} times."
+
+
+def test_memory_cache_cannot_manufacture_ownership_when_db_fails():
+    """Verifies that an empty in-memory cache cannot manufacture ownership when SQLite
+    cannot confirm the reservation.
+    """
+    mgr = IdempotencyManager(db_path=":memory:")
+    mgr._memory_cache.clear()
+
+    payload = {"query": "test_uncertain_db"}
+
+    # Mock DB failure
+    with mock.patch("sqlite3.connect", side_effect=sqlite3.DatabaseError("Unrecoverable DB failure")):
+        res, status_code = mgr.check_or_reserve(
+            project_id="proj_test",
+            endpoint="/api/v1/query",
+            idempotency_key="KEY-UNCERTAIN-DB",
+            request_payload=payload,
+        )
+
+        # Must NOT be granted ownership ((None, None))
+        assert status_code == 500
+        assert res is not None
+        assert res.get("error") == "Idempotency reservation failed"
+
 
 
 
