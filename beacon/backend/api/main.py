@@ -237,8 +237,10 @@ def readiness_endpoint():
 
 
 @app.get("/health/details")
-def health_details_endpoint():
-    """Granular dependency health inspection without secret exposure."""
+def health_details_endpoint(
+    current_user: User = Depends(require_system_admin),
+):
+    """Granular dependency health inspection without secret exposure (System Administrator only)."""
     res = check_dependency_health()
     return res.model_dump(mode="json")
 

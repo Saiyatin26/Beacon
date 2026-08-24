@@ -15,9 +15,11 @@ from fastapi import Depends, Header, HTTPException, Request, status
 
 from common.config import settings
 from ingestion.audit import AuditAction, audit_logger
+from operations.logging_config import current_project_id, current_user_id
 from .models import Permission, User, UserRole, role_has_permission
 from .repository import auth_repository
 from .security import InvalidTokenError, TokenExpiredError, decode_access_token
+
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,7 @@ async def get_current_user(
                 detail="User account is deactivated or does not exist",
                 headers={"WWW-Authenticate": "Bearer"},
             )
+        current_user_id.set(user.user_id)
         return user
     except TokenExpiredError as exc:
         raise HTTPException(
@@ -287,6 +290,8 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                 detail=f"Forbidden: Role '{proj_membership.role.value}' lacks permission '{permission.value}'",
             )
 
+        if target_project_id:
+            current_project_id.set(target_project_id)
         return user
 
     return _dependency

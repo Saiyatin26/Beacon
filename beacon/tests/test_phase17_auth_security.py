@@ -238,9 +238,10 @@ def test_public_health_endpoints_remain_accessible_without_token():
     assert res2.status_code == 200
     assert res2.json()["status"] == "READY"
 
-    # 3. /health/details is public
+    # 3. /health/details is protected (requires system admin auth) -> 401 without token
     res3 = client.get("/health/details")
-    assert res3.status_code == 200
+    assert res3.status_code == 401
+
 
     # 4. /api/v1/auth/login is public
     res4 = client.post(

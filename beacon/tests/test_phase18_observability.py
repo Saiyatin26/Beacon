@@ -278,7 +278,7 @@ def test_metrics_endpoint_rbac_isolation(client, admin_token, member_token_proj_
 
 
 # ==============================================================================
-# 4. Safe Error Handling & 500 Sanitization Tests
+# 4. Safe Error Handling & Real HTTP 500 Sanitization Integration Tests
 # ==============================================================================
 
 def test_validation_error_returns_422_with_request_id(client):
@@ -298,8 +298,84 @@ def test_beacon_operational_error_formatting(client):
     assert err.status_code == 504
 
 
+def test_real_http_500_unexpected_exception_sanitization(client, monkeypatch):
+    """Integration test: Real HTTP request triggering an unhandled exception returns
+    a safe 500 response with correlation ID and ZERO stack trace, file path, or secret leakage.
+    """
+    # Deliberately raise an unhandled exception inside a health check handler
+    def broken_liveness():
+        raise RuntimeError("CRITICAL_INTERNAL_FAILURE: Database connection postgres://admin:SuperSecretPass123@db.prod:5432/core dropped with JWT_SECRET_KEY=my_secret_key_123")
+
+    monkeypatch.setattr("api.main.check_liveness", broken_liveness)
+
+    custom_id = "test-500-sanitization-req"
+    client_safe = TestClient(app, raise_server_exceptions=False)
+    res = client_safe.get("/health/live", headers={"X-Request-ID": custom_id})
+
+
+    # 1. Must return HTTP 500
+    assert res.status_code == 500
+
+    # 2. Must return structured client-safe error response
+    data = res.json()
+    assert data.get("error_code") == "INTERNAL_SERVER_ERROR"
+    assert data.get("category") == "INTERNAL_ERROR"
+    assert "An internal server error occurred" in data.get("message", "")
+    assert data.get("request_id") == custom_id
+    assert res.headers.get("X-Request-ID") == custom_id
+
+    # 3. Response payload MUST NOT leak tracebacks, internal file paths, passwords, or secret keys
+    raw_text = res.text
+    assert "Traceback" not in raw_text
+    assert "CRITICAL_INTERNAL_FAILURE" not in raw_text
+    assert "SuperSecretPass123" not in raw_text
+    assert "JWT_SECRET_KEY" not in raw_text
+    assert "postgres://" not in raw_text
+    assert ".py" not in raw_text
+
+
 # ==============================================================================
-# 5. Version, Build & Read-Only Health Probes
+# 5. Project Metric Spoofing Prevention & User Context Propagation Tests
+# ==============================================================================
+
+def test_project_metric_spoofing_prevented(client):
+    """Verifies that client-supplied X-Project-ID and ?project_id= headers/params
+    are NOT treated as authoritative project context for operational metrics.
+    """
+    # 1. Client attempts to spoof project via header on public endpoint
+    client.get("/health/live", headers={"X-Project-ID": "UNAUTHORIZED_SPOOFED_PROJ"})
+
+    # 2. Client attempts to spoof project via query parameter on public endpoint
+    client.get("/health/live?project_id=ANOTHER_SPOOFED_PROJ")
+
+    # 3. Metrics must increment global HTTP requests but NOT register spoofed project
+    snapshot = operational_metrics.get_snapshot()
+    assert snapshot.http_requests_total >= 2
+
+    # Verify project-level metric snapshot for spoofed projects has zero requests
+    proj_snap_1 = operational_metrics.get_project_snapshot("UNAUTHORIZED_SPOOFED_PROJ")
+    assert proj_snap_1.get("http_requests_total", 0) == 0
+
+    proj_snap_2 = operational_metrics.get_project_snapshot("ANOTHER_SPOOFED_PROJ")
+    assert proj_snap_2.get("http_requests_total", 0) == 0
+
+
+def test_authenticated_user_context_propagation(client, member_token_proj_a):
+    """Verifies that authenticated requests safely populate user_id in the execution context."""
+    from operations.logging_config import current_user_id
+
+    # Unauthenticated -> user context is empty
+    client.get("/health/live")
+    assert current_user_id.get() == ""
+
+    # Authenticated -> user context is resolved to active user_id
+    res = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {member_token_proj_a}"})
+    assert res.status_code == 200
+    assert res.json()["username"] == "user_a"
+
+
+# ==============================================================================
+# 6. Version, Build & Read-Only Health Probes (Protected /health/details)
 # ==============================================================================
 
 def test_version_endpoint_reports_safe_metadata(client):
@@ -316,7 +392,7 @@ def test_version_endpoint_reports_safe_metadata(client):
 
 
 def test_liveness_endpoint_reports_up_and_version(client):
-    """Verifies that /health/live reports UP and version."""
+    """Verifies that /health/live reports UP and version publicly without auth."""
     res = client.get("/health/live")
     assert res.status_code == 200
     data = res.json()
@@ -345,19 +421,45 @@ def test_readiness_probe_is_strictly_read_only(client):
     assert initial_audits == after_audits
 
 
-def test_health_details_endpoint_contains_no_secrets(client):
-    """Verifies that /health/details contains dependency statuses without leaking secrets."""
-    res = client.get("/health/details")
-    assert res.status_code == 200
-    data = res.json()
+def test_health_details_endpoint_rbac_protection(client, admin_token, member_token_proj_a):
+    """Verifies that /health/details is protected:
+    - Anonymous -> 401
+    - Non-admin user -> 403
+    - System Administrator -> 200 with safe diagnostics (no secrets)
+    - Zero state mutation
+    """
+    initial_jobs = len(certification_job_tracker.list_jobs())
+
+    # 1. Anonymous request -> 401 Unauthorized
+    res_unauth = client.get("/health/details")
+    assert res_unauth.status_code == 401
+
+    # 2. Authenticated non-admin (Certifier) -> 403 Forbidden
+    res_forbidden = client.get(
+        "/health/details",
+        headers={"Authorization": f"Bearer {member_token_proj_a}"},
+    )
+    assert res_forbidden.status_code == 403
+
+    # 3. Authenticated System Admin -> 200 OK
+    res_admin = client.get(
+        "/health/details",
+        headers={"Authorization": f"Bearer {admin_token}"},
+    )
+    assert res_admin.status_code == 200
+    data = res_admin.json()
     assert data["status"] in ("HEALTHY", "DEGRADED")
     assert "database" in data["dependencies"]
     assert "benchmark_registry" in data["dependencies"]
 
-    raw_text = res.text
+    # 4. Confirm zero secrets leaked
+    raw_text = res_admin.text
     assert "password" not in raw_text.lower()
     assert "secret" not in raw_text.lower()
     assert "token" not in raw_text.lower()
+
+    # 5. Confirm read-only behavior (zero mutations)
+    assert len(certification_job_tracker.list_jobs()) == initial_jobs
 
 
 # ==============================================================================

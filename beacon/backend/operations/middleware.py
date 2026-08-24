@@ -1,5 +1,4 @@
-"""FastAPI Middleware for Request Correlation, Observability, and Workload Protection."""
-
+from datetime import datetime, timezone
 import logging
 import re
 import time
@@ -10,8 +9,16 @@ from starlette.requests import Request
 from starlette.responses import Response, JSONResponse
 
 from common.config import settings
-from .logging_config import current_request_id, current_project_id, current_user_id, log_operational_event, sanitize_log_string
+from .logging_config import (
+    current_request_id,
+    current_project_id,
+    current_user_id,
+    log_operational_event,
+    sanitize_log_string,
+    scrub_secrets,
+)
 from .metrics import operational_metrics
+
 
 logger = logging.getLogger("beacon.operations.http")
 
@@ -41,12 +48,9 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
         else:
             request_id = f"REQ-{uuid.uuid4().hex[:12]}"
 
-        # 2. Extract Project ID context if present in query or headers
-        project_id = request.headers.get("X-Project-ID") or request.query_params.get("project_id") or ""
-
-        # 3. Store in ContextVars
+        # 2. ContextVars initialization (do NOT trust client-supplied project headers/query params as authoritative)
         token_req = current_request_id.set(request_id)
-        token_proj = current_project_id.set(project_id)
+        token_proj = current_project_id.set("")
         token_user = current_user_id.set("")
 
         start_time = time.perf_counter()
@@ -57,13 +61,32 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
             status_code = response.status_code
-        except Exception:
+        except Exception as exc:
             status_code = 500
-            raise
+            req_id = current_request_id.get() or request_id
+            logger.error(
+                f"Unhandled server exception on {request.method} {request.url.path} (Request ID: {req_id}): {scrub_secrets(str(exc))}",
+                exc_info=True,
+            )
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "error_code": "INTERNAL_SERVER_ERROR",
+                    "category": "INTERNAL_ERROR",
+                    "message": "An internal server error occurred. Please reference the request ID.",
+                    "detail": "An internal server error occurred. Please reference the request ID.",
+                    "request_id": req_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "details": {"path": request.url.path},
+                },
+                headers={"X-Correlation-ID": req_id, "X-Request-ID": req_id},
+            )
+
         finally:
             elapsed_ms = (time.perf_counter() - start_time) * 1000.0
             slow_threshold = getattr(settings, "slow_request_threshold_ms", 2000.0)
             is_slow = elapsed_ms >= slow_threshold
+            trusted_project_id = current_project_id.get() or None
 
             # Record operational HTTP metrics (low-cardinality labels)
             if getattr(settings, "metrics_enabled", True):
@@ -72,13 +95,12 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
                     status_code=status_code,
                     duration_ms=elapsed_ms,
                     is_slow=is_slow,
-                    project_id=project_id or None,
+                    project_id=trusted_project_id,
                 )
                 if status_code == 401:
                     operational_metrics.record_auth_failure()
                 elif status_code == 403:
                     operational_metrics.record_auth_denied()
-
 
             # Structured request logging
             clean_path = sanitize_log_string(request.url.path)
@@ -89,7 +111,7 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
                 event=event_name,
                 level=log_level,
                 logger_name="beacon.operations.http",
-                project_id=project_id or None,
+                project_id=trusted_project_id,
                 duration_ms=round(elapsed_ms, 2),
                 outcome=f"HTTP_{status_code}",
                 message=f"{request.method} {clean_path} returned {status_code} in {elapsed_ms:.2f}ms",
