@@ -63,11 +63,21 @@ class OllamaProvider(LLMProvider):
                 method="POST",
             )
 
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                resp_bytes = resp.read()
-                resp_json = json.loads(resp_bytes.decode("utf-8"))
+            def _fetch():
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    resp_bytes = resp.read()
+                    return json.loads(resp_bytes.decode("utf-8"))
+
+            from backend.operations.resilience import execute_with_retry
+            resp_json = execute_with_retry(
+                _fetch,
+                max_attempts=getattr(settings, "max_retry_attempts", 3),
+                base_delay_ms=getattr(settings, "retry_backoff_base_ms", 100.0),
+                operation_name=f"ollama_generate:{self.model}",
+            )
 
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
             raw_text = resp_json.get("response", "")
             parsed_json = extract_json_payload(raw_text) if json_mode else None
 

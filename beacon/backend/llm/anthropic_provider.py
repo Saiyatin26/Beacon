@@ -60,8 +60,15 @@ class AnthropicProvider(LLMProvider):
             if system:
                 kwargs["system"] = system
 
-            response = client.messages.create(**kwargs)
+            from backend.operations.resilience import execute_with_retry
+            response = execute_with_retry(
+                lambda: client.messages.create(**kwargs),
+                max_attempts=getattr(settings, "max_retry_attempts", 3),
+                base_delay_ms=getattr(settings, "retry_backoff_base_ms", 100.0),
+                operation_name=f"anthropic_messages_create:{self.model}",
+            )
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
 
             raw_text = "".join(b.text for b in response.content if getattr(b, "type", "") == "text").strip()
             parsed_json = extract_json_payload(raw_text) if json_mode else None

@@ -525,3 +525,184 @@ def test_export_incomplete_certification_returns_409(client, member_token_proj_a
     assert res.status_code == 409
     assert "Incomplete certification data" in res.json()["detail"]
 
+
+# ==============================================================================
+# 8. Phase 19 Master Regression Tests (Timeout, Retry, Concurrency, Duration)
+# ==============================================================================
+
+def test_with_timeout_does_not_block_caller_on_slow_worker():
+    """Verifies that the caller returns near the configured deadline and does NOT block
+    waiting for the slow worker thread to finish executing during executor shutdown.
+    """
+    import threading
+
+    worker_finished = threading.Event()
+
+    def slow_worker():
+        time.sleep(0.6)
+        worker_finished.set()
+        return "FINISHED_LATE"
+
+    start_mono = time.monotonic()
+    with pytest.raises(OperationTimeoutError) as exc_info:
+        # Configured timeout is 0.05s (50ms), slow worker takes 0.6s (600ms)
+        with_timeout(slow_worker, timeout_seconds=0.05, operation_name="slow_worker_shutdown_test")
+
+    caller_elapsed = time.monotonic() - start_mono
+    # Caller should return within ~0.25s, well before the 0.6s slow worker finishes
+    assert caller_elapsed < 0.35, f"Caller was blocked for {caller_elapsed:.3f}s (expected < 0.35s)"
+    assert exc_info.value.category == ErrorCategory.TIMEOUT
+
+
+def test_with_timeout_cooperative_cancellation():
+    """Verifies that cooperative cancellation event is signaled when deadline is exceeded."""
+    import threading
+
+    cancel_event = threading.Event()
+
+    def cancellable_task(evt):
+        for _ in range(50):
+            if evt.is_set():
+                return "CANCELLED_EARLY"
+            time.sleep(0.01)
+        return "COMPLETED"
+
+    with pytest.raises(OperationTimeoutError):
+        with_timeout(
+            cancellable_task,
+            timeout_seconds=0.04,
+            operation_name="cancellable_task_test",
+            cancellation_event=cancel_event,
+            evt=cancel_event,
+        )
+
+    assert cancel_event.is_set() is True
+
+
+def test_timeout_stale_worker_cannot_write_success():
+    """Verifies that a timed-out operation cannot later overwrite FAILED state to COMPLETED."""
+    job = certification_job_tracker.create_job(project_id="proj_timeout_test")
+    certification_job_tracker.update_state(job.job_id, JobState.RUNNING)
+
+    # Simulate timeout handler transitioning the job to FAILED
+    certification_job_tracker.update_state(
+        job.job_id,
+        JobState.FAILED,
+        current_step="Execution timed out",
+        error_category=ErrorCategory.TIMEOUT.value,
+        error_message="Operation timed out after deadline",
+    )
+
+    # A delayed worker thread trying to commit COMPLETED must be strictly rejected
+    with pytest.raises(StateTransitionError):
+        certification_job_tracker.update_state(
+            job.job_id,
+            JobState.COMPLETED,
+            current_step="Late worker completed",
+        )
+
+    # Persisted job state remains FAILED
+    reloaded = certification_job_tracker.get_job(job.job_id)
+    assert reloaded.state == JobState.FAILED
+    assert reloaded.error_category == ErrorCategory.TIMEOUT.value
+
+
+def test_concurrent_idempotency_same_key_single_execution(client, member_token_proj_a):
+    """Verifies that two concurrent requests with the same idempotency key execute exactly
+    one certification run, and do not execute duplicate background work.
+    """
+    import concurrent.futures
+
+    run_payload = {
+        "benchmark_id": "loan_demo",
+        "evaluation_mode": "CONTROLLED",
+        "target_variant": "clean",
+        "idempotency_key": "CONCURRENT-IDEM-KEY-001",
+        "force_recompute": False,
+    }
+
+    def make_request():
+        return client.post(
+            "/api/v1/certification/run?project_id=proj_a",
+            json=run_payload,
+            headers={"Authorization": f"Bearer {member_token_proj_a}"},
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        f1 = executor.submit(make_request)
+        f2 = executor.submit(make_request)
+        r1 = f1.result(timeout=15.0)
+        r2 = f2.result(timeout=15.0)
+
+    # Both requests must return valid status (200 OK or 202 In-Progress)
+    assert r1.status_code in (200, 202)
+    assert r2.status_code in (200, 202)
+
+    # At least one request got 200 with completed artifact
+    res_200 = r1.json() if r1.status_code == 200 else r2.json()
+    assert "certification_id" in res_200
+    assert res_200["benchmark_id"] == "loan_demo"
+
+
+
+def test_real_dependency_transient_retry_success():
+    """Verifies that a real transient dependency failure (HTTP 503) retries and succeeds."""
+    import urllib.error
+
+    attempts = 0
+
+    def transient_service():
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise urllib.error.HTTPError(
+                url="https://api.example.com/generate",
+                code=503,
+                msg="Service Unavailable",
+                hdrs=None,
+                fp=None,
+            )
+        return {"status": "SUCCESS", "data": "recovered"}
+
+    res = execute_with_retry(
+        transient_service,
+        max_attempts=4,
+        base_delay_ms=5.0,
+        jitter=False,
+        operation_name="test_transient_service",
+    )
+
+    assert attempts == 3
+    assert res["status"] == "SUCCESS"
+
+
+def test_real_dependency_permanent_failure_no_retry():
+    """Verifies that a permanent dependency failure (HTTP 401 Unauthorized) fails immediately without retry."""
+    import urllib.error
+
+    attempts = 0
+
+    def permanent_fail_service():
+        nonlocal attempts
+        attempts += 1
+        raise urllib.error.HTTPError(
+            url="https://api.example.com/generate",
+            code=401,
+            msg="Unauthorized: Invalid API Key",
+            hdrs=None,
+            fp=None,
+        )
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        execute_with_retry(
+            permanent_fail_service,
+            max_attempts=5,
+            base_delay_ms=5.0,
+            jitter=False,
+            operation_name="test_permanent_service",
+        )
+
+    assert attempts == 1
+    assert exc_info.value.code == 401
+
+

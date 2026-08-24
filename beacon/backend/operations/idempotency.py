@@ -49,13 +49,14 @@ def compute_canonical_request_hash(payload: Any) -> str:
 
 
 class IdempotencyManager:
-    """Thread-safe, SQLite-persisted idempotency manager enforcing project-safe isolation
-    and material conflict rejection.
+    """Thread-safe, SQLite-persisted idempotency manager enforcing project-safe isolation,
+    material conflict rejection, and concurrent duplicate execution prevention.
     """
 
     def __init__(self, db_path: Optional[str] = None):
         self._lock = threading.RLock()
         self._memory_cache: dict[str, dict[str, Any]] = {}
+        self._completion_events: dict[str, threading.Event] = {}
         if db_path is None:
             backend_dir = Path(__file__).resolve().parent.parent
             self._db_path = str(backend_dir / "beacon.sqlite3")
@@ -101,13 +102,14 @@ class IdempotencyManager:
         endpoint: str,
         idempotency_key: Optional[str],
         request_payload: Any,
+        wait_timeout: float = 10.0,
     ) -> Tuple[Optional[dict[str, Any]], Optional[int]]:
-        """Checks if an operation has already been executed with this idempotency key.
-        
+        """Checks if an operation has already been executed or is currently running with this idempotency key.
+
         Returns:
-            (response_data, status_code) if cached completed result exists,
-            (None, None) if this is a new operation.
-            
+            (response_data, status_code) if cached completed result exists or in-progress status,
+            (None, None) if this is a new operation reserved for execution by the caller.
+
         Raises:
             IdempotencyConflictError (HTTP 409) if the key was already used with a different payload.
         """
@@ -116,6 +118,7 @@ class IdempotencyManager:
 
         scoped_key = self._make_scoped_key(project_id, endpoint, idempotency_key)
         req_hash = compute_canonical_request_hash(request_payload)
+        event_to_wait: Optional[threading.Event] = None
 
         with self._lock:
             # 1. Check in-memory cache
@@ -139,8 +142,9 @@ class IdempotencyManager:
                     logger.warning(f"Error querying operations_idempotency: {exc}")
 
             if not entry:
-                # First time seeing this key: reserve in-progress
+                # First time seeing this key: atomically reserve in-progress
                 self._reserve_in_progress(scoped_key, project_id, endpoint, idempotency_key, req_hash)
+                self._completion_events[scoped_key] = threading.Event()
                 return None, None
 
             # 3. Key exists: compare canonical request hash
@@ -191,7 +195,57 @@ class IdempotencyManager:
                 except Exception as exc:
                     logger.warning(f"Failed to decode cached idempotency response: {exc}")
 
-            return None, None
+            # 5. Same request hash and IN_PROGRESS: concurrent duplicate request!
+            # Coordinate with winning in-progress thread
+            event_to_wait = self._completion_events.get(scoped_key)
+            if not event_to_wait:
+                event_to_wait = threading.Event()
+                self._completion_events[scoped_key] = event_to_wait
+
+        # Outside the lock: wait for the winning in-progress thread to complete
+        if event_to_wait is not None:
+            logger.info(
+                f"Concurrent duplicate request for idempotency key '{idempotency_key}' "
+                f"waiting up to {wait_timeout}s for in-progress operation to complete."
+            )
+            event_to_wait.wait(timeout=wait_timeout)
+
+            # Re-check state after waiting
+            with self._lock:
+                try:
+                    with sqlite3.connect(self._db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "SELECT * FROM operations_idempotency WHERE scoped_key = ?",
+                            (scoped_key,),
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            entry = dict(row)
+                            self._memory_cache[scoped_key] = entry
+                except Exception as exc:
+                    logger.warning(f"Error querying operations_idempotency: {exc}")
+
+                if entry.get("status") == "COMPLETED" and entry.get("response_json"):
+                    try:
+                        cached_data = json.loads(entry["response_json"])
+                        status_code = entry.get("status_code", 200)
+                        return cached_data, status_code
+                    except Exception:
+                        pass
+
+                # If still IN_PROGRESS after wait, return 202 Accepted (NEVER return None to prevent duplicate execution)
+                return (
+                    {
+                        "status": "IN_PROGRESS",
+                        "detail": f"Operation with idempotency key '{idempotency_key}' is currently running.",
+                        "idempotency_key": idempotency_key,
+                    },
+                    202,
+                )
+
+        return None, None
 
     def _reserve_in_progress(
         self,
@@ -286,10 +340,68 @@ class IdempotencyManager:
             except Exception as exc:
                 logger.warning(f"Could not persist completed idempotency record: {exc}")
 
+            # Wake up any waiting concurrent requests
+            event = self._completion_events.pop(scoped_key, None)
+            if event:
+                event.set()
+
+    def record_failed(
+        self,
+        project_id: str,
+        endpoint: str,
+        idempotency_key: Optional[str],
+        request_payload: Any,
+        error_message: str = "Operation failed",
+    ) -> None:
+        """Atomically saves the failure status and wakes up waiting concurrent requests."""
+        if not idempotency_key:
+            return
+
+        scoped_key = self._make_scoped_key(project_id, endpoint, idempotency_key)
+        req_hash = compute_canonical_request_hash(request_payload)
+        now = datetime.now(timezone.utc).isoformat()
+        err_json = json.dumps({"error": error_message})
+
+        with self._lock:
+            entry = {
+                "scoped_key": scoped_key,
+                "project_id": project_id,
+                "endpoint": endpoint,
+                "idempotency_key": idempotency_key,
+                "request_hash": req_hash,
+                "status": "FAILED",
+                "response_json": err_json,
+                "status_code": 500,
+                "created_at": now,
+                "updated_at": now,
+            }
+            self._memory_cache[scoped_key] = entry
+
+            try:
+                with sqlite3.connect(self._db_path) as conn:
+                    conn.execute("""
+                        INSERT OR REPLACE INTO operations_idempotency (
+                            scoped_key, project_id, endpoint, idempotency_key,
+                            request_hash, status, response_json, status_code, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        scoped_key, project_id, endpoint, idempotency_key,
+                        req_hash, "FAILED", err_json, 500, now, now
+                    ))
+                    conn.commit()
+            except Exception as exc:
+                logger.warning(f"Could not persist failed idempotency record: {exc}")
+
+            # Wake up any waiting concurrent requests
+            event = self._completion_events.pop(scoped_key, None)
+            if event:
+                event.set()
+
     def clear(self) -> None:
         """Clears all idempotency records (used for test isolation)."""
         with self._lock:
             self._memory_cache.clear()
+            self._completion_events.clear()
             try:
                 with sqlite3.connect(self._db_path) as conn:
                     conn.execute("DELETE FROM operations_idempotency")
@@ -300,3 +412,4 @@ class IdempotencyManager:
 
 # Module-level singleton
 idempotency_manager = IdempotencyManager()
+

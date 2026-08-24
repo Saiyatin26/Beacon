@@ -30,6 +30,13 @@ logger = logging.getLogger("beacon.resilience")
 T = TypeVar("T")
 
 
+# Shared ThreadPoolExecutor for background timeout workers (prevents caller from blocking on shutdown)
+_TIMEOUT_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=64,
+    thread_name_prefix="beacon-timeout-worker",
+)
+
+
 def classify_failure(exc: Exception) -> Tuple[bool, ErrorCategory]:
     """Classifies an exception as either retryable (transient) or permanent (non-retryable).
     Returns a tuple of (is_retryable, ErrorCategory).
@@ -61,15 +68,42 @@ def classify_failure(exc: Exception) -> Tuple[bool, ErrorCategory]:
                 return False, ErrorCategory.RESOURCE_LIMIT
             return False, ErrorCategory.VALIDATION_ERROR
         # Retryable gateway/proxy and server errors
-        if code in (408, 502, 503, 504):
+        if code in (408, 429, 500, 502, 503, 504, 529):
             return True, ErrorCategory.TIMEOUT if code in (408, 504) else ErrorCategory.DEPENDENCY_UNAVAILABLE
         return False, ErrorCategory.INTERNAL_ERROR
 
-    # 3. Standard Python Built-in Non-Retryable Exceptions
+    # 3. urllib.error.HTTPError & SDK Status-Code Exceptions
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        if code in (400, 401, 403, 404, 405, 409, 412, 413, 422):
+            if code in (401, 403):
+                return False, ErrorCategory.AUTHORIZATION_ERROR
+            elif code in (400, 422):
+                return False, ErrorCategory.VALIDATION_ERROR
+            elif code == 404:
+                return False, ErrorCategory.NOT_FOUND
+            elif code == 409:
+                return False, ErrorCategory.CONFLICT
+            elif code == 413:
+                return False, ErrorCategory.RESOURCE_LIMIT
+            return False, ErrorCategory.VALIDATION_ERROR
+        if code in (408, 429, 500, 502, 503, 504, 529):
+            return True, ErrorCategory.TIMEOUT if code in (408, 504) else ErrorCategory.DEPENDENCY_UNAVAILABLE
+        return False, ErrorCategory.INTERNAL_ERROR
+
+    # 4. Duck-typing status_code / status attributes (Anthropic / OpenAI SDK errors)
+    sdk_status = getattr(exc, "status_code", None) or getattr(exc, "status", None)
+    if isinstance(sdk_status, int):
+        if sdk_status in (400, 401, 403, 404, 405, 409, 412, 413, 422):
+            return False, ErrorCategory.AUTHORIZATION_ERROR if sdk_status in (401, 403) else ErrorCategory.VALIDATION_ERROR
+        if sdk_status in (408, 429, 500, 502, 503, 504, 529):
+            return True, ErrorCategory.TIMEOUT if sdk_status in (408, 504) else ErrorCategory.DEPENDENCY_UNAVAILABLE
+
+    # 5. Standard Python Built-in Non-Retryable Exceptions
     if isinstance(exc, (ValueError, KeyError, TypeError, AttributeError, PermissionError, NotImplementedError)):
         return False, ErrorCategory.VALIDATION_ERROR
 
-    # 4. Transient System / Database / Network Failures
+    # 6. Transient System / Database / Network Failures
     if isinstance(exc, sqlite3.OperationalError):
         msg = str(exc).lower()
         if "locked" in msg or "busy" in msg:
@@ -94,7 +128,7 @@ def execute_with_retry(
     project_id: Optional[str] = None,
 ) -> T:
     """Executes a callable with bounded exponential backoff and jitter for retryable failures.
-    Non-retryable failures (401, 403, 422, validation, auth) fail immediately.
+    Non-retryable failures (401, 403, 422, validation, auth) fail immediately on attempt 1.
     """
     attempts_limit = max_attempts or getattr(settings, "max_retry_attempts", 3)
     base_delay = base_delay_ms or getattr(settings, "retry_backoff_base_ms", 100.0)
@@ -155,21 +189,41 @@ def with_timeout(
     func: Callable[..., T],
     timeout_seconds: Optional[float] = None,
     operation_name: str = "operation",
+    cancellation_event: Optional[Any] = None,
     *args: Any,
     **kwargs: Any,
 ) -> T:
     """Executes a function with a strict timeout boundary.
+    Guarantees caller returns near the configured deadline without blocking indefinitely
+    on worker thread shutdown.
+
+    If the operation supports cancellation, cancellation_event is signaled on timeout.
     Raises OperationTimeoutError if execution exceeds the deadline.
     """
-    deadline = timeout_seconds or getattr(settings, "operation_timeout_seconds", 60.0)
+    deadline = timeout_seconds if timeout_seconds is not None else getattr(settings, "operation_timeout_seconds", 60.0)
+    start_mono = time.monotonic()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(func, *args, **kwargs)
-        try:
-            return future.result(timeout=deadline)
-        except concurrent.futures.TimeoutError:
-            logger.error(f"Execution of '{operation_name}' timed out after {deadline} seconds.")
-            raise OperationTimeoutError(
-                f"Operation '{operation_name}' timed out after {deadline:.1f} seconds.",
-                details={"timeout_seconds": deadline, "operation": operation_name},
-            )
+    future = _TIMEOUT_EXECUTOR.submit(func, *args, **kwargs)
+    try:
+        return future.result(timeout=deadline)
+    except concurrent.futures.TimeoutError:
+        elapsed = time.monotonic() - start_mono
+        if cancellation_event is not None and hasattr(cancellation_event, "set"):
+            try:
+                cancellation_event.set()
+            except Exception:
+                pass
+
+        future.cancel()
+        logger.error(
+            f"Execution of '{operation_name}' timed out after {deadline:.2f}s (elapsed: {elapsed:.2f}s)."
+        )
+        raise OperationTimeoutError(
+            f"Operation '{operation_name}' timed out after {deadline:.1f} seconds.",
+            details={
+                "timeout_seconds": deadline,
+                "elapsed_seconds": round(elapsed, 3),
+                "operation": operation_name,
+            },
+        )
+

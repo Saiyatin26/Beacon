@@ -915,6 +915,14 @@ def run_certification_v1(
             )
         return artifact.model_dump(mode="json")
     except Exception as exc:
+        if request.idempotency_key:
+            idempotency_manager.record_failed(
+                project_id=proj_id,
+                endpoint="/api/v1/certification/run",
+                idempotency_key=request.idempotency_key,
+                request_payload=request,
+                error_message=str(exc),
+            )
         certification_job_tracker.update_state(
             job_id=job.job_id,
             state=JobState.FAILED,
@@ -926,6 +934,7 @@ def run_certification_v1(
         raise
     finally:
         workload_protector.release_job_slot()
+
 
 
 
@@ -2064,7 +2073,6 @@ def run_custom_certification(
             n_samples=len(test_inputs),
         )
         duration_ms = (time.perf_counter() - start_time) * 1000.0
-        duration_ms = (time.perf_counter() - start_time) * 1000.0
 
         # EVIDENCE_GENERATION: artifact and evidence packages produced by certify()
         certification_job_tracker.update_state(
@@ -2121,6 +2129,14 @@ def run_custom_certification(
 
 
     except Exception as exc:
+        if req.idempotency_key:
+            idempotency_manager.record_failed(
+                project_id=req.project_id,
+                endpoint="/api/v1/certification/run-custom",
+                idempotency_key=req.idempotency_key,
+                request_payload=req,
+                error_message=str(exc),
+            )
         certification_job_tracker.update_state(
             job_id=job.job_id,
             state=JobState.FAILED,
@@ -2129,6 +2145,7 @@ def run_custom_certification(
             error_message=str(exc),
         )
         operational_metrics.record_job_failed(project_id=req.project_id, error_category="CERTIFICATION_FAILURE")
+
 
         audit_logger.log(
             project_id=req.project_id,
