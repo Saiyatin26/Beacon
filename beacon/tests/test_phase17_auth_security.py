@@ -573,13 +573,20 @@ def test_user_responses_never_contain_password_hash():
 # 9. Security Headers Middleware Tests (Requirement 25)
 # ==============================================================================
 
-def test_security_headers_present():
+def test_security_headers_present(monkeypatch):
+    from common.config import settings
+
     res = client.get("/health/live")
     assert res.status_code == 200
     assert res.headers.get("X-Content-Type-Options") == "nosniff"
     assert res.headers.get("X-Frame-Options") == "DENY"
     assert res.headers.get("X-XSS-Protection") == "1; mode=block"
-    assert "max-age=" in res.headers.get("Strict-Transport-Security", "")
+
+    # In production HTTPS, Strict-Transport-Security is present
+    monkeypatch.setattr(settings, "beacon_env", "production")
+    res_https = client.get("/health/live", headers={"x-forwarded-proto": "https"})
+    assert "max-age=" in res_https.headers.get("Strict-Transport-Security", "")
+
 
 
 # ==============================================================================

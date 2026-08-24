@@ -131,8 +131,8 @@ class Settings:
                     errors.append(
                         "JWT_SECRET_KEY is required and must not be a known insecure default in production/staging environments."
                     )
-            elif self.beacon_env in ("production", "staging") and len(self.jwt_secret_key) < 16:
-                errors.append("JWT_SECRET_KEY must be at least 16 characters long in production.")
+            elif self.beacon_env in ("production", "staging") and len(self.jwt_secret_key) < 32:
+                errors.append("JWT_SECRET_KEY must be at least 32 characters long in production/staging.")
 
             if self.jwt_access_token_expire_minutes <= 0:
                 errors.append(f"JWT_ACCESS_TOKEN_EXPIRE_MINUTES must be positive, got {self.jwt_access_token_expire_minutes}")
@@ -159,12 +159,18 @@ class Settings:
 
         # 5. CORS validation
         if self.beacon_env in ("production", "staging") and "*" in self.cors_origins:
-            errors.append("CORS_ORIGINS must not contain wildcard '*' in production.")
+            errors.append("CORS_ORIGINS must not contain wildcard '*' in production/staging.")
+
+        # 6. Database / MongoDB validation (if optional URI is configured)
+        if self.mongodb_atlas_uri:
+            if not (self.mongodb_atlas_uri.startswith("mongodb://") or self.mongodb_atlas_uri.startswith("mongodb+srv://")):
+                errors.append("MONGODB_ATLAS_URI must start with 'mongodb://' or 'mongodb+srv://'.")
 
         if errors and raise_on_error:
             raise ConfigurationError(f"Configuration validation failed:\n - " + "\n - ".join(errors))
 
         return errors
+
 
 
 settings = Settings()

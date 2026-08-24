@@ -145,12 +145,31 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="BEACON API", version=settings.beacon_version, lifespan=lifespan)
 
-# Phase 16 Middlewares
+# Phase 16 & 20 CORS Configuration
+allowed_methods = (
+    ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+    if settings.beacon_env in ("production", "staging")
+    else ["*"]
+)
+allowed_headers = (
+    [
+        "Authorization",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-Correlation-ID",
+        "X-Request-ID",
+        "Accept",
+        "Origin",
+    ]
+    if settings.beacon_env in ("production", "staging")
+    else ["*"]
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=allowed_methods,
+    allow_headers=allowed_headers,
     allow_credentials=True,
 )
 app.add_middleware(RequestCorrelationMiddleware)
@@ -163,10 +182,16 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["X-Beacon-Version"] = settings.beacon_version
+
+    # HSTS is conditionally applied in production/staging environments on HTTPS requests
+    is_https = request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").lower() == "https"
+    if settings.beacon_env in ("production", "staging") and is_https:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
     return response
+
 
 
 # Phase 16 Error Handlers
@@ -278,16 +303,13 @@ def health_details_endpoint(
 @app.get("/health")
 @app.get("/api/v1/health")
 def health():
-    """Standard health endpoint returning liveness, readiness, version, and environment."""
+    """Standard public health endpoint returning safe liveness, readiness, and version."""
     readiness = check_readiness()
     return {
         "status": "ok" if readiness.status == "READY" else "degraded",
-        "liveness": "UP",
-        "readiness": readiness.status,
         "version": settings.beacon_version,
-        "environment": settings.beacon_env,
-        "storage": "local SQLite",
     }
+
 
 
 
@@ -417,9 +439,13 @@ def get_oracle_set_endpoint(set_id: str):
 
 
 @app.post("/api/oracles/compile")
-def compile_oracle_endpoint(candidate: CandidateInvariant):
+def compile_oracle_endpoint(
+    candidate: CandidateInvariant,
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
+):
     """Compiles a validated CandidateInvariant into a canonical Oracle.
     Rejects unvalidated, invalidated, grounding-failed, or low-confidence (<0.8) candidates.
+    Requires authenticated user with CERTIFY permission.
     """
     try:
         oracle = compile_candidate_to_oracle(candidate)
@@ -429,6 +455,7 @@ def compile_oracle_endpoint(candidate: CandidateInvariant):
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Oracle compilation error: {exc}")
+
 
 
 @app.get("/runs")

@@ -1,42 +1,25 @@
 # BEACON Release Candidate Checklist
 
-This checklist must be executed and confirmed prior to tagging any production release candidate for BEACON.
+This checklist must be executed and confirmed prior to tagging or freezing any production release candidate for BEACON.
 
 ---
 
-## 1. Configuration & Security Audit
-- [ ] `BEACON_ENV=production` is verified in the deployment manifest.
-- [ ] `JWT_SECRET_KEY` is provisioned with a secure $\ge 32$-character random key (not empty, not default).
-- [ ] `CORS_ORIGINS` contains explicit allowed origins and does not use wildcard `*` with credentials.
-- [ ] Configuration validation passes on startup without errors.
-- [ ] No secrets, private keys, or credentials are hard-coded in git-tracked files or test fixtures.
+## Production Release Verification Checklist
 
-## 2. Database & Lifecycle Verification
-- [ ] SQLite database file path is configured on persistent volume storage (`BEACON_DATABASE_PATH`).
-- [ ] Database tables and indexes initialize deterministically on clean startup.
-- [ ] Startup interrupted job recovery runs safely and marks non-terminal jobs as `FAILED`.
-- [ ] Graceful shutdown drains in-flight requests cleanly on `SIGTERM`.
-
-## 3. Health & Observability Endpoints
-- [ ] `GET /health/live` returns `200 OK` (`status: "UP"`).
-- [ ] `GET /health/ready` returns `200 OK` (`status: "READY"`).
-- [ ] `GET /health/details` requires valid `SYSTEM_ADMIN` bearer token and does not leak secrets.
-- [ ] `GET /api/v1/operations/version` reports authoritative `1.0.0` version and environment.
-- [ ] Structured JSON logs include request IDs and redact Authorization headers / tokens.
-
-## 4. Resilience & Concurrency Guardrails
-- [ ] Project-scoped idempotency prevents duplicate execution on concurrent requests with identical keys.
-- [ ] Mismatched payloads with the same idempotency key return `409 Conflict`.
-- [ ] Execution timeout operates non-blocking with cooperative cancellation.
-- [ ] Late workers cannot overwrite timed-out operations with fake success.
-- [ ] Bounded retries apply only at transient external provider / lock boundaries.
-
-## 5. Certification Mathematics & Data Integrity
-- [ ] Equivalence scoring formulas and thresholds match specifications.
-- [ ] Counterexample extraction and OracleSet hashing maintain deterministic integrity.
-- [ ] Benchmark registry and user dataset registries isolate project namespaces.
-
-## 6. Automated Test Suite & Build Verification
-- [ ] Backend test suite passes: `python -m pytest -q tests` ($\ge 354$ tests, 0 failures, 0 errors).
-- [ ] Frontend production bundle builds cleanly: `cd frontend && npm run build` (`✓ built`, 0 errors).
-- [ ] Git working tree is clean and synchronized.
+- [ ] **JWT production secret $\ge 32$ characters**: `JWT_SECRET_KEY` is provisioned with $\ge 32$ cryptographically random characters in production/staging; empty, short, or placeholder keys fail closed on startup.
+- [ ] **Production CORS verified**: Wildcard `*` is strictly rejected when credentials are enabled; explicit allowlists are configured for methods (`GET, POST, PUT, PATCH, DELETE, OPTIONS`) and headers.
+- [ ] **HSTS production behavior verified**: `Strict-Transport-Security` is conditionally attached on HTTPS requests in production/staging environments, and omitted in local dev/test HTTP requests.
+- [ ] **Public health disclosure reviewed**: `/health` and `/health/live` expose only minimal safe operational status (`status`, `version`) without leaking filesystem paths, environment names, or storage internals.
+- [ ] **Detailed health authorization verified**: `/health/details` strictly enforces `SYSTEM_ADMIN` role via bearer token authentication; unauthenticated or non-admin requests return `401`/`403`.
+- [ ] **Every endpoint classified**: All backend API endpoints are audited and classified into `PUBLIC`, `AUTHENTICATED`, `PROJECT-SCOPED`, or `SYSTEM-ADMIN`.
+- [ ] **Project isolation verified**: Project-scoped endpoints enforce server-derived project authorization rather than relying solely on unverified client-supplied project IDs.
+- [ ] **Database architecture documented**: Hybrid architecture (SQLite for operational state/idempotency/jobs; optional MongoDB Atlas for domain vector search/invariants) is explicitly documented.
+- [ ] **SQLite backup documented**: Online WAL snapshot procedures and restoration commands are documented in `BACKUP_AND_RECOVERY.md`.
+- [ ] **MongoDB backup documented if applicable**: `mongodump` and Atlas snapshot procedures documented for optional enterprise vector deployments.
+- [ ] **Upload limits verified**: Request bodies and custom dataset uploads exceeding `MAX_DATASET_SIZE_BYTES` or containing prohibited API secrets are rejected.
+- [ ] **Temporary file cleanup verified**: Ingestion and preview parsers operate in-memory with automatic cleanup in `finally` blocks upon errors, timeouts, or completion.
+- [ ] **Provider secrets redacted**: Structured JSON logs and error responses scrub API keys, bearer tokens, passwords, and connection strings.
+- [ ] **Production frontend API URL verified**: `VITE_API_BASE_URL` properly defaults to relative path `""` in production builds without hardcoded `localhost` references or exposed backend secrets.
+- [ ] **Backend tests pass**: Full test suite passes: `python -m pytest -q tests` ($\ge 354$ tests, 0 failures, 0 errors).
+- [ ] **Frontend build succeeds**: Production Vite build executes cleanly: `cd frontend && npm run build` (`✓ built`, 0 errors).
+- [ ] **Git working tree clean**: All files staged/committed and synchronized.

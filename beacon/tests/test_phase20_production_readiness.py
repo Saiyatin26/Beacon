@@ -9,10 +9,11 @@ import sqlite3
 from unittest import mock
 from fastapi.testclient import TestClient
 
-from backend.common.config import Settings, ConfigurationError, BEACON_VERSION, settings
-from backend.api.main import app, lifespan
-from backend.operations.errors import StandardErrorResponse, ErrorCategory
-from backend.operations.health import check_readiness, check_liveness
+from common.config import Settings, ConfigurationError, BEACON_VERSION, settings
+from api.main import app, lifespan
+from operations.errors import StandardErrorResponse, ErrorCategory
+from operations.health import check_readiness, check_liveness
+
 
 
 @pytest.fixture
@@ -50,13 +51,18 @@ def test_config_validation_production_missing_secret_fails_closed():
 
 
 def test_config_validation_production_short_secret_fails_closed():
-    """Verifies that production requires at least 16 characters for JWT_SECRET_KEY."""
+    """Verifies that production requires at least 32 characters for JWT_SECRET_KEY."""
     cfg = Settings()
     cfg.beacon_env = "production"
-    cfg.jwt_secret_key = "short-secret"
+    cfg.jwt_secret_key = "short-secret-under-32-chars"
     with pytest.raises(ConfigurationError) as exc_info:
         cfg.validate(raise_on_error=True)
-    assert "at least 16 characters" in str(exc_info.value)
+    assert "at least 32 characters" in str(exc_info.value)
+
+    # 32+ characters secret passes
+    cfg.jwt_secret_key = "valid-production-secret-key-32-chars-long"
+    errors = cfg.validate(raise_on_error=True)
+    assert errors == []
 
 
 def test_config_validation_production_wildcard_cors_rejected():
@@ -87,6 +93,16 @@ def test_config_validation_invalid_bounds_rejected():
     assert "MAX_RETRY_ATTEMPTS must be between 0 and 20" in err_str
     assert "MAX_DATASET_SIZE_BYTES must be positive" in err_str
     assert "CONFIDENCE_THRESHOLD must be between 0.0 and 1.0" in err_str
+
+
+def test_config_validation_mongodb_uri_format():
+    """Verifies MongoDB URI validation when optional URI is provided."""
+    cfg = Settings()
+    cfg.beacon_env = "development"
+    cfg.mongodb_atlas_uri = "invalid-uri-without-mongo-prefix"
+    with pytest.raises(ConfigurationError) as exc_info:
+        cfg.validate(raise_on_error=True)
+    assert "MONGODB_ATLAS_URI must start with" in str(exc_info.value)
 
 
 # ==============================================================================
@@ -142,18 +158,19 @@ def test_readiness_endpoint_unreachable_database_returns_503(client):
 
 
 def test_standard_health_endpoint(client):
-    """Verifies unified /health and /api/v1/health endpoints."""
+    """Verifies public /health endpoint exposes only safe status and version."""
     for path in ("/health", "/api/v1/health"):
         res = client.get(path)
         assert res.status_code == 200
         data = res.json()
         assert data["status"] in ("ok", "degraded")
-        assert data["liveness"] == "UP"
         assert data["version"] == BEACON_VERSION
+        assert "storage" not in data
+        assert "environment" not in data
 
 
 # ==============================================================================
-# 4. Response Headers & Security Hardening
+# 4. Response Headers, Conditional HSTS & Security Hardening
 # ==============================================================================
 
 def test_response_headers_contain_version_and_security_headers(client):
@@ -164,6 +181,24 @@ def test_response_headers_contain_version_and_security_headers(client):
     assert res.headers.get("X-Content-Type-Options") == "nosniff"
     assert res.headers.get("X-Frame-Options") == "DENY"
     assert res.headers.get("X-XSS-Protection") == "1; mode=block"
+
+
+def test_hsts_header_conditional_on_https(client, monkeypatch):
+    """Verifies that HSTS header is conditionally attached only on HTTPS in production/staging."""
+    # 1. Dev mode (HTTP) -> No HSTS
+    monkeypatch.setattr(settings, "beacon_env", "development")
+    res = client.get("/health/live")
+    assert "Strict-Transport-Security" not in res.headers
+
+    # 2. Production mode (HTTP) -> No HSTS
+    monkeypatch.setattr(settings, "beacon_env", "production")
+    res = client.get("/health/live")
+    assert "Strict-Transport-Security" not in res.headers
+
+    # 3. Production mode (HTTPS via header) -> HSTS present
+    res_https = client.get("/health/live", headers={"x-forwarded-proto": "https"})
+    assert "Strict-Transport-Security" in res_https.headers
+    assert "max-age=31536000" in res_https.headers["Strict-Transport-Security"]
 
 
 # ==============================================================================
@@ -187,7 +222,7 @@ def test_standard_error_response_structure():
 
 
 # ==============================================================================
-# 6. Versioning, Upload Safety & CORS Tests
+# 6. Versioning, Upload Safety & Oracle Compilation Protection
 # ==============================================================================
 
 def test_version_endpoints_metadata(client):
@@ -200,6 +235,23 @@ def test_version_endpoints_metadata(client):
         assert data["version"] == BEACON_VERSION
         assert data["api_version"] == "v1"
         assert "timestamp" in data
+
+
+def test_compile_oracle_endpoint_authorization_protection(client):
+    """Verifies that /api/oracles/compile requires authentication / CERTIFY permissions."""
+    candidate_payload = {
+        "invariant_id": "inv-test-1",
+        "condition": "credit_score < 580",
+        "consequence": "REJECT",
+        "status": "candidate",
+        "confidence": 0.95,
+        "grounding_result": {"grounded": True, "verdict": "VERIFIED"},
+        "validation_result": {"passed": True, "passed_all": True},
+    }
+    # Unauthenticated call without credentials
+    res = client.post("/api/oracles/compile", json=candidate_payload)
+    assert res.status_code in (401, 403)
+
 
 
 def test_oversized_dataset_upload_rejected_by_workload_protector(client, monkeypatch):
@@ -218,7 +270,6 @@ def test_oversized_dataset_upload_rejected_by_workload_protector(client, monkeyp
         },
         headers={"Authorization": "Bearer test-admin-token"} if settings.auth_required else {},
     )
-    # When auth is disabled/bypassed in tests or with token, must return 413 or 422/400
     assert res.status_code in (413, 401, 403, 422)
 
 
@@ -242,5 +293,6 @@ def test_dataset_upload_prohibited_secrets_rejected(client):
         assert any("prohibited secret" in err.lower() for err in data.get("errors", []))
     else:
         assert res.status_code in (400, 401, 403, 422)
+
 
 

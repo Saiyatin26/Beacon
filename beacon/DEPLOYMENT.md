@@ -2,16 +2,36 @@
 
 ## Overview
 
-BEACON is a production-grade legacy-to-modernized code certification and behavioral equivalence system. This guide provides deployment topology, environment hardening, lifecycle management, health monitoring, and operational instructions for production environments.
+BEACON is an enterprise-grade legacy-to-modernized code certification and behavioral equivalence system. This guide provides deployment topology, persistence architecture, configuration hardening, lifecycle management, health monitoring, and operational instructions for production environments.
 
 ---
 
-## 1. Prerequisites
+## 1. Persistence & Database Architecture
 
-- **Python**: Python 3.11+ (recommended 3.11.x)
-- **Node.js**: Node 18+ / 20+ (for frontend dashboard compilation)
-- **Database**: Local SQLite 3.35+ (with WAL mode enabled) or enterprise volume storage
-- **Operating System**: Linux (Ubuntu 22.04 LTS / Debian 12 / RHEL 9), macOS, or Windows Server
+BEACON implements a **Hybrid Persistence Architecture**:
+
+```
+                       BEACON DATA PERSISTENCE
+                                  │
+                 ┌────────────────┴────────────────┐
+                 ▼                                 ▼
+           SQLite Database                   MongoDB Atlas
+          (Local / State)                  (Optional Domain)
+                 │                                 │
+                 ▼                                 ▼
+        • Operational State               • Vector Invariant Search
+        • Project Idempotency             • Invariant Deduplication
+        • Job Lifecycle & Recovery        • Cross-service OracleSets
+        • Custom Dataset Registries       • High-Throughput Drift
+        • Local Certification Records     • Long-Term Historical Runs
+```
+
+### Persistence Layer Responsibilities
+
+| Storage Layer | Deployment Mode | Data Stored | Failure / Offline Behavior |
+| :--- | :--- | :--- | :--- |
+| **SQLite** (`beacon.sqlite3`) | **Mandatory** (Core) | Operational jobs, idempotency keys, project namespaces, local dataset registry, local artifacts | If SQLite is inaccessible, `/health/ready` returns `503 Service Unavailable` (`database_unavailable`). All stateful mutations fail closed. |
+| **MongoDB Atlas** (`MONGODB_ATLAS_URI`) | **Optional** (Hybrid Domain) | Invariants with Voyage AI vector embeddings, candidate deduplication, cloud OracleSets, drift telemetry | If not configured or offline, BEACON automatically degrades gracefully to standalone mode using AST/lexical deduplication and local file storage. |
 
 ---
 
@@ -27,7 +47,7 @@ cp .env.example .env
 
 | Variable | Description | Production Requirement | Example Value |
 | :--- | :--- | :--- | :--- |
-| `BEACON_ENV` | Environment mode | Must be set to `production` | `production` |
+| `BEACON_ENV` | Environment mode | Must be set to `production` or `staging` | `production` |
 | `JWT_SECRET_KEY` | HMAC SHA-256 secret for signing auth tokens | Must be $\ge 32$ cryptographically random chars | `CHANGE_ME_TO_A_32_CHAR_RANDOM_SECRET` |
 | `JWT_ALGORITHM` | Algorithm for JWT tokens | Defaults to `HS256` | `HS256` |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | Access token lifespan | Positive integer (e.g. 60) | `60` |
@@ -37,13 +57,36 @@ cp .env.example .env
 | `MAX_RETRY_ATTEMPTS` | Maximum transient retry attempts | Integer between 1 and 5 | `3` |
 | `MAX_DATASET_SIZE_BYTES` | Maximum upload size per dataset | Byte limit (e.g. 10MB) | `10485760` |
 | `BEACON_DATABASE_PATH` | Path to SQLite database file | Persistent directory path | `/var/lib/beacon/beacon.sqlite3` |
+| `MONGODB_ATLAS_URI` | Optional MongoDB connection string | Valid URI starting with `mongodb://` or `mongodb+srv://` | `mongodb+srv://user:pass@cluster.mongodb.net/` |
 
 > [!CAUTION]
-> In `BEACON_ENV=production`, startup will immediately **fail closed** if `JWT_SECRET_KEY` is missing or matches known insecure default placeholders.
+> In `BEACON_ENV=production`, startup will immediately **fail closed** if `JWT_SECRET_KEY` is missing, shorter than 32 characters, or matches known insecure default placeholders.
 
 ---
 
-## 3. Installation & Build
+## 3. API Endpoint Classification & Access Matrix
+
+All BEACON endpoints follow strict security classification:
+
+| Endpoint | Method | Classification | Access Requirement | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| `/health/live`, `/live` | `GET` | **PUBLIC** | None | Process liveness and uptime check |
+| `/health/ready`, `/ready` | `GET` | **PUBLIC / CONTROLLED** | None | Read-only database & registry readiness check |
+| `/health` | `GET` | **PUBLIC** | None | Minimal safe operational status |
+| `/health/details` | `GET` | **SYSTEM-ADMIN** | Bearer Token (`SYSTEM_ADMIN` role) | Granular diagnostic inspection without secret leaks |
+| `/api/v1/operations/version` | `GET` | **PUBLIC** | None | Safe service and version metadata |
+| `/api/auth/login` | `POST` | **PUBLIC** | Valid user credentials | Issue JWT access token |
+| `/api/v1/certification/run` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY` permission in target project) | Execute certification job with idempotency |
+| `/api/v1/certification/jobs/{id}` | `GET` | **PROJECT-SCOPED** | Bearer Token (`VIEW` permission in target project) | Inspect job progress and results |
+| `/api/v1/custom/datasets/upload` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY` permission in target project) | Upload and validate user dataset |
+| `/api/v1/custom/datasets/preview` | `POST` | **PROJECT-SCOPED** | Bearer Token (`VIEW` permission in target project) | Ingestion preview and schema validation |
+| `/api/oracles/compile` | `POST` | **PROJECT-SCOPED** | Bearer Token (`CERTIFY` permission in target project) | Compile and register invariant oracle |
+| `/api/v1/drift/evaluate` | `POST` | **PROJECT-SCOPED** | Bearer Token (`VIEW` permission in target project) | Run drift observation analysis |
+| `/api/v1/benchmarks` | `GET` | **PUBLIC** | None | List frozen standard benchmarks |
+
+---
+
+## 4. Installation & Build
 
 ### Step 1: Backend Setup
 ```bash
@@ -67,7 +110,7 @@ The compiled static assets are generated in `frontend/dist/`.
 
 ---
 
-## 4. Starting the Application
+## 5. Starting the Application
 
 ### Running with Uvicorn (Standard Production)
 ```bash
@@ -94,42 +137,8 @@ gunicorn backend.api.main:app \
 
 ---
 
-## 5. Health Probes & Readiness Topologies
+## 6. Health Probes & Readiness Topologies
 
-BEACON provides Kubernetes / Container compliant health check endpoints:
-
-### Liveness Probe (`GET /health/live` or `GET /live`)
-- **Purpose**: Checks if the BEACON process is alive and responding to HTTP requests.
-- **Payload**: `{"status": "UP", "version": "1.0.0", "service": "BEACON"}`
-- **HTTP Status**: Always `200 OK` when the process is responsive.
-
-### Readiness Probe (`GET /health/ready` or `GET /ready`)
-- **Purpose**: Strictly read-only validation that the database is accessible and registries are loaded.
-- **Payload**: `{"status": "READY", "checks": {"database": true, "benchmarks": true, "oracles": true}}`
-- **HTTP Status**: `200 OK` when ready to serve; `503 Service Unavailable` if database connectivity fails.
-
-### Detailed Health (`GET /health/details`)
-- **Purpose**: Granular dependency inspection.
-- **Access**: Restricted to authenticated users with `SYSTEM_ADMIN` role. Never leaks credentials, connection strings, or system paths.
-
----
-
-## 6. Graceful Shutdown & Lifecycle
-
-When a `SIGTERM` or `SIGINT` signal is received:
-1. The server stops accepting new incoming HTTP connections.
-2. In-flight requests are allowed up to the graceful shutdown deadline to complete or cancel cooperatively.
-3. Active worker thread pools are drained.
-4. Database transactions and log buffers are flushed.
-5. Process terminates with exit code 0.
-
----
-
-## 7. Security Hardening Checklist
-
-- [x] Set `BEACON_ENV=production` in the production environment.
-- [x] Configure a dedicated, non-default `JWT_SECRET_KEY` via environment variable or secret vault.
-- [x] Restrict `CORS_ORIGINS` to trusted enterprise domain names.
-- [x] Mount the database on persistent, encrypted storage (e.g. encrypted EBS / persistent volume).
-- [x] Serve all public traffic through a TLS reverse proxy (Nginx, Traefik, AWS ALB, Cloudflare).
-- [x] Ensure `X-Content-Type-Options`, `X-Frame-Options`, and `Strict-Transport-Security` headers are present on all responses.
+- **Liveness Probe**: `GET /health/live` (or `/live`) → Returns HTTP `200 OK` if the Python runtime is responsive.
+- **Readiness Probe**: `GET /health/ready` (or `/ready`) → Returns HTTP `200 OK` if SQLite database and registries are online; returns `503 Service Unavailable` if database is down. Strictly read-only (`SELECT 1`).
+- **Detailed Health**: `GET /health/details` → Protected by `SYSTEM_ADMIN` role; provides detailed telemetry without exposing credentials or internal paths.
