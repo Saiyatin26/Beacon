@@ -147,27 +147,34 @@ def log_operational_event(
     message: Optional[str] = None,
     **extra: Any,
 ) -> None:
-    """Emits a structured operational log entry with standardized fields and automatic redaction."""
-    logger = logging.getLogger(logger_name)
-    extra_fields = {
-        "event": sanitize_log_string(event),
-        "request_id": current_request_id.get(),
-        "project_id": project_id or current_project_id.get(),
-        "user_id": user_id or current_user_id.get(),
-        "certification_run_id": certification_run_id,
-        "dataset_id": dataset_id,
-        "benchmark_id": benchmark_id,
-        "evaluation_mode": evaluation_mode,
-        "target_variant": target_variant,
-        "provider": provider,
-        "duration_ms": duration_ms,
-        "outcome": outcome,
-        "error_category": error_category,
-        "safe_error": scrub_secrets(safe_error) if safe_error else None,
-    }
-    for k, v in extra.items():
-        extra_fields[k] = scrub_secrets(v) if isinstance(v, str) else v
+    """Emits a structured operational log entry with standardized fields and automatic redaction.
+    Guaranteed non-blocking: never raises exceptions to caller.
+    """
+    try:
+        log_obj = logging.getLogger(logger_name)
+        extra_fields = {
+            "event": sanitize_log_string(event),
+            "request_id": current_request_id.get(),
+            "project_id": project_id or current_project_id.get(),
+            "user_id": user_id or current_user_id.get(),
+            "certification_run_id": certification_run_id,
+            "dataset_id": dataset_id,
+            "benchmark_id": benchmark_id,
+            "evaluation_mode": evaluation_mode,
+            "target_variant": target_variant,
+            "provider": provider,
+            "duration_ms": duration_ms,
+            "outcome": outcome,
+            "error_category": error_category,
+            "safe_error": scrub_secrets(safe_error) if safe_error else None,
+        }
+        for k, v in extra.items():
+            extra_fields[k] = scrub_secrets(v) if isinstance(v, str) else v
 
-    msg = scrub_secrets(message or f"Operational event '{event}' occurred")
-    logger.log(level, msg, extra=extra_fields)
+        msg = scrub_secrets(message or f"Operational event '{event}' occurred")
+        log_obj.log(level, msg, extra=extra_fields)
+    except Exception:
+        # Non-blocking: fail safely without interrupting business operations
+        pass
+
 

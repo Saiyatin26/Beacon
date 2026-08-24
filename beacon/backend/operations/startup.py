@@ -14,9 +14,50 @@ from common.config import settings
 from certification.repository import certification_repository
 from benchmarks import benchmark_registry
 from oracle.registry import registry as oracle_registry
-from llm.manager import get_provider_manager
+from .job_lifecycle import certification_job_tracker, JobState
+from .logging_config import log_operational_event
 
 logger = logging.getLogger("beacon.startup")
+
+
+def recover_interrupted_operations() -> dict[str, Any]:
+    """Scans persisted jobs that were interrupted in non-terminal states prior to restart,
+    and safely marks them as FAILED with operational diagnostic details.
+    """
+    logger.info("Scanning for interrupted or stale operations from previous run...")
+    interrupted_jobs = certification_job_tracker.list_interrupted_or_stale_jobs()
+    recovered_count = 0
+
+    for job in interrupted_jobs:
+        try:
+            logger.warning(
+                f"Recovering interrupted job '{job.job_id}' (previous state: '{job.state.value}') "
+                f"for project '{job.project_id}'."
+            )
+            certification_job_tracker.update_state(
+                job_id=job.job_id,
+                state=JobState.FAILED,
+                current_step="Operation interrupted by application restart/shutdown.",
+                error_category="INTERRUPTED",
+                error_message="Job was interrupted in-flight by a server restart or process termination.",
+                allow_forced=True,
+            )
+            log_operational_event(
+                event="job_recovery_interrupted_handled",
+                project_id=job.project_id,
+                level=logging.WARNING,
+                logger_name="beacon.startup",
+                outcome="RECOVERED_TO_FAILED",
+                error_category="INTERRUPTED",
+                message=f"Interrupted job '{job.job_id}' safely recovered and marked FAILED",
+                extra={"job_id": job.job_id, "previous_state": job.state.value},
+            )
+            recovered_count += 1
+        except Exception as exc:
+            logger.error(f"Failed to recover interrupted job '{job.job_id}': {exc}")
+
+    logger.info(f"Startup recovery completed: {recovered_count} interrupted jobs processed.")
+    return {"interrupted_jobs_found": len(interrupted_jobs), "recovered_count": recovered_count}
 
 
 def validate_startup_configuration() -> dict[str, Any]:
@@ -125,5 +166,10 @@ def validate_startup_configuration() -> dict[str, Any]:
         "environment": env,
     }
 
+    # 9. Phase 19: Interrupted Operation Recovery
+    recovery_result = recover_interrupted_operations()
+    diagnostics["checks"]["recovery"] = recovery_result
+
     logger.info("BEACON startup configuration validation completed successfully.")
     return diagnostics
+

@@ -455,11 +455,13 @@ def compute_certification_request_identity(
     oracle_set_hash: str = "",
     input_set_hash: str = "",
     idempotency_key: Optional[str] = None,
+    project_id: Optional[str] = None,
 ) -> str:
     """Computes deterministic SHA-256 identity for a certification request from all certification-affecting fields.
     Never includes secrets, API keys, or volatile timestamps.
     """
     payload = {
+        "project_id": project_id or "",
         "benchmark_id": benchmark_id or "",
         "benchmark_version": benchmark_version or "1.0.0",
         "dataset_name": dataset_name or "default",
@@ -479,6 +481,7 @@ def compute_certification_request_identity(
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 
 def compute_artifact_content_hash(artifact: Union[CertificationArtifact, dict[str, Any]]) -> str:

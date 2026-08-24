@@ -30,6 +30,11 @@ class ErrorCategory(str, Enum):
     STORAGE_FAILURE = "STORAGE_FAILURE"
     TIMEOUT = "TIMEOUT"
     RESOURCE_LIMIT = "RESOURCE_LIMIT"
+    STATE_TRANSITION_ERROR = "STATE_TRANSITION_ERROR"
+    IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    RECOVERY_FAILURE = "RECOVERY_FAILURE"
+    TRANSIENT_DEPENDENCY_FAILURE = "TRANSIENT_DEPENDENCY_FAILURE"
+    PERMANENT_DEPENDENCY_FAILURE = "PERMANENT_DEPENDENCY_FAILURE"
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
@@ -87,6 +92,40 @@ class DependencyUnavailableError(BeaconOperationalError):
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             details=details,
         )
+
+
+class StateTransitionError(BeaconOperationalError):
+    """Raised when an illegal or out-of-order lifecycle state transition is attempted."""
+    def __init__(self, message: str, details: Optional[dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            category=ErrorCategory.STATE_TRANSITION_ERROR,
+            status_code=status.HTTP_409_CONFLICT,
+            details=details,
+        )
+
+
+class IdempotencyConflictError(BeaconOperationalError):
+    """Raised when an idempotency key is reused with a materially different request payload."""
+    def __init__(self, message: str, details: Optional[dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            category=ErrorCategory.IDEMPOTENCY_CONFLICT,
+            status_code=status.HTTP_409_CONFLICT,
+            details=details,
+        )
+
+
+class OperationTimeoutError(BeaconOperationalError):
+    """Raised when an operation exceeds its configured execution deadline."""
+    def __init__(self, message: str, details: Optional[dict[str, Any]] = None):
+        super().__init__(
+            message=message,
+            category=ErrorCategory.TIMEOUT,
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            details=details,
+        )
+
 
 
 def _map_http_status_to_category(status_code: int) -> ErrorCategory:

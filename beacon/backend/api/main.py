@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 sys.path.append(str(Path(__file__).resolve().parents[2] / "legacy_sample"))
 
-from fastapi import FastAPI, HTTPException, Request, Response, Depends, status
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -69,7 +69,10 @@ from operations import (
     workload_protector,
     log_operational_event,
     ResourceLimitError,
+    idempotency_manager,
+    IdempotencyConflictError,
 )
+
 
 from auth import (
     auth_router,
@@ -579,14 +582,20 @@ def get_benchmark_manifest(
 @app.post("/api/v1/certification/run")
 def run_certification_v1(
     request: CertificationRunRequest,
+    project_id: Optional[str] = Query(None),
     current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
 ):
     """Executes a policy-driven behavioral certification run using registered ImplementationAdapters or Benchmarks."""
+    resolved_project_id = project_id or request.project_id
+
+
     # 1. Benchmark Resolution Mode
     test_inputs = None
     context = None
     if request.benchmark_id:
+        proj_id = resolved_project_id or f"benchmark_{request.benchmark_id}"
         bench_spec = benchmark_registry.get_benchmark(request.benchmark_id)
+
         if not bench_spec:
             raise HTTPException(status_code=404, detail=f"Benchmark '{request.benchmark_id}' not found.")
 
@@ -724,7 +733,8 @@ def run_certification_v1(
             )
 
         field_bounds = None
-        proj_id = request.project_id
+        proj_id = resolved_project_id or request.project_id or "default_project"
+
 
     # 3. Construct Deterministic Request Identity (All Certification-Affecting Fields)
     pol_id = request.policy.policy_id if request.policy else "POL-DEFAULT"
@@ -754,6 +764,7 @@ def run_certification_v1(
         oracle_set_id=oracle_set.oracle_set_id,
         oracle_set_hash=oracle_set.oracle_set_hash,
         idempotency_key=request.idempotency_key,
+        project_id=proj_id,
     )
 
     if context:
@@ -761,14 +772,26 @@ def run_certification_v1(
         context.idempotency_key = request.idempotency_key
         context.is_forced_recompute = request.force_recompute
 
-    # 4. Deterministic Idempotency / Duplicate Request Protection
+    # 4. Deterministic Idempotency / Duplicate Request Protection & Conflict Detection
     if not request.force_recompute:
-        existing_artifact = certification_repository.get_by_request_identity(request_identity)
+        if request.idempotency_key:
+            cached_data, cached_status = idempotency_manager.check_or_reserve(
+                project_id=proj_id,
+                endpoint="/api/v1/certification/run",
+                idempotency_key=request.idempotency_key,
+                request_payload=request,
+            )
+            if cached_data is not None:
+                return cached_data
+
+        existing_artifact = certification_repository.get_by_request_identity(request_identity, project_id=proj_id)
         if existing_artifact is None:
             existing_artifact = certification_repository.find_idempotent_artifact(
                 request_identity=request_identity,
+                project_id=proj_id,
                 benchmark_id=request.benchmark_id,
                 evaluation_mode=e_mode,
+
                 target_variant=t_variant,
                 dataset_checksum=d_checksum,
                 oracle_set_hash=oracle_set.oracle_set_hash,
@@ -804,6 +827,15 @@ def run_certification_v1(
                 certification_status=existing_artifact.status.value,
                 equivalence_score=existing_artifact.score,
             )
+            if request.idempotency_key:
+                idempotency_manager.record_completed(
+                    project_id=proj_id,
+                    endpoint="/api/v1/certification/run",
+                    idempotency_key=request.idempotency_key,
+                    request_payload=request,
+                    response_data=existing_artifact.model_dump(mode="json"),
+                    status_code=200,
+                )
             return existing_artifact.model_dump(mode="json")
     else:
         logger.info(
@@ -872,6 +904,15 @@ def run_certification_v1(
             certification_status=artifact.status.value,
             success=True,
         )
+        if request.idempotency_key:
+            idempotency_manager.record_completed(
+                project_id=proj_id,
+                endpoint="/api/v1/certification/run",
+                idempotency_key=request.idempotency_key,
+                request_payload=request,
+                response_data=artifact.model_dump(mode="json"),
+                status_code=200,
+            )
         return artifact.model_dump(mode="json")
     except Exception as exc:
         certification_job_tracker.update_state(
@@ -885,6 +926,7 @@ def run_certification_v1(
         raise
     finally:
         workload_protector.release_job_slot()
+
 
 
 @app.get("/api/v1/certification/artifacts")
@@ -1030,7 +1072,10 @@ def export_certification_dossier(
 
     cases = certification_repository.list_cases_for_input_set(artifact.input_set_id, run_id=artifact.certification_id)
     input_set = certification_repository.get_input_set(artifact.input_set_id)
+    if not input_set:
+        raise HTTPException(status_code=409, detail="Cannot export dossier: Incomplete certification data (InputSet missing).")
     integrity_report = certification_repository.verify_certification_run_integrity(certification_id)
+
 
     if format == "json":
         ctx = artifact.context
@@ -1885,8 +1930,18 @@ def run_custom_certification(
         idempotency_key=req.idempotency_key,
     )
 
-    # Idempotency lookup
+    # Idempotency lookup & conflict detection
     if not req.force_recompute:
+        if req.idempotency_key:
+            cached_data, cached_status = idempotency_manager.check_or_reserve(
+                project_id=req.project_id,
+                endpoint="/api/v1/certification/run-custom",
+                idempotency_key=req.idempotency_key,
+                request_payload=req,
+            )
+            if cached_data is not None:
+                return cached_data
+
         existing_artifact = certification_repository.get_by_request_identity(request_identity)
         if existing_artifact is not None:
             logger.info(
@@ -1916,7 +1971,17 @@ def run_custom_certification(
                 certification_id=existing_artifact.certification_id,
                 details={"reuse": True, "request_identity": request_identity},
             )
+            if req.idempotency_key:
+                idempotency_manager.record_completed(
+                    project_id=req.project_id,
+                    endpoint="/api/v1/certification/run-custom",
+                    idempotency_key=req.idempotency_key,
+                    request_payload=req,
+                    response_data=existing_artifact.model_dump(mode="json"),
+                    status_code=200,
+                )
             return existing_artifact.model_dump(mode="json")
+
 
     # Workload Protection & Concurrency Limits
     workload_protector.validate_certification_records(len(test_inputs), project_id=req.project_id)
@@ -2043,7 +2108,17 @@ def run_custom_certification(
                 "content_hash": artifact.content_hash,
             },
         )
+        if req.idempotency_key:
+            idempotency_manager.record_completed(
+                project_id=req.project_id,
+                endpoint="/api/v1/certification/run-custom",
+                idempotency_key=req.idempotency_key,
+                request_payload=req,
+                response_data=artifact.model_dump(mode="json"),
+                status_code=200,
+            )
         return artifact.model_dump(mode="json")
+
 
     except Exception as exc:
         certification_job_tracker.update_state(

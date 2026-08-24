@@ -251,7 +251,9 @@ class CertificationRepository:
         artifacts = self.list_artifacts(project_id=project_id, limit=1)
         return artifacts[0] if artifacts else None
 
-    def get_by_request_identity(self, request_identity: str) -> Optional[CertificationArtifact]:
+    def get_by_request_identity(
+        self, request_identity: str, project_id: Optional[str] = None
+    ) -> Optional[CertificationArtifact]:
         """Retrieves an existing completed CertificationArtifact matching the deterministic request identity."""
         if not request_identity:
             return None
@@ -259,6 +261,8 @@ class CertificationRepository:
             cert_id = self._memory_idempotency[request_identity]
             art = self.get_artifact(cert_id)
             if art is not None:
+                if project_id and art.project_id != project_id:
+                    return None
                 return art
         try:
             with sqlite3.connect(self._db_path) as conn:
@@ -271,7 +275,11 @@ class CertificationRepository:
                 if row:
                     cert_id = row[0]
                     self._memory_idempotency[request_identity] = cert_id
-                    return self.get_artifact(cert_id)
+                    art = self.get_artifact(cert_id)
+                    if art is not None:
+                        if project_id and art.project_id != project_id:
+                            return None
+                        return art
         except Exception as exc:
             logger.warning(f"Error querying certification_idempotency: {exc}")
         return None
@@ -301,6 +309,7 @@ class CertificationRepository:
     def find_idempotent_artifact(
         self,
         request_identity: Optional[str] = None,
+        project_id: Optional[str] = None,
         benchmark_id: Optional[str] = None,
         evaluation_mode: Optional[str] = None,
         target_variant: Optional[str] = None,
@@ -314,13 +323,16 @@ class CertificationRepository:
     ) -> Optional[CertificationArtifact]:
         """Finds an existing completed CertificationArtifact matching the request identity or exact configuration."""
         if request_identity:
-            matched = self.get_by_request_identity(request_identity)
+            matched = self.get_by_request_identity(request_identity, project_id=project_id)
             if matched is not None:
                 return matched
 
-        artifacts = self.list_artifacts(benchmark_id=benchmark_id, limit=50)
+        artifacts = self.list_artifacts(project_id=project_id, benchmark_id=benchmark_id, limit=50)
         for art in artifacts:
+            if project_id and art.project_id != project_id:
+                continue
             ctx = art.context
+
             # Check idempotency key if supplied
             art_idem_key = getattr(art, "idempotency_key", None) or (ctx.idempotency_key if ctx else None)
             if idempotency_key is not None and art_idem_key != idempotency_key:

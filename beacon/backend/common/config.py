@@ -75,6 +75,13 @@ class Settings:
     beacon_version: str = os.getenv("BEACON_VERSION", os.getenv("BUILD_VERSION", "1.0.0"))
     api_version: str = "v1"
 
+    # Phase 19 Reliability, Resilience, Lifecycle Management & Operational Safety
+    operation_timeout_seconds: float = float(os.getenv("OPERATION_TIMEOUT_SECONDS", "60.0"))
+    max_retry_attempts: int = int(os.getenv("MAX_RETRY_ATTEMPTS", "3"))
+    retry_backoff_base_ms: float = float(os.getenv("RETRY_BACKOFF_BASE_MS", "100.0"))
+    stale_operation_threshold_seconds: float = float(os.getenv("STALE_OPERATION_THRESHOLD_SECONDS", "300.0"))
+
+
 
 settings = Settings()
 

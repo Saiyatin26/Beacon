@@ -1,19 +1,24 @@
 """Certification Job Lifecycle Manager for BEACON.
 
-Provides explicit state tracking for long-running certification runs:
-ACCEPTED -> QUEUED -> VALIDATING -> PREFLIGHT -> RUNNING -> EVIDENCE_GENERATION -> PERSISTING -> COMPLETED / FAILED
+Provides explicit, validated state tracking and SQLite persistence for operational certification runs:
+ACCEPTED -> QUEUED -> VALIDATING -> PREFLIGHT -> RUNNING -> EVIDENCE_GENERATION -> PERSISTING -> COMPLETED / FAILED / CANCELLED
 
-Separates operational Job State from authoritative Certification Status (CERTIFIED, NOT_CERTIFIED, etc.).
+Enforces strict state-machine transition validation and thread-safe persistence.
 """
 
 from datetime import datetime, timezone
 from enum import Enum
+import logging
+import os
+from pathlib import Path
+import sqlite3
 import threading
 import time
 import uuid
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
+from .errors import StateTransitionError
 from .logging_config import log_operational_event, get_logger
 
 logger = get_logger("beacon.lifecycle")
@@ -30,6 +35,70 @@ class JobState(str, Enum):
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
+
+
+# Formal State Transition Validation Matrix
+VALID_JOB_TRANSITIONS: dict[JobState, set[JobState]] = {
+    JobState.ACCEPTED: {
+        JobState.ACCEPTED,
+        JobState.QUEUED,
+        JobState.VALIDATING,
+        JobState.PREFLIGHT,
+        JobState.RUNNING,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    },
+
+
+    JobState.QUEUED: {
+        JobState.QUEUED,
+        JobState.VALIDATING,
+        JobState.PREFLIGHT,
+        JobState.RUNNING,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    },
+    JobState.VALIDATING: {
+        JobState.VALIDATING,
+        JobState.PREFLIGHT,
+        JobState.RUNNING,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    },
+    JobState.PREFLIGHT: {
+        JobState.PREFLIGHT,
+        JobState.RUNNING,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    },
+    JobState.RUNNING: {
+        JobState.RUNNING,
+        JobState.EVIDENCE_GENERATION,
+        JobState.PERSISTING,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    },
+    JobState.EVIDENCE_GENERATION: {
+        JobState.EVIDENCE_GENERATION,
+        JobState.PERSISTING,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    },
+    JobState.PERSISTING: {
+        JobState.PERSISTING,
+        JobState.COMPLETED,
+        JobState.FAILED,
+        JobState.CANCELLED,
+    },
+    # Terminal States: No outgoing transitions allowed
+    JobState.COMPLETED: set(),
+    JobState.FAILED: set(),
+    JobState.CANCELLED: set(),
+}
 
 
 class CertificationJob(BaseModel):
@@ -63,11 +132,85 @@ class CertificationJob(BaseModel):
 
 
 class CertificationJobTracker:
-    """Thread-safe in-memory tracker for operational certification jobs."""
+    """Thread-safe and SQLite-persisted tracker for operational certification jobs."""
 
-    def __init__(self):
+    def __init__(self, db_path: Optional[str] = None):
         self._lock = threading.RLock()
         self._jobs: dict[str, CertificationJob] = {}
+        if db_path is None:
+            backend_dir = Path(__file__).resolve().parent.parent
+            self._db_path = str(backend_dir / "beacon.sqlite3")
+        else:
+            self._db_path = db_path
+        self._init_db()
+        self._load_active_jobs_from_db()
+
+    def _init_db(self) -> None:
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS certification_jobs (
+                        job_id TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL,
+                        certification_id TEXT,
+                        benchmark_id TEXT,
+                        dataset_id TEXT,
+                        evaluation_mode TEXT NOT NULL,
+                        target_variant TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        state TEXT NOT NULL,
+                        progress_pct INTEGER NOT NULL,
+                        current_step TEXT,
+                        certification_status TEXT,
+                        equivalence_score REAL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        start_time_epoch REAL NOT NULL,
+                        duration_ms REAL,
+                        error_category TEXT,
+                        error_message TEXT
+                    )
+                """)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_project_id ON certification_jobs(project_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_state ON certification_jobs(state)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON certification_jobs(created_at)")
+                conn.commit()
+        except Exception as exc:
+            logger.warning(f"Could not initialize certification_jobs table: {exc}")
+
+    def _load_active_jobs_from_db(self) -> None:
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM certification_jobs ORDER BY created_at DESC LIMIT 100")
+                for row in cursor.fetchall():
+                    job_data = dict(row)
+                    job_data["state"] = JobState(job_data["state"])
+                    job = CertificationJob(**job_data)
+                    self._jobs[job.job_id] = job
+        except Exception as exc:
+            logger.warning(f"Could not load jobs from database: {exc}")
+
+    def _persist_job(self, job: CertificationJob) -> None:
+        try:
+            with sqlite3.connect(self._db_path) as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO certification_jobs (
+                        job_id, project_id, certification_id, benchmark_id, dataset_id,
+                        evaluation_mode, target_variant, provider, state, progress_pct,
+                        current_step, certification_status, equivalence_score, created_at,
+                        updated_at, start_time_epoch, duration_ms, error_category, error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    job.job_id, job.project_id, job.certification_id, job.benchmark_id, job.dataset_id,
+                    job.evaluation_mode, job.target_variant, job.provider, job.state.value, job.progress_pct,
+                    job.current_step, job.certification_status, job.equivalence_score, job.created_at,
+                    job.updated_at, job.start_time_epoch, job.duration_ms, job.error_category, job.error_message
+                ))
+                conn.commit()
+        except Exception as exc:
+            logger.warning(f"Could not persist certification job '{job.job_id}': {exc}")
 
     def create_job(
         self,
@@ -94,6 +237,7 @@ class CertificationJobTracker:
                 current_step="Request accepted and registered",
             )
             self._jobs[jid] = job
+            self._persist_job(job)
 
             log_operational_event(
                 event="job_accepted",
@@ -118,11 +262,45 @@ class CertificationJobTracker:
         equivalence_score: Optional[float] = None,
         error_category: Optional[str] = None,
         error_message: Optional[str] = None,
+        allow_forced: bool = False,
     ) -> Optional[CertificationJob]:
         with self._lock:
             job = self._jobs.get(job_id)
             if not job:
                 return None
+
+            # State Transition Validation
+            current_state = job.state
+            if not allow_forced and state != current_state:
+                valid_next_states = VALID_JOB_TRANSITIONS.get(current_state, set())
+                if state not in valid_next_states:
+                    err_msg = (
+                        f"Illegal state transition for job '{job_id}' from '{current_state.value}' "
+                        f"to '{state.value}'. Permitted transitions: {[s.value for s in valid_next_states]}."
+                    )
+                    logger.warning(err_msg)
+                    log_operational_event(
+                        event="job_state_transition_rejected",
+                        project_id=job.project_id,
+                        level=logging.WARNING,
+                        logger_name="beacon.lifecycle",
+                        outcome="REJECTED",
+                        error_category="STATE_TRANSITION_ERROR",
+                        message=err_msg,
+                        extra={
+                            "job_id": job_id,
+                            "current_state": current_state.value,
+                            "requested_state": state.value,
+                        },
+                    )
+                    raise StateTransitionError(
+                        message=err_msg,
+                        details={
+                            "job_id": job_id,
+                            "current_state": current_state.value,
+                            "requested_state": state.value,
+                        },
+                    )
 
             now = datetime.now(timezone.utc).isoformat()
             job.state = state
@@ -149,6 +327,8 @@ class CertificationJobTracker:
                 if state == JobState.COMPLETED:
                     job.progress_pct = 100
 
+            self._persist_job(job)
+
             log_operational_event(
                 event=f"job_state_{state.value.lower()}",
                 project_id=job.project_id,
@@ -172,6 +352,22 @@ class CertificationJobTracker:
         with self._lock:
             job = self._jobs.get(job_id)
             if not job:
+                # Try loading from DB
+                try:
+                    with sqlite3.connect(self._db_path) as conn:
+                        conn.row_factory = sqlite3.Row
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT * FROM certification_jobs WHERE job_id = ?", (job_id,))
+                        row = cursor.fetchone()
+                        if row:
+                            job_data = dict(row)
+                            job_data["state"] = JobState(job_data["state"])
+                            job = CertificationJob(**job_data)
+                            self._jobs[job.job_id] = job
+                except Exception as exc:
+                    logger.warning(f"Error querying job from DB: {exc}")
+
+            if not job:
                 return None
             if project_id and job.project_id != project_id:
                 raise PermissionError(f"Access denied: Job belongs to project '{job.project_id}'.")
@@ -189,10 +385,46 @@ class CertificationJobTracker:
             jobs.sort(key=lambda j: j.created_at, reverse=True)
             return jobs[:limit]
 
+    def list_interrupted_or_stale_jobs(self) -> list[CertificationJob]:
+        """Returns all jobs currently in a non-terminal state across the database."""
+        non_terminal_states = (
+            JobState.ACCEPTED.value,
+            JobState.QUEUED.value,
+            JobState.VALIDATING.value,
+            JobState.PREFLIGHT.value,
+            JobState.RUNNING.value,
+            JobState.EVIDENCE_GENERATION.value,
+            JobState.PERSISTING.value,
+        )
+        results: list[CertificationJob] = []
+        with self._lock:
+            try:
+                with sqlite3.connect(self._db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.cursor()
+                    placeholders = ",".join("?" for _ in non_terminal_states)
+                    cursor.execute(
+                        f"SELECT * FROM certification_jobs WHERE state IN ({placeholders})",
+                        non_terminal_states,
+                    )
+                    for row in cursor.fetchall():
+                        job_data = dict(row)
+                        job_data["state"] = JobState(job_data["state"])
+                        results.append(CertificationJob(**job_data))
+            except Exception as exc:
+                logger.warning(f"Error querying non-terminal jobs: {exc}")
+        return results
+
     def clear(self) -> None:
         """Clears all jobs (used for test isolation)."""
         with self._lock:
             self._jobs.clear()
+            try:
+                with sqlite3.connect(self._db_path) as conn:
+                    conn.execute("DELETE FROM certification_jobs")
+                    conn.commit()
+            except Exception as exc:
+                logger.warning(f"Error clearing certification_jobs: {exc}")
 
 
 # Module-level singleton
