@@ -9,16 +9,16 @@ This final closure pass addresses the remaining two production-hardening items, 
 ## 1. Key Accomplishments
 
 ### A. Root Endpoint Sanitization (`GET /`)
-- Removed `"storage": "local SQLite"` from the root endpoint response in [`backend/api/main.py`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/api/main.py).
+- Removed `"storage": "local SQLite"` from the root endpoint response in [`backend/api/main.py`](backend/api/main.py).
 - The root endpoint now provides safe API navigation links (`name`, `status`, `docs`, `health`, `live`, `ready`, `details`, `version`) with zero disclosure of underlying databases, filesystem paths, or environment variables.
 
 ### B. Explicit Project Scoping & Cross-Project Isolation for `/runs` and `/runs/{run_id}`
-- **Database Schema**: Added `project_id TEXT` column with automatic SQLite schema migration in [`backend/common/local_store.py`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/common/local_store.py).
+- **Database Schema**: Added `project_id TEXT` column with automatic SQLite schema migration in [`backend/common/local_store.py`](backend/common/local_store.py).
 - **Database Query Filtering**: `list_runs(limit=..., project_id=...)` executes `WHERE project_id = ?` at the SQL level.
 - **API Project Scoping**:
   - `GET /runs?project_id=<id>` enforces `require_project_permission(Permission.VIEW)` on the requested project, resolves authorized tenant membership, and queries the database with the authorized project identifier.
   - `GET /runs/{run_id}` verifies that the requested run belongs to a project the authenticated user is authorized to access, returning `404 Not Found` / `403 Forbidden` on cross-tenant access attempts.
-- **Resource Dependency Resolution**: Updated [`backend/auth/dependencies.py`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/auth/dependencies.py) to resolve `target_project_id` directly from `local_store.get_run(cert_id)` if not present in the cloud certification repository.
+- **Resource Dependency Resolution**: Updated [`backend/auth/dependencies.py`](backend/auth/dependencies.py) to resolve `target_project_id` directly from `local_store.get_run(cert_id)` if not present in the cloud certification repository.
 
 ---
 

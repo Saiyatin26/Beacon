@@ -1,0 +1,12 @@
+[
+  {"inputs": {"heart_rate": 80, "systolic_bp": 120, "spo2": 98.0, "is_responsive": true}, "output": {"triage_priority": "STANDARD", "requires_icu": false}},
+  {"inputs": {"heart_rate": 150, "systolic_bp": 120, "spo2": 98.0, "is_responsive": true}, "output": {"triage_priority": "CRITICAL", "requires_icu": true}},
+  {"inputs": {"heart_rate": 80, "systolic_bp": 75, "spo2": 98.0, "is_responsive": true}, "output": {"triage_priority": "CRITICAL", "requires_icu": true}},
+  {"inputs": {"heart_rate": 80, "systolic_bp": 120, "spo2": 88.0, "is_responsive": true}, "output": {"triage_priority": "CRITICAL", "requires_icu": true}},
+  {"inputs": {"heart_rate": 80, "systolic_bp": 120, "spo2": 98.0, "is_responsive": false}, "output": {"triage_priority": "CRITICAL", "requires_icu": true}},
+  {"inputs": {"heart_rate": 115, "systolic_bp": 120, "spo2": 98.0, "is_responsive": true}, "output": {"triage_priority": "URGENT", "requires_icu": false}},
+  {"inputs": {"heart_rate": 80, "systolic_bp": 85, "spo2": 98.0, "is_responsive": true}, "output": {"triage_priority": "URGENT", "requires_icu": false}},
+  {"inputs": {"heart_rate": 80, "systolic_bp": 120, "spo2": 92.0, "is_responsive": true}, "output": {"triage_priority": "URGENT", "requires_icu": false}},
+  {"inputs": {"heart_rate": 72, "systolic_bp": 118, "spo2": 99.0, "is_responsive": true}, "output": {"triage_priority": "STANDARD", "requires_icu": false}},
+  {"inputs": {"heart_rate": 85, "systolic_bp": 88, "spo2": 91.0, "is_responsive": true}, "output": {"triage_priority": "URGENT", "requires_icu": false}}
+]

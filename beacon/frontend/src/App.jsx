@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 // Environment-based API Base URL with safe production & development defaults
 const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? "" : "http://localhost:8000");
+const IS_DEV = import.meta.env.DEV;
 
 
 // Reusable Design Tokens & Styles
@@ -903,89 +904,91 @@ export default function App() {
                   {roleBadgeStyles[currentRole]?.label || currentRole}
                 </span>
 
-                {/* Quick Role Switcher Buttons */}
-                <div style={{ display: "flex", gap: "4px", marginLeft: "6px", borderLeft: "1px solid #475569", paddingLeft: "8px" }}>
-                  <button
-                    onClick={() => quickLogin("admin", "BeaconAdmin2026!")}
-                    title="Switch to System Admin"
-                    style={{
-                      background: currentUser?.is_system_admin ? "#9333ea" : "#334155",
-                      color: "#ffffff",
-                      border: "none",
-                      padding: "3px 7px",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      fontWeight: "600",
-                      cursor: "pointer",
-                    }}
-                  >
-                    👑 Admin
-                  </button>
-                  <button
-                    onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
-                    title="Switch to Certifier (Alice)"
-                    style={{
-                      background: currentRole === "CERTIFIER" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
-                      color: "#ffffff",
-                      border: "none",
-                      padding: "3px 7px",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      fontWeight: "600",
-                      cursor: "pointer",
-                    }}
-                  >
-                    ⚡ Certifier
-                  </button>
-                  <button
-                    onClick={() => quickLogin("bob_viewer", "BobView2026!")}
-                    title="Switch to Viewer (Bob)"
-                    style={{
-                      background: currentRole === "VIEWER" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
-                      color: "#ffffff",
-                      border: "none",
-                      padding: "3px 7px",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      fontWeight: "600",
-                      cursor: "pointer",
-                    }}
-                  >
-                    👁️ Viewer
-                  </button>
-                  <button
-                    onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
-                    title="Switch to Auditor (Carol)"
-                    style={{
-                      background: currentRole === "AUDITOR" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
-                      color: "#ffffff",
-                      border: "none",
-                      padding: "3px 7px",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      fontWeight: "600",
-                      cursor: "pointer",
-                    }}
-                  >
-                    📋 Auditor
-                  </button>
-                  <button
-                    onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
-                    title="Switch to Project Admin (Dave)"
-                    style={{
-                      background: currentRole === "PROJECT_ADMIN" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
-                      color: "#ffffff",
-                      border: "none",
-                      padding: "3px 7px",
-                      borderRadius: "4px",
-                      fontSize: "11px",
-                      fontWeight: "600",
-                      cursor: "pointer",
-                    }}
-                  >
-                    🛡️ Dave
-                  </button>
-                </div>
+                {/* Quick Role Switcher Buttons (Development Only) */}
+                {IS_DEV && (
+                  <div style={{ display: "flex", gap: "4px", marginLeft: "6px", borderLeft: "1px solid #475569", paddingLeft: "8px" }}>
+                    <button
+                      onClick={() => quickLogin("admin", "BeaconAdmin2026!")}
+                      title="Switch to System Admin"
+                      style={{
+                        background: currentUser?.is_system_admin ? "#9333ea" : "#334155",
+                        color: "#ffffff",
+                        border: "none",
+                        padding: "3px 7px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      👑 Admin
+                    </button>
+                    <button
+                      onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
+                      title="Switch to Certifier (Alice)"
+                      style={{
+                        background: currentRole === "CERTIFIER" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
+                        color: "#ffffff",
+                        border: "none",
+                        padding: "3px 7px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      ⚡ Certifier
+                    </button>
+                    <button
+                      onClick={() => quickLogin("bob_viewer", "BobView2026!")}
+                      title="Switch to Viewer (Bob)"
+                      style={{
+                        background: currentRole === "VIEWER" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
+                        color: "#ffffff",
+                        border: "none",
+                        padding: "3px 7px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      👁️ Viewer
+                    </button>
+                    <button
+                      onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
+                      title="Switch to Auditor (Carol)"
+                      style={{
+                        background: currentRole === "AUDITOR" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
+                        color: "#ffffff",
+                        border: "none",
+                        padding: "3px 7px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      📋 Auditor
+                    </button>
+                    <button
+                      onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
+                      title="Switch to Project Admin (Dave)"
+                      style={{
+                        background: currentRole === "PROJECT_ADMIN" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
+                        color: "#ffffff",
+                        border: "none",
+                        padding: "3px 7px",
+                        borderRadius: "4px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      🛡️ Dave
+                    </button>
+                  </div>
+                )}
 
                 <button
                   onClick={handleLogout}
@@ -3505,103 +3508,105 @@ export default function App() {
               </div>
             )}
 
-            {/* Quick Demo Profiles */}
-            <div style={{ marginBottom: "18px" }}>
-              <div style={{ fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "8px" }}>1-Click Demo Profiles:</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
-                <button
-                  type="button"
-                  onClick={() => quickLogin("admin", "BeaconAdmin2026!")}
-                  disabled={loginBusy}
-                  style={{
-                    background: "#fdf4ff",
-                    border: "1px solid #c084fc",
-                    color: "#6b21a8",
-                    padding: "8px",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                    textAlign: "left",
-                    gridColumn: "span 2",
-                  }}
-                >
-                  👑 Admin (System Administrator)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
-                  disabled={loginBusy}
-                  style={{
-                    background: "#eff6ff",
-                    border: "1px solid #60a5fa",
-                    color: "#1d4ed8",
-                    padding: "8px",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                >
-                  ⚡ Alice (Certifier)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => quickLogin("bob_viewer", "BobView2026!")}
-                  disabled={loginBusy}
-                  style={{
-                    background: "#f8fafc",
-                    border: "1px solid #94a3b8",
-                    color: "#475569",
-                    padding: "8px",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                >
-                  👁️ Bob (Viewer)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
-                  disabled={loginBusy}
-                  style={{
-                    background: "#fff7ed",
-                    border: "1px solid #fb923c",
-                    color: "#c2410c",
-                    padding: "8px",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                >
-                  📋 Carol (Auditor)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
-                  disabled={loginBusy}
-                  style={{
-                    background: "#f0fdf4",
-                    border: "1px solid #4ade80",
-                    color: "#15803d",
-                    padding: "8px",
-                    borderRadius: "8px",
-                    fontSize: "12px",
-                    fontWeight: "600",
-                    cursor: "pointer",
-                    textAlign: "left",
-                  }}
-                >
-                  🛡️ Dave (Admin)
-                </button>
+            {/* Quick Demo Profiles (Development Only) */}
+            {IS_DEV && (
+              <div style={{ marginBottom: "18px" }}>
+                <div style={{ fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "8px" }}>1-Click Demo Profiles (Dev Mode):</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                  <button
+                    type="button"
+                    onClick={() => quickLogin("admin", "BeaconAdmin2026!")}
+                    disabled={loginBusy}
+                    style={{
+                      background: "#fdf4ff",
+                      border: "1px solid #c084fc",
+                      color: "#6b21a8",
+                      padding: "8px",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      gridColumn: "span 2",
+                    }}
+                  >
+                    👑 Admin (System Administrator)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
+                    disabled={loginBusy}
+                    style={{
+                      background: "#eff6ff",
+                      border: "1px solid #60a5fa",
+                      color: "#1d4ed8",
+                      padding: "8px",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    ⚡ Alice (Certifier)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => quickLogin("bob_viewer", "BobView2026!")}
+                    disabled={loginBusy}
+                    style={{
+                      background: "#f8fafc",
+                      border: "1px solid #94a3b8",
+                      color: "#475569",
+                      padding: "8px",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    👁️ Bob (Viewer)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
+                    disabled={loginBusy}
+                    style={{
+                      background: "#fff7ed",
+                      border: "1px solid #fb923c",
+                      color: "#c2410c",
+                      padding: "8px",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    📋 Carol (Auditor)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
+                    disabled={loginBusy}
+                    style={{
+                      background: "#f0fdf4",
+                      border: "1px solid #4ade80",
+                      color: "#15803d",
+                      padding: "8px",
+                      borderRadius: "8px",
+                      fontSize: "12px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                      textAlign: "left",
+                    }}
+                  >
+                    🛡️ Dave (Admin)
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
             <div style={{ borderTop: "1px solid #e2e8f0", paddingTop: "14px", marginTop: "14px" }}>
               <div style={{ fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "8px" }}>Custom Credentials:</div>

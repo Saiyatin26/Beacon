@@ -175,6 +175,11 @@ class BenchmarkRegistry:
             logger.warning(f"Could not bind loan demo adapters: {exc}")
 
     def _register_builtin_medical_benchmark(self):
+        medical_bench_dir = self._benchmarks_dir / "medical_triage"
+        if medical_bench_dir.exists() and (medical_bench_dir / "metadata.json").exists():
+            self._load_external_benchmark(medical_bench_dir)
+            return
+
         spec = BenchmarkSpec(
             benchmark_id="medical_triage",
             name="Emergency Medical Triage Decision Benchmark",
@@ -227,50 +232,6 @@ class BenchmarkRegistry:
         )
         self._specs[spec.benchmark_id] = spec
 
-        # Define medical triage functions inline
-        def legacy_medical(heart_rate: int = 80, systolic_bp: int = 120, spo2: float = 98.0, is_responsive: bool = True):
-            hr = int(heart_rate)
-            bp = int(systolic_bp)
-            ox = float(spo2)
-            resp = bool(is_responsive)
-            if not resp or ox < 90.0 or hr > 140 or bp < 80:
-                return {"triage_priority": "CRITICAL", "requires_icu": True}
-            elif ox < 94.0 or hr > 110 or bp < 90:
-                return {"triage_priority": "URGENT", "requires_icu": False}
-            return {"triage_priority": "STANDARD", "requires_icu": False}
-
-        def modern_medical_clean(heart_rate: int = 80, systolic_bp: int = 120, spo2: float = 98.0, is_responsive: bool = True):
-            return legacy_medical(heart_rate, systolic_bp, spo2, is_responsive)
-
-        def modern_medical_buggy(heart_rate: int = 80, systolic_bp: int = 120, spo2: float = 98.0, is_responsive: bool = True):
-            # Controlled mutation: Threshold changed from 90.0 to 80.0 for critical oxygen
-            hr = int(heart_rate)
-            bp = int(systolic_bp)
-            ox = float(spo2)
-            resp = bool(is_responsive)
-            if not resp or ox < 80.0 or hr > 140 or bp < 80:
-                return {"triage_priority": "CRITICAL", "requires_icu": True}
-            elif ox < 94.0 or hr > 110 or bp < 90:
-                return {"triage_priority": "URGENT", "requires_icu": False}
-            return {"triage_priority": "STANDARD", "requires_icu": False}
-
-        leg_adp = LegacyAdapter(target_fn=legacy_medical, name="medical_triage_legacy", version="1.0.0")
-        mod_clean_adp = ModernizedAdapter(target_fn=modern_medical_clean, name="medical_triage_modern_clean", version="2.0.0")
-        mod_buggy_adp = ModernizedAdapter(target_fn=modern_medical_buggy, name="medical_triage_modern_buggy", version="2.0.0-buggy")
-
-        leg_adp.implementation_hash = compute_implementation_hash(legacy_medical)
-        mod_clean_adp.implementation_hash = compute_implementation_hash(modern_medical_clean)
-        mod_buggy_adp.implementation_hash = compute_implementation_hash(modern_medical_buggy)
-        spec.legacy_implementation_hash = leg_adp.implementation_hash
-
-        self._legacy_adapters[spec.benchmark_id] = leg_adp
-        self._modern_adapters[(spec.benchmark_id, "clean_v2")] = mod_clean_adp
-        self._modern_adapters[(spec.benchmark_id, "buggy_v2")] = mod_buggy_adp
-
-        adapter_registry.register_adapter(leg_adp)
-        adapter_registry.register_adapter(mod_clean_adp)
-        adapter_registry.register_adapter(mod_buggy_adp)
-
     def _load_external_benchmark(self, bench_dir: Path):
         meta_file = bench_dir / "metadata.json"
         try:
@@ -283,10 +244,16 @@ class BenchmarkRegistry:
             if eval_files:
                 spec.dataset_checksum = compute_file_checksum(eval_files[0])
             
-            # Pre-compute legacy implementation hash
+            # Pre-compute legacy implementation hash from authoritative legacy source file
             leg_dir = bench_dir / "legacy"
+            leg_source_file = None
             if leg_dir.exists():
-                spec.legacy_implementation_hash = compute_implementation_hash(leg_dir)
+                py_files = sorted([f for f in leg_dir.glob("*.py") if not f.name.startswith("__")])
+                if py_files:
+                    leg_source_file = py_files[0]
+                    spec.legacy_implementation_hash = compute_implementation_hash(leg_source_file)
+                else:
+                    spec.legacy_implementation_hash = compute_implementation_hash(leg_dir)
 
             if not spec.reproducibility_manifest:
                 spec.reproducibility_manifest = ReproducibilityManifest(
@@ -317,17 +284,45 @@ class BenchmarkRegistry:
                             try:
                                 adp_instance = cls()
                                 if getattr(adp_instance, "role", "") == "legacy":
-                                    adp_instance.implementation_hash = spec.legacy_implementation_hash or compute_implementation_hash(leg_dir if leg_dir.exists() else adp_instance)
+                                    if leg_source_file and leg_source_file.exists():
+                                        adp_instance.implementation_hash = compute_implementation_hash(leg_source_file)
+                                    else:
+                                        adp_instance.implementation_hash = spec.legacy_implementation_hash or compute_implementation_hash(adp_instance)
                                     self._legacy_adapters[spec.benchmark_id] = adp_instance
                                 else:
-                                    # Match variant
+                                    # Match variant and compute authoritative hash from exact source file
                                     for var_key, adp_id in spec.modernized_adapters.items():
                                         if adp_instance.name == adp_id:
-                                            var_clean_key = var_key.replace("_v2", "")
-                                            mod_dir = bench_dir / f"modern_{var_clean_key}"
-                                            if not mod_dir.exists():
-                                                mod_dir = bench_dir / var_key
-                                            adp_instance.implementation_hash = compute_implementation_hash(mod_dir if mod_dir.exists() else adp_instance)
+                                            # 1. Try resolving authoritative source file from target callable
+                                            target_fn = getattr(adp_instance, "target_fn", None) or getattr(adp_instance, "_target_fn", None)
+                                            mod_source_file = None
+                                            if target_fn:
+                                                import inspect
+                                                try:
+                                                    fn_file = inspect.getsourcefile(target_fn) or inspect.getfile(target_fn)
+                                                    if fn_file and Path(fn_file).exists():
+                                                        mod_source_file = Path(fn_file)
+                                                except Exception:
+                                                    pass
+
+                                            # 2. Fallback to file matching in modernized directory
+                                            if not mod_source_file:
+                                                mod_dir = bench_dir / "modernized"
+                                                if mod_dir.exists():
+                                                    candidates = sorted([f for f in mod_dir.glob("*.py") if not f.name.startswith("__")])
+                                                    for cand in candidates:
+                                                        cand_stem = cand.stem.lower()
+                                                        var_clean = var_key.replace("_v2", "").lower()
+                                                        if var_clean in cand_stem or (var_clean == "clean" and "buggy" not in cand_stem):
+                                                            mod_source_file = cand
+                                                            break
+
+                                            if mod_source_file and mod_source_file.exists():
+                                                adp_instance.implementation_hash = compute_implementation_hash(mod_source_file)
+                                            else:
+                                                # Authoritative modern file must be resolved; fail closed
+                                                adp_instance.implementation_hash = compute_implementation_hash(adp_instance)
+
                                             self._modern_adapters[(spec.benchmark_id, var_key)] = adp_instance
                                 adapter_registry.register_adapter(adp_instance)
                             except Exception as exc:
