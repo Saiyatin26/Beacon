@@ -76,8 +76,28 @@ class Settings:
     max_request_body_bytes: int = int(os.getenv("MAX_REQUEST_BODY_BYTES", str(15 * 1024 * 1024)))
     max_concurrent_jobs: int = int(os.getenv("MAX_CONCURRENT_JOBS", "10"))
 
-    # Database Path
-    database_path: Optional[str] = os.getenv("BEACON_DATABASE_PATH", None)
+    # Database Path Resolution (Authoritative Central Persistence)
+    @property
+    def database_path(self) -> str:
+        custom = os.getenv("BEACON_DATABASE_PATH", None)
+        if custom and custom.strip():
+            p = Path(custom.strip()).resolve()
+            p.parent.mkdir(parents=True, exist_ok=True)
+            return str(p)
+        default_p = Path(__file__).resolve().parents[2] / "data" / "beacon.sqlite3"
+        default_p.parent.mkdir(parents=True, exist_ok=True)
+        return str(default_p)
+
+    def get_database_path(self) -> str:
+        """Returns the canonical SQLite database path and ensures its parent directory exists."""
+        return self.database_path
+
+    # Trusted Reverse Proxies (for secure X-Forwarded-For resolution)
+    trusted_proxies: list[str] = [
+        ip.strip()
+        for ip in os.getenv("TRUSTED_PROXIES", "127.0.0.1,::1,localhost").split(",")
+        if ip.strip()
+    ]
 
     # CORS Allowed Origins
     cors_origins: list[str] = [
@@ -125,6 +145,9 @@ class Settings:
             errors.append(f"Invalid BEACON_ENV '{self.beacon_env}'. Must be one of: {valid_envs}")
 
         # 2. Security validation
+        if self.jwt_algorithm != "HS256":
+            errors.append(f"JWT_ALGORITHM must be 'HS256' for HMAC-SHA256 authentication, got '{self.jwt_algorithm}'.")
+
         if self.auth_required:
             if not self.jwt_secret_key or self.jwt_secret_key in KNOWN_INSECURE_SECRETS:
                 if self.beacon_env in ("production", "staging"):
@@ -170,7 +193,6 @@ class Settings:
             raise ConfigurationError(f"Configuration validation failed:\n - " + "\n - ".join(errors))
 
         return errors
-
 
 
 settings = Settings()

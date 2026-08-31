@@ -87,6 +87,7 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
             slow_threshold = getattr(settings, "slow_request_threshold_ms", 2000.0)
             is_slow = elapsed_ms >= slow_threshold
             trusted_project_id = current_project_id.get() or None
+            trusted_user_id = current_user_id.get() or None
 
             # Record operational HTTP metrics (low-cardinality labels)
             if getattr(settings, "metrics_enabled", True):
@@ -112,6 +113,7 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
                 level=log_level,
                 logger_name="beacon.operations.http",
                 project_id=trusted_project_id,
+                user_id=trusted_user_id,
                 duration_ms=round(elapsed_ms, 2),
                 outcome=f"HTTP_{status_code}",
                 message=f"{request.method} {clean_path} returned {status_code} in {elapsed_ms:.2f}ms",
@@ -119,6 +121,7 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
                     "method": request.method,
                     "path": clean_path,
                     "status_code": status_code,
+                    "user_id": trusted_user_id,
                 },
             )
 
@@ -134,7 +137,9 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
 
 
 class WorkloadLimiterMiddleware(BaseHTTPMiddleware):
-    """Enforces request body size limits to protect backend memory and workload capacity."""
+    """Enforces request body size limits to protect backend memory and workload capacity.
+    Protects against both oversized Content-Length headers and chunked streaming requests.
+    """
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         max_bytes = getattr(settings, "max_request_body_bytes", 15 * 1024 * 1024)
@@ -152,13 +157,54 @@ class WorkloadLimiterMiddleware(BaseHTTPMiddleware):
                             "error_code": "RESOURCE_LIMIT_EXCEEDED",
                             "category": "RESOURCE_LIMIT",
                             "message": f"Request body size ({length_int} bytes) exceeds maximum configured limit of {max_bytes} bytes.",
+                            "detail": f"Request body size ({length_int} bytes) exceeds maximum configured limit of {max_bytes} bytes.",
                             "request_id": req_id,
                             "details": {"max_bytes": max_bytes, "received_bytes": length_int},
                         },
                         headers={"X-Correlation-ID": req_id, "X-Request-ID": req_id},
                     )
+                # Content-Length is present and within limit: pass through without re-wrapping
+                return await call_next(request)
             except ValueError:
                 pass
 
-        return await call_next(request)
+        # Stream byte limit enforcement for chunked or indeterminate transfers without Content-Length
+        bytes_received = 0
+        original_receive = request._receive
+
+        async def limited_receive():
+            nonlocal bytes_received
+            message = await original_receive()
+            if message.get("type") == "http.request":
+                body = message.get("body", b"")
+                bytes_received += len(body)
+                if bytes_received > max_bytes:
+                    req_id = get_correlation_id()
+                    operational_metrics.record_rate_limit_hit()
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"Streaming request body size exceeded maximum limit of {max_bytes} bytes.",
+                    )
+            return message
+
+        request._receive = limited_receive
+
+        try:
+            return await call_next(request)
+        except HTTPException as exc:
+            if exc.status_code == 413:
+                req_id = get_correlation_id()
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error_code": "RESOURCE_LIMIT_EXCEEDED",
+                        "category": "RESOURCE_LIMIT",
+                        "message": str(exc.detail),
+                        "detail": str(exc.detail),
+                        "request_id": req_id,
+                        "details": {"max_bytes": max_bytes},
+                    },
+                    headers={"X-Correlation-ID": req_id, "X-Request-ID": req_id},
+                )
+            raise
 

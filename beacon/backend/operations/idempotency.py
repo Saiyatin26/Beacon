@@ -15,6 +15,7 @@ import time
 from typing import Any, Optional, Tuple
 
 
+from common.config import settings
 from .errors import IdempotencyConflictError
 from .logging_config import log_operational_event, scrub_secrets
 
@@ -60,10 +61,9 @@ class IdempotencyManager:
         self._memory_cache: dict[str, dict[str, Any]] = {}
         self._completion_events: dict[str, threading.Event] = {}
         if db_path is None:
-            backend_dir = Path(__file__).resolve().parent.parent
-            self._db_path = str(backend_dir / "beacon.sqlite3")
+            self._db_path = str(settings.database_path)
         else:
-            self._db_path = db_path
+            self._db_path = str(db_path)
         self._init_db()
 
     def _init_db(self) -> None:

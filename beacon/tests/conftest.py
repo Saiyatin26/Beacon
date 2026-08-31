@@ -46,6 +46,7 @@ def configure_test_auth_isolation(request):
         "test_phase17" in test_file_name
         or "test_phase18" in test_file_name
         or "test_phase20" in test_file_name
+        or "test_pre_freeze" in test_file_name
     ):
         # Strict mode: no dependency overrides; evaluate live authentication
         app.dependency_overrides.clear()

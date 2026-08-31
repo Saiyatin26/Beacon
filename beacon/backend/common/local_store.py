@@ -7,16 +7,15 @@ must not depend on external credentials just to retain certification history.
 import json
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
+from common.config import settings
 from common.models import CertificationRun, DriftSample
 
 
-DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "beacon.sqlite3"
-
-
 class LocalStore:
-    def __init__(self, path: str | Path = DEFAULT_DB_PATH):
-        self.path = Path(path)
+    def __init__(self, path: Optional[str | Path] = None):
+        self.path = Path(path) if path else Path(settings.database_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 

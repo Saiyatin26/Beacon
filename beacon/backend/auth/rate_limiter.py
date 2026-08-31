@@ -1,7 +1,9 @@
-"""Phase 17 — In-Memory Authentication Rate Limiter.
+"""Phase 17 — Authentication Rate Limiter.
 
 Protects login and credential-verification endpoints against brute-force
-dictionary attacks using a sliding-window timestamp algorithm.
+dictionary attacks using a process-local sliding-window timestamp algorithm.
+Note: For multi-node distributed clusters behind load balancers, rate limiting
+is also enforced at the API gateway / reverse proxy tier.
 """
 
 from collections import deque

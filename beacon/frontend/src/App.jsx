@@ -259,7 +259,8 @@ export default function App() {
   const loadOperationsSummary = async () => {
     setOperationsLoading(true);
     try {
-      const res = await authFetch(`${API_BASE}/api/v1/operations/summary`);
+      const activeProj = operationsProjectFilter || (activeTab === "custom" ? customProjectId : (selectedBenchmarkId || "loan_demo"));
+      const res = await authFetch(`${API_BASE}/api/v1/operations/summary?project_id=${encodeURIComponent(activeProj)}`);
       if (res.ok) {
         const data = await res.json();
         setOperationsSummary(data);
@@ -275,7 +276,7 @@ export default function App() {
     if (activeTab === "operations") {
       loadOperationsSummary();
     }
-  }, [activeTab]);
+  }, [activeTab, operationsProjectFilter, selectedBenchmarkId, customProjectId]);
 
   useEffect(() => {
     let interval = null;
@@ -640,9 +641,9 @@ export default function App() {
   const loadLoanDemoData = async () => {
     try {
       const [runsRes, invRes, driftRes] = await Promise.all([
-        authFetch(`${API_BASE}/runs`),
-        authFetch(`${API_BASE}/demo/invariants`),
-        authFetch(`${API_BASE}/drift?benchmark_id=loan`),
+        authFetch(`${API_BASE}/runs?project_id=loan_demo`),
+        authFetch(`${API_BASE}/demo/invariants?project_id=loan_demo`),
+        authFetch(`${API_BASE}/drift?benchmark_id=loan_demo&project_id=loan_demo`),
       ]);
       if (runsRes.ok) {
         const d = await runsRes.json();
@@ -851,7 +852,7 @@ export default function App() {
       const res = await authFetch(`${API_BASE}/demo/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ implementation }),
+        body: JSON.stringify({ implementation, project_id: "loan_demo" }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || "Demo run failed.");

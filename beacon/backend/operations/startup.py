@@ -14,6 +14,7 @@ from common.config import settings
 from certification.repository import certification_repository
 from benchmarks import benchmark_registry
 from oracle.registry import registry as oracle_registry
+from llm.manager import get_provider_manager
 from .job_lifecycle import certification_job_tracker, JobState
 from .logging_config import log_operational_event
 
@@ -165,10 +166,6 @@ def validate_startup_configuration() -> dict[str, Any]:
         "jwt_algorithm": getattr(settings, "jwt_algorithm", "HS256"),
         "environment": env,
     }
-
-    # 9. Phase 19: Interrupted Operation Recovery
-    recovery_result = recover_interrupted_operations()
-    diagnostics["checks"]["recovery"] = recovery_result
 
     logger.info("BEACON startup configuration validation completed successfully.")
     return diagnostics

@@ -64,7 +64,7 @@ def compute_implementation_hash(target: Any) -> str:
     if isinstance(target, (str, Path)):
         p = Path(target)
         if not p.exists():
-            return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+            raise FileNotFoundError(f"Implementation target file or directory does not exist: '{target}'")
         if p.is_file():
             with open(p, "rb") as f:
                 return hashlib.sha256(f.read()).hexdigest()

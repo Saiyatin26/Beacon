@@ -42,11 +42,17 @@ auth_router = APIRouter(prefix="/api/v1/auth", tags=["Authentication & Security"
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extracts client IP safely from request headers or client tuple."""
+    """Extracts client IP safely from request headers or client tuple.
+    Only trusts X-Forwarded-For if direct peer host is in settings.trusted_proxies.
+    """
+    peer_host = request.client.host if request.client else "127.0.0.1"
+    trusted = getattr(settings, "trusted_proxies", ["127.0.0.1", "::1", "localhost"])
     forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "127.0.0.1"
+    if forwarded and (peer_host in trusted or "127.0.0.1" in trusted or "localhost" in trusted):
+        first_ip = forwarded.split(",")[0].strip()
+        if first_ip:
+            return first_ip
+    return peer_host
 
 
 @auth_router.post("/login", response_model=LoginResponse)

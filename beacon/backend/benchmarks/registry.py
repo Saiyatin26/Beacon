@@ -145,20 +145,23 @@ class BenchmarkRegistry:
         try:
             import legacy_loan_approval
             import modern_loan_approval
+            import modern_clean_loan_approval
 
             leg_fn = legacy_loan_approval.evaluate_loan
+            mod_clean_fn = modern_clean_loan_approval.evaluate_loan
             mod_buggy_fn = modern_loan_approval.evaluate_loan
-
-            def mod_clean_fn(credit_score: int = 700, debt_ratio: float = 0.3, annual_income: float = 50000.0):
-                return leg_fn(credit_score=credit_score, debt_ratio=debt_ratio, annual_income=annual_income)
 
             leg_adp = LegacyAdapter(target_fn=leg_fn, name="loan_approval_legacy", version="1.0.0")
             mod_clean_adp = ModernizedAdapter(target_fn=mod_clean_fn, name="loan_approval_modern_equiv", version="2.0.0")
             mod_buggy_adp = ModernizedAdapter(target_fn=mod_buggy_fn, name="loan_approval_modern_buggy", version="2.0.0-buggy")
 
-            leg_adp.implementation_hash = compute_implementation_hash(ROOT_DIR / "legacy_sample" / "legacy_loan_approval.py")
-            mod_clean_adp.implementation_hash = compute_implementation_hash(ROOT_DIR / "modern_sample" / "modern_loan_approval.py")
-            mod_buggy_adp.implementation_hash = compute_implementation_hash(ROOT_DIR / "modern_sample" / "modern_loan_approval_buggy.py")
+            leg_file = ROOT_DIR / "legacy_sample" / "legacy_loan_approval.py"
+            mod_clean_file = ROOT_DIR / "legacy_sample" / "modern_clean_loan_approval.py"
+            mod_buggy_file = ROOT_DIR / "legacy_sample" / "modern_loan_approval.py"
+
+            leg_adp.implementation_hash = compute_implementation_hash(leg_file)
+            mod_clean_adp.implementation_hash = compute_implementation_hash(mod_clean_file)
+            mod_buggy_adp.implementation_hash = compute_implementation_hash(mod_buggy_file)
             spec.legacy_implementation_hash = leg_adp.implementation_hash
 
             self._legacy_adapters[spec.benchmark_id] = leg_adp
