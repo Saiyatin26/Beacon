@@ -66,6 +66,98 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState(null);
 
+  // Navigation Tabs
+  const [activeTab, setActiveTab] = useState("benchmark"); // benchmark, history, audit, drift, loan_demo
+
+  // Benchmark Catalog State with explicit Loading / Error / Empty States
+  const [benchmarks, setBenchmarks] = useState([]);
+  const [benchmarksLoadingState, setBenchmarksLoadingState] = useState("idle"); // idle, loading, success, error, empty
+
+  // Step Workflow Configuration State
+  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("retail_discount_pricing");
+  const [selectedVariant, setSelectedVariant] = useState("clean_v2");
+  const [discoveryMode, setDiscoveryMode] = useState("CONTROLLED");
+  const [preferredProvider, setPreferredProvider] = useState("auto");
+  const [benchmarkValidation, setBenchmarkValidation] = useState(null);
+
+  // Authoritative Active Certification Result
+  const [activeResult, setActiveResult] = useState(null);
+  const [activeCases, setActiveCases] = useState([]);
+  const [caseFilter, setCaseFilter] = useState("ALL");
+  const [expandedOracleId, setExpandedOracleId] = useState(null);
+  const [cryptographicProof, setCryptographicProof] = useState(null);
+
+  // Historical Viewing State
+  const [historicalArtifacts, setHistoricalArtifacts] = useState([]);
+  const [viewingHistoricalArtifact, setViewingHistoricalArtifact] = useState(null);
+
+  // Continuous Drift State
+  const [driftSamples, setDriftSamples] = useState([]);
+
+  // Legacy Loan Demo Sandbox State (strictly isolated)
+  const [loanRuns, setLoanRuns] = useState([]);
+  const [selectedLoanRun, setSelectedLoanRun] = useState(null);
+  const [loanInvariants, setLoanInvariants] = useState([]);
+  const [loanDriftSamples, setLoanDriftSamples] = useState([]);
+
+  // UI Feedback
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+
+  // =========================================================================
+  // Phase 14 Custom Dataset Certification State
+  // =========================================================================
+  const [customProjectId, setCustomProjectId] = useState("proj_retail_pilot");
+  const [customDatasetName, setCustomDatasetName] = useState("Retail Custom Promo Dataset");
+  const [customFormat, setCustomFormat] = useState("JSON");
+  const [customProvenance, setCustomProvenance] = useState("USER_SUPPLIED");
+  const [customVersion, setCustomVersion] = useState("1.0.0");
+  const [customSourceRef, setCustomSourceRef] = useState("Enterprise Pilot Dataset v1");
+  const [customDomain, setCustomDomain] = useState("Retail & Wholesale Commerce");
+  const [customRawContent, setCustomRawContent] = useState(`[
+  {"order_amount": 45.0, "customer_tier": "STANDARD", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": false},
+  {"order_amount": 75.0, "customer_tier": "VIP", "items_count": 3, "coupon_code": "NONE", "is_express_shipping": false},
+  {"order_amount": 250.0, "customer_tier": "VIP", "items_count": 5, "coupon_code": "LOYALTY20", "is_express_shipping": true},
+  {"order_amount": 15.0, "customer_tier": "WHOLESALE", "items_count": 1, "coupon_code": "NONE", "is_express_shipping": false}
+]`);
+  const [customPreview, setCustomPreview] = useState(null);
+  const [customUploadedManifest, setCustomUploadedManifest] = useState(null);
+  const [customLegacyAdapterId, setCustomLegacyAdapterId] = useState("retail_discount_legacy");
+  const [customModernAdapterId, setCustomModernAdapterId] = useState("retail_discount_modern_clean");
+  const [customOracleSetId, setCustomOracleSetId] = useState("SET-RETAIL-CONTROLLED-v1");
+  const [customMode, setCustomMode] = useState("CONTROLLED");
+  const [customProvider, setCustomProvider] = useState("auto");
+  const [customAllowExternalLLM, setCustomAllowExternalLLM] = useState(false);
+  const [customPreflight, setCustomPreflight] = useState(null);
+  const [customActiveResult, setCustomActiveResult] = useState(null);
+  const [customCryptographicProof, setCustomCryptographicProof] = useState(null);
+
+  // =========================================================================
+  // Phase 15 Evidence Dossier & Explainability State
+  // =========================================================================
+  const [dossierCertId, setDossierCertId] = useState("");
+  const [dossierData, setDossierData] = useState(null);
+  const [dossierExplanation, setDossierExplanation] = useState(null);
+  const [dossierGraph, setDossierGraph] = useState([]);
+  const [dossierNotes, setDossierNotes] = useState([]);
+  const [newNoteAuthor, setNewNoteAuthor] = useState("Auditor");
+  const [newNoteContent, setNewNoteContent] = useState("");
+  const [dossierLoading, setDossierLoading] = useState(false);
+  const [compareRunA, setCompareRunA] = useState("");
+  const [compareRunB, setCompareRunB] = useState("");
+  const [comparisonResult, setComparisonResult] = useState(null);
+  const [comparingRuns, setComparingRuns] = useState(false);
+
+  // =========================================================================
+  // Phase 16: Operations, Health & Reliability State
+  // =========================================================================
+  const [operationsSummary, setOperationsSummary] = useState(null);
+  const [operationsLoading, setOperationsLoading] = useState(false);
+  const [operationsProjectFilter, setOperationsProjectFilter] = useState("");
+  const [autoRefreshOperations, setAutoRefreshOperations] = useState(false);
+
   // Authenticated API client wrapper (uses native window.fetch)
   const authFetch = async (url, options = {}) => {
     const token = authToken || sessionStorage.getItem("beacon_token");
@@ -163,100 +255,6 @@ export default function App() {
     sessionStorage.removeItem("beacon_user");
     setNotice("You have signed out.");
   };
-
-// Initial state: User authenticates via secure login screen
-
-  // Navigation Tabs
-  const [activeTab, setActiveTab] = useState("benchmark"); // benchmark, history, audit, drift, loan_demo
-
-  // Benchmark Catalog State with explicit Loading / Error / Empty States
-  const [benchmarks, setBenchmarks] = useState([]);
-  const [benchmarksLoadingState, setBenchmarksLoadingState] = useState("idle"); // idle, loading, success, error, empty
-
-  // Step Workflow Configuration State
-  const [selectedBenchmarkId, setSelectedBenchmarkId] = useState("retail_discount_pricing");
-  const [selectedVariant, setSelectedVariant] = useState("clean_v2");
-  const [discoveryMode, setDiscoveryMode] = useState("CONTROLLED");
-  const [preferredProvider, setPreferredProvider] = useState("auto");
-  const [benchmarkValidation, setBenchmarkValidation] = useState(null);
-
-  // Authoritative Active Certification Result
-  const [activeResult, setActiveResult] = useState(null);
-  const [activeCases, setActiveCases] = useState([]);
-  const [caseFilter, setCaseFilter] = useState("ALL");
-  const [expandedOracleId, setExpandedOracleId] = useState(null);
-  const [cryptographicProof, setCryptographicProof] = useState(null);
-
-  // Historical Viewing State
-  const [historicalArtifacts, setHistoricalArtifacts] = useState([]);
-  const [viewingHistoricalArtifact, setViewingHistoricalArtifact] = useState(null);
-
-  // Continuous Drift State
-  const [driftSamples, setDriftSamples] = useState([]);
-
-  // Legacy Loan Demo Sandbox State (strictly isolated)
-  const [loanRuns, setLoanRuns] = useState([]);
-  const [selectedLoanRun, setSelectedLoanRun] = useState(null);
-  const [loanInvariants, setLoanInvariants] = useState([]);
-  const [loanDriftSamples, setLoanDriftSamples] = useState([]);
-
-  // UI Feedback
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
-
-  // =========================================================================
-  // Phase 14 Custom Dataset Certification State
-  // =========================================================================
-  const [customProjectId, setCustomProjectId] = useState("proj_retail_pilot");
-  const [customDatasetName, setCustomDatasetName] = useState("Retail Custom Promo Dataset");
-  const [customFormat, setCustomFormat] = useState("JSON");
-  const [customProvenance, setCustomProvenance] = useState("USER_SUPPLIED");
-  const [customVersion, setCustomVersion] = useState("1.0.0");
-  const [customSourceRef, setCustomSourceRef] = useState("Enterprise Pilot Dataset v1");
-  const [customDomain, setCustomDomain] = useState("Retail & Wholesale Commerce");
-  const [customRawContent, setCustomRawContent] = useState(`[
-  {"order_amount": 45.0, "customer_tier": "STANDARD", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": false},
-  {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": false},
-  {"order_amount": 75.0, "customer_tier": "VIP", "items_count": 3, "coupon_code": "NONE", "is_express_shipping": false},
-  {"order_amount": 250.0, "customer_tier": "VIP", "items_count": 5, "coupon_code": "LOYALTY20", "is_express_shipping": true},
-  {"order_amount": 15.0, "customer_tier": "WHOLESALE", "items_count": 1, "coupon_code": "NONE", "is_express_shipping": false}
-]`);
-  const [customPreview, setCustomPreview] = useState(null);
-  const [customUploadedManifest, setCustomUploadedManifest] = useState(null);
-  const [customLegacyAdapterId, setCustomLegacyAdapterId] = useState("retail_discount_legacy");
-  const [customModernAdapterId, setCustomModernAdapterId] = useState("retail_discount_modern_clean");
-  const [customOracleSetId, setCustomOracleSetId] = useState("SET-RETAIL-CONTROLLED-v1");
-  const [customMode, setCustomMode] = useState("CONTROLLED");
-  const [customProvider, setCustomProvider] = useState("auto");
-  const [customAllowExternalLLM, setCustomAllowExternalLLM] = useState(false);
-  const [customPreflight, setCustomPreflight] = useState(null);
-  const [customActiveResult, setCustomActiveResult] = useState(null);
-  const [customCryptographicProof, setCustomCryptographicProof] = useState(null);
-
-  // =========================================================================
-  // Phase 15 Evidence Dossier & Explainability State
-  // =========================================================================
-  const [dossierCertId, setDossierCertId] = useState("");
-  const [dossierData, setDossierData] = useState(null);
-  const [dossierExplanation, setDossierExplanation] = useState(null);
-  const [dossierGraph, setDossierGraph] = useState([]);
-  const [dossierNotes, setDossierNotes] = useState([]);
-  const [newNoteAuthor, setNewNoteAuthor] = useState("Auditor");
-  const [newNoteContent, setNewNoteContent] = useState("");
-  const [dossierLoading, setDossierLoading] = useState(false);
-  const [compareRunA, setCompareRunA] = useState("");
-  const [compareRunB, setCompareRunB] = useState("");
-  const [comparisonResult, setComparisonResult] = useState(null);
-  const [comparingRuns, setComparingRuns] = useState(false);
-
-  // =========================================================================
-  // Phase 16: Operations, Health & Reliability State
-  // =========================================================================
-  const [operationsSummary, setOperationsSummary] = useState(null);
-  const [operationsLoading, setOperationsLoading] = useState(false);
-  const [operationsProjectFilter, setOperationsProjectFilter] = useState("");
-  const [autoRefreshOperations, setAutoRefreshOperations] = useState(false);
 
   const loadOperationsSummary = async () => {
     setOperationsLoading(true);
@@ -907,10 +905,10 @@ export default function App() {
                 {/* Quick Role Switcher Buttons */}
                 <div style={{ display: "flex", gap: "4px", marginLeft: "6px", borderLeft: "1px solid #475569", paddingLeft: "8px" }}>
                   <button
-                    onClick={() => { setLoginUsername("bob_viewer"); setLoginPassword(""); setLoginModalOpen(true); }}
-                    title="Switch to Viewer (Bob)"
+                    onClick={() => quickLogin("admin", "BeaconAdmin2026!")}
+                    title="Switch to System Admin"
                     style={{
-                      background: currentRole === "VIEWER" ? "#2563eb" : "#334155",
+                      background: currentUser?.is_system_admin ? "#9333ea" : "#334155",
                       color: "#ffffff",
                       border: "none",
                       padding: "3px 7px",
@@ -920,13 +918,13 @@ export default function App() {
                       cursor: "pointer",
                     }}
                   >
-                    👁️ Viewer
+                    👑 Admin
                   </button>
                   <button
-                    onClick={() => { setLoginUsername("alice_certifier"); setLoginPassword(""); setLoginModalOpen(true); }}
+                    onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
                     title="Switch to Certifier (Alice)"
                     style={{
-                      background: currentRole === "CERTIFIER" ? "#2563eb" : "#334155",
+                      background: currentRole === "CERTIFIER" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
                       color: "#ffffff",
                       border: "none",
                       padding: "3px 7px",
@@ -939,10 +937,26 @@ export default function App() {
                     ⚡ Certifier
                   </button>
                   <button
-                    onClick={() => { setLoginUsername("carol_auditor"); setLoginPassword(""); setLoginModalOpen(true); }}
+                    onClick={() => quickLogin("bob_viewer", "BobView2026!")}
+                    title="Switch to Viewer (Bob)"
+                    style={{
+                      background: currentRole === "VIEWER" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "3px 7px",
+                      borderRadius: "4px",
+                      fontSize: "11px",
+                      fontWeight: "600",
+                      cursor: "pointer",
+                    }}
+                  >
+                    👁️ Viewer
+                  </button>
+                  <button
+                    onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
                     title="Switch to Auditor (Carol)"
                     style={{
-                      background: currentRole === "AUDITOR" ? "#2563eb" : "#334155",
+                      background: currentRole === "AUDITOR" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
                       color: "#ffffff",
                       border: "none",
                       padding: "3px 7px",
@@ -955,10 +969,10 @@ export default function App() {
                     📋 Auditor
                   </button>
                   <button
-                    onClick={() => { setLoginUsername("dave_admin"); setLoginPassword(""); setLoginModalOpen(true); }}
+                    onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
                     title="Switch to Project Admin (Dave)"
                     style={{
-                      background: currentRole === "PROJECT_ADMIN" ? "#2563eb" : "#334155",
+                      background: currentRole === "PROJECT_ADMIN" && !currentUser?.is_system_admin ? "#2563eb" : "#334155",
                       color: "#ffffff",
                       border: "none",
                       padding: "3px 7px",
@@ -968,7 +982,7 @@ export default function App() {
                       cursor: "pointer",
                     }}
                   >
-                    🛡️ Admin
+                    🛡️ Dave
                   </button>
                 </div>
 
@@ -3496,7 +3510,26 @@ export default function App() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                 <button
                   type="button"
-                  onClick={() => { setLoginUsername("alice_certifier"); setLoginPassword(""); setLoginModalOpen(true); }}
+                  onClick={() => quickLogin("admin", "BeaconAdmin2026!")}
+                  disabled={loginBusy}
+                  style={{
+                    background: "#fdf4ff",
+                    border: "1px solid #c084fc",
+                    color: "#6b21a8",
+                    padding: "8px",
+                    borderRadius: "8px",
+                    fontSize: "12px",
+                    fontWeight: "600",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    gridColumn: "span 2",
+                  }}
+                >
+                  👑 Admin (System Administrator)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => quickLogin("alice_certifier", "AliceCert2026!")}
                   disabled={loginBusy}
                   style={{
                     background: "#eff6ff",
@@ -3514,7 +3547,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setLoginUsername("bob_viewer"); setLoginPassword(""); setLoginModalOpen(true); }}
+                  onClick={() => quickLogin("bob_viewer", "BobView2026!")}
                   disabled={loginBusy}
                   style={{
                     background: "#f8fafc",
@@ -3532,7 +3565,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setLoginUsername("carol_auditor"); setLoginPassword(""); setLoginModalOpen(true); }}
+                  onClick={() => quickLogin("carol_auditor", "CarolAudit2026!")}
                   disabled={loginBusy}
                   style={{
                     background: "#fff7ed",
@@ -3550,7 +3583,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => { setLoginUsername("dave_admin"); setLoginPassword(""); setLoginModalOpen(true); }}
+                  onClick={() => quickLogin("dave_admin", "DaveAdmin2026!")}
                   disabled={loginBusy}
                   style={{
                     background: "#f0fdf4",
