@@ -58,21 +58,29 @@ def default_input_normalizer(raw_inputs: dict[str, Any]) -> dict[str, Any]:
 
 
 def compute_implementation_hash(target: Any) -> str:
-    """Computes a deterministic SHA-256 cryptographic hash over an implementation target."""
+    """Computes a deterministic SHA-256 cryptographic hash over an implementation target.
+    Requires an authoritative source file or directory. Fails closed (FileNotFoundError/ValueError)
+    if the authoritative source cannot be resolved. Never uses silent fallback hashing.
+    """
     if not target:
-        return ""
+        raise ValueError("Implementation target cannot be empty or None")
+
     if isinstance(target, (str, Path)):
         p = Path(target)
         if not p.exists():
-            return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+            raise FileNotFoundError(f"Authoritative implementation source path does not exist: '{target}'")
         if p.is_file():
             with open(p, "rb") as f:
                 return hashlib.sha256(f.read()).hexdigest()
+
+        # Directory: hash all source files deterministically
         hasher = hashlib.sha256()
         all_files = sorted(
             [f for f in p.rglob("*") if f.is_file() and not f.name.endswith((".pyc", ".DS_Store")) and "__pycache__" not in f.parts],
             key=lambda f: str(f.relative_to(p)).replace("\\", "/")
         )
+        if not all_files:
+            raise FileNotFoundError(f"Implementation directory contains no valid source files: '{target}'")
         for file_p in all_files:
             rel = str(file_p.relative_to(p)).replace("\\", "/")
             hasher.update(rel.encode("utf-8"))
@@ -85,17 +93,27 @@ def compute_implementation_hash(target: Any) -> str:
         return compute_implementation_hash(fn)
 
     if callable(target):
+        import inspect
         try:
-            import inspect
             src = inspect.getsource(target)
-            return hashlib.sha256(src.encode("utf-8")).hexdigest()
+            if src and src.strip():
+                return hashlib.sha256(src.encode("utf-8")).hexdigest()
         except Exception:
-            code = getattr(target, "__code__", None)
-            if code:
-                return hashlib.sha256(code.co_code).hexdigest()
-            return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+            pass
 
-    return hashlib.sha256(str(target).encode("utf-8")).hexdigest()
+        try:
+            source_file = inspect.getsourcefile(target) or inspect.getfile(target)
+            if source_file and Path(source_file).exists():
+                return compute_implementation_hash(source_file)
+        except Exception:
+            pass
+
+        raise ValueError(
+            f"Cannot resolve authoritative source code or file for callable '{getattr(target, '__name__', str(target))}'. "
+            "Implementations must be anchored to authoritative source code on disk."
+        )
+
+    raise ValueError(f"Unsupported implementation target type: {type(target)}. Must be a file path, directory path, or anchored callable.")
 
 
 class ImplementationAdapter(ABC):

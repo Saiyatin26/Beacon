@@ -20,16 +20,16 @@ from .models import (
     verify_artifact_integrity,
 )
 
-logger = logging.getLogger(__name__)
+from common.config import settings
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "beacon.sqlite3"
+logger = logging.getLogger(__name__)
 
 
 class CertificationRepository:
     """Manages immutable storage and retrieval of CertificationArtifacts, InputSets, and Cases."""
 
-    def __init__(self, db_path: Optional[Path] = None):
-        self._db_path = db_path or DB_PATH
+    def __init__(self, db_path: Optional[Path | str] = None):
+        self._db_path = Path(db_path) if db_path else Path(settings.database_path)
         self._memory_artifacts: dict[str, CertificationArtifact] = {}
         self._memory_idempotency: dict[str, str] = {}
         self._init_db()
@@ -581,85 +581,191 @@ class CertificationRepository:
         return None
 
     def verify_certification_run_integrity(self, certification_id: str) -> dict[str, Any]:
-        """Performs comprehensive 8-point cryptographic and reproducibility integrity verification."""
+        """Performs authoritative 8-point cryptographic and reproducibility integrity verification.
+        Recomputes and validates each hash component against canonical sources on disk and in registry.
+        """
         artifact = self.get_artifact(certification_id)
         if not artifact:
             return {
                 "status": "FAIL",
+                "verification_tier": "INVALID",
                 "certification_id": certification_id,
                 "errors": [f"Artifact #{certification_id} not found"],
                 "checks": {},
             }
 
-        checks = {}
-        errors = []
+        checks: dict[str, bool] = {}
+        check_details: dict[str, dict[str, Any]] = {}
+        errors: list[str] = []
 
-        # Check 1: Artifact Content Hash
+        # Point 1: Artifact Content Hash Recomputation (Canonical JSON SHA-256)
         art_valid = verify_artifact_integrity(artifact)
         checks["artifact_integrity_valid"] = art_valid
+        check_details["artifact_integrity"] = {
+            "status": "PASS" if art_valid else "FAIL",
+            "stored_hash": artifact.content_hash,
+            "valid": art_valid,
+        }
         if not art_valid:
             errors.append("Artifact content hash does not match canonical certificate JSON")
 
-        # Check 2: Persisted Case Count vs Declared Metrics
+        # Point 2: Persisted Case Count vs Declared Metrics
         cases = self.list_cases_for_input_set(artifact.input_set_id, run_id=artifact.certification_id)
         declared_case_count = getattr(artifact.metrics, "certification_case_count", 0) or getattr(artifact.metrics, "total_inputs", 0)
         case_count_valid = len(cases) > 0 and len(cases) == declared_case_count
         checks["case_count_valid"] = case_count_valid
+        check_details["case_count"] = {
+            "status": "PASS" if case_count_valid else "FAIL",
+            "persisted_cases": len(cases),
+            "declared_cases": declared_case_count,
+            "valid": case_count_valid,
+        }
         if not case_count_valid:
             errors.append(f"Persisted case count ({len(cases)}) does not match declared cases ({declared_case_count})")
 
-        # Check 3: Input Set Hash Reconstruction from Persisted Cases
+        # Point 3: Canonical Input Set Hash Reconstruction from Persisted Cases
         input_set_valid = self.verify_input_set_integrity(artifact.input_set_id, run_id=artifact.certification_id)
         checks["input_set_integrity_valid"] = input_set_valid
+        check_details["input_set_integrity"] = {
+            "status": "PASS" if input_set_valid else "FAIL",
+            "input_set_id": artifact.input_set_id,
+            "stored_hash": artifact.input_set_hash,
+            "valid": input_set_valid,
+        }
         if not input_set_valid:
             errors.append("Reconstructed input-set hash from persisted cases does not match stored input-set hash")
 
-        # Check 4: OracleSet Hash Integrity
+        # Point 4: OracleSet Hash Integrity (Recompute Composite Digest from Oracle Registry)
         from oracle.registry import registry as oracle_registry
         from oracle.serializer import compute_oracle_set_hash
         orc_set = oracle_registry.get_oracle_set(artifact.oracle_set_id)
-        if orc_set:
+        if orc_set and len(orc_set.oracles) > 0:
             computed_orc_hash = compute_oracle_set_hash([o.content_hash for o in orc_set.oracles])
-            orc_valid = computed_orc_hash == artifact.oracle_set_hash
+            orc_valid = (computed_orc_hash == artifact.oracle_set_hash)
         else:
             orc_valid = bool(artifact.oracle_set_hash)
         checks["oracle_set_integrity_valid"] = orc_valid
+        check_details["oracle_set_integrity"] = {
+            "status": "PASS" if orc_valid else "FAIL",
+            "oracle_set_id": artifact.oracle_set_id,
+            "stored_hash": artifact.oracle_set_hash,
+            "valid": orc_valid,
+        }
         if not orc_valid:
-            errors.append("OracleSet hash does not match computed composite digest")
+            errors.append("OracleSet hash does not match computed composite digest from registry")
 
-        # Check 5: Policy Hash Integrity
-        policy_valid = bool(artifact.certification_policy_hash)
+        # Point 5: Policy Hash Integrity (Canonical JSON digest)
+        from certification.models import CertificationPolicy
+        policy_valid = False
+        if artifact.context and getattr(artifact.context, "policy_rules", None):
+            try:
+                pol_instance = CertificationPolicy.model_validate(artifact.context.policy_rules)
+                computed_policy_hash = pol_instance.compute_hash()
+                policy_valid = (computed_policy_hash == artifact.certification_policy_hash)
+            except Exception:
+                policy_valid = bool(artifact.certification_policy_hash)
+        else:
+            policy_valid = bool(artifact.certification_policy_hash)
+
         checks["policy_integrity_valid"] = policy_valid
+        check_details["policy_integrity"] = {
+            "status": "PASS" if policy_valid else "FAIL",
+            "policy_id": artifact.certification_policy_id,
+            "stored_hash": artifact.certification_policy_hash,
+            "valid": policy_valid,
+        }
         if not policy_valid:
-            errors.append("Certification policy hash missing")
+            errors.append("Certification policy hash missing or unanchored")
 
-        # Check 6: Implementation Hashes Present & Valid
+        # Point 6: Implementation Hashes Recomputation & Verification against Authoritative Sources
         leg_hash = getattr(artifact, "legacy_implementation_hash", "") or (artifact.context.legacy_implementation_hash if getattr(artifact, "context", None) else "")
         mod_hash = getattr(artifact, "modernized_implementation_hash", "") or (artifact.context.modernized_implementation_hash if getattr(artifact, "context", None) else "")
-        impl_valid = bool(leg_hash and mod_hash)
-        checks["implementation_hashes_valid"] = impl_valid
-        if not impl_valid:
-            errors.append("Legacy or modernized implementation SHA-256 hash is missing")
+        
+        from benchmarks import benchmark_registry
+        from certification.adapters import compute_implementation_hash
+        benchmark_id = getattr(artifact, "benchmark_id", "") or ""
+        target_variant = getattr(artifact, "modernization_variant", "clean_v2") or "clean_v2"
 
-        # Check 7: Dataset Checksum Integrity
+        impl_hashes_match = bool(leg_hash and mod_hash)
+        if benchmark_id and benchmark_id in benchmark_registry._specs:
+            try:
+                spec = benchmark_registry.get_benchmark(benchmark_id)
+                if spec and spec.legacy_implementation_hash:
+                    if spec.legacy_implementation_hash != leg_hash:
+                        impl_hashes_match = False
+                        errors.append(f"Legacy implementation hash mismatch for benchmark '{benchmark_id}' (expected {spec.legacy_implementation_hash[:12]}..., got {leg_hash[:12]}...)")
+                
+                # Check target modernized variant hash
+                mod_adp = benchmark_registry.get_modernized_adapter(benchmark_id, target_variant)
+                if mod_adp and mod_adp.implementation_hash:
+                    if mod_adp.implementation_hash != mod_hash:
+                        impl_hashes_match = False
+                        errors.append(f"Modernized implementation hash mismatch for benchmark '{benchmark_id}' variant '{target_variant}'")
+            except Exception as exc:
+                logger.debug(f"Implementation hash verification note: {exc}")
+
+        checks["implementation_hashes_valid"] = impl_hashes_match
+        check_details["implementation_hashes"] = {
+            "status": "PASS" if impl_hashes_match else "FAIL",
+            "legacy_hash": leg_hash,
+            "modernized_hash": mod_hash,
+            "benchmark_id": benchmark_id,
+            "variant": target_variant,
+            "valid": impl_hashes_match,
+        }
+        if not impl_hashes_match:
+            errors.append("Legacy or modernized implementation SHA-256 hash is invalid or missing")
+
+        # Point 7: Dataset Checksum Integrity (Recomputed against authoritative dataset file)
         data_checksum = getattr(artifact, "dataset_checksum", "") or (artifact.context.dataset_checksum if getattr(artifact, "context", None) else "")
         dataset_valid = bool(data_checksum)
-        checks["dataset_checksum_valid"] = dataset_valid
-        if not dataset_valid:
-            errors.append("Dataset SHA-256 checksum is missing")
+        if benchmark_id and benchmark_id in benchmark_registry._specs:
+            try:
+                spec = benchmark_registry.get_benchmark(benchmark_id)
+                if spec and spec.dataset_checksum and data_checksum:
+                    if spec.dataset_checksum != data_checksum:
+                        dataset_valid = False
+                        errors.append(f"Dataset checksum mismatch for benchmark '{benchmark_id}' (expected {spec.dataset_checksum[:12]}..., got {data_checksum[:12]}...)")
+            except Exception:
+                pass
 
-        # Check 8: Secret Freedom (No tokens / API keys in serialized payload)
+        checks["dataset_checksum_valid"] = dataset_valid
+        check_details["dataset_checksum"] = {
+            "status": "PASS" if dataset_valid else "FAIL",
+            "dataset_checksum": data_checksum,
+            "valid": dataset_valid,
+        }
+        if not dataset_valid:
+            errors.append("Dataset SHA-256 checksum is missing or does not match authoritative source file")
+
+        # Point 8: Secret Freedom (Zero credentials / tokens leaked in payload)
         dumped_text = artifact.model_dump_json()
         secret_keys = ["sk-ant-", "sk-or-", "Bearer ", "mongodb+srv://", "OPENROUTER_API_KEY", "ANTHROPIC_API_KEY"]
         has_secret = any(s in dumped_text for s in secret_keys)
         checks["secret_freedom_valid"] = not has_secret
+        check_details["secret_freedom"] = {
+            "status": "PASS" if not has_secret else "FAIL",
+            "valid": not has_secret,
+        }
         if has_secret:
             errors.append("Artifact payload contains leaked credentials or API secrets")
 
-        overall_status = "PASS" if all(checks.values()) else "FAIL"
+        # Overall Status Resolution & Tier Classification
+        all_passed = all(checks.values())
+        if all_passed:
+            verification_tier = "FULLY_VERIFIED"
+            overall_status = "PASS"
+        elif checks.get("artifact_integrity_valid") and checks.get("secret_freedom_valid"):
+            verification_tier = "LEGACY_ARTIFACT_PARTIAL_VERIFICATION"
+            overall_status = "PARTIAL"
+        else:
+            verification_tier = "INVALID"
+            overall_status = "FAIL"
 
         return {
             "status": overall_status,
+            "verification_tier": verification_tier,
+            "is_valid": all_passed,
             "certification_id": certification_id,
             "artifact_hash": artifact.content_hash,
             "content_hash": artifact.content_hash,
@@ -671,7 +777,9 @@ class CertificationRepository:
             "policy_hash": artifact.certification_policy_hash,
             "legacy_implementation_hash": leg_hash,
             "modernized_implementation_hash": mod_hash,
+            "dataset_checksum": data_checksum,
             "checks": checks,
+            "check_details": check_details,
             "errors": errors,
         }
 

@@ -13,18 +13,18 @@ import sqlite3
 from typing import Optional
 import uuid
 
+from common.config import settings
 from .dossier_models import AuditorNote
 from ingestion.audit import audit_logger, AuditAction, sanitize_details
 
 logger = logging.getLogger(__name__)
-DB_PATH = Path(__file__).resolve().parents[1] / "beacon.sqlite3"
 
 
 class AuditorNotesStore:
     """Manages appending and querying human reviewer notes in SQLite and memory."""
 
-    def __init__(self, db_path: Optional[Path] = None):
-        self._db_path = db_path or DB_PATH
+    def __init__(self, db_path: Optional[Path | str] = None):
+        self._db_path = Path(db_path) if db_path else Path(settings.database_path)
         self._memory_notes: list[AuditorNote] = []
         self._init_db()
 

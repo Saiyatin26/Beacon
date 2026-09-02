@@ -231,7 +231,11 @@ def require_project_permission(permission: Permission, project_id_param: str = "
             except Exception:
                 pass
 
-        # 5. Strict rejection if target project cannot be resolved (NO DEFAULT FALLBACK)
+        # 5. Bind demo endpoints to loan_demo project namespace
+        if not target_project_id and (request.url.path.startswith("/demo") or request.url.path.startswith("/drift/demo")):
+            target_project_id = "loan_demo"
+
+        # 6. Strict rejection if target project cannot be resolved (NO DEFAULT FALLBACK)
         if not target_project_id:
             audit_logger.log(
                 project_id="UNKNOWN",

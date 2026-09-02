@@ -90,7 +90,9 @@ from auth import (
 
 import legacy_loan_approval
 import modern_loan_approval
+import modern_clean_loan_approval
 from generate_traces import generate_traces
+from common.db_migration import consolidate_database_architecture
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,17 +110,23 @@ async def lifespan(app: FastAPI):
     # 1. Structured logging initialization
     setup_structured_logging()
 
-    # 2. Hardened configuration validation (fail-closed in production)
+    # 2. Database architecture consolidation (single canonical SQLite store & WAL mode)
+    try:
+        consolidate_database_architecture()
+    except Exception as _exc:
+        logger.warning(f"Database consolidation check notice: {_exc}")
+
+    # 3. Hardened configuration validation (fail-closed in production)
     settings.validate(raise_on_error=(settings.beacon_env in ("production", "staging")))
     validate_startup_configuration()
 
-    # 3. Safe interrupted operations recovery
+    # 4. Safe interrupted operations recovery (executed once at startup)
     try:
         recover_interrupted_operations()
     except Exception as _exc:
         logger.warning(f"Startup interrupted operation recovery encountered non-fatal error: {_exc}")
 
-    # 4. Pre-load controlled OracleSets for read-only /health/ready
+    # 5. Pre-load controlled OracleSets for read-only /health/ready
     try:
         from benchmarks import benchmark_registry as _br
         from oracle.registry import registry as _or
@@ -135,7 +143,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"BEACON v{settings.beacon_version} operational and ready [Environment: {settings.beacon_env}]")
     yield
 
-    # 5. Graceful shutdown
+    # 6. Graceful shutdown
     logger.info("BEACON server shutdown initiated. Performing graceful cleanup...")
     try:
         operational_metrics.get_snapshot()
@@ -204,12 +212,14 @@ app.include_router(auth_router)
 
 
 class DemoRunRequest(BaseModel):
-    implementation: Literal["buggy", "equivalent"] = "buggy"
+    implementation: Literal["buggy", "equivalent", "clean"] = "buggy"
+    project_id: str = "loan_demo"
 
 
 class DriftRequest(BaseModel):
     baseline_run_id: str
-    implementation: Literal["buggy", "equivalent"] = "buggy"
+    implementation: Literal["buggy", "equivalent", "clean"] = "buggy"
+    project_id: str = "loan_demo"
 
 
 def _sample_traces():
@@ -241,7 +251,9 @@ def _sample_oracles():
     return [synthesize_oracle(invariant) for invariant in graduated], graduated
 
 def _implementation(name: str):
-    return modern_loan_approval.evaluate_loan if name == "buggy" else legacy_loan_approval.evaluate_loan
+    if name == "buggy":
+        return modern_loan_approval.evaluate_loan
+    return modern_clean_loan_approval.evaluate_loan
 
 
 @app.get("/")
@@ -536,7 +548,7 @@ def run_demo(
         field_bounds=FIELD_BOUNDS,
         domain_of={oracle.invariant_id: "Loan approval" for oracle in oracles},
     )
-    local_store.save_run(run)
+    local_store.save_run(run, project_id=request.project_id)
     return {
         "run": run.model_dump(mode="json"),
         "implementation": request.implementation,

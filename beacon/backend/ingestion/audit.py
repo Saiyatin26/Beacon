@@ -14,9 +14,9 @@ import sqlite3
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
-logger = logging.getLogger(__name__)
+from common.config import settings
 
-DB_PATH = Path(__file__).resolve().parents[1] / "beacon.sqlite3"
+logger = logging.getLogger(__name__)
 
 
 class AuditAction(str, Enum):
@@ -70,8 +70,8 @@ def sanitize_details(details: dict[str, Any]) -> dict[str, Any]:
 class AuditLogger:
     """Manages appending and querying audit events in SQLite and memory."""
 
-    def __init__(self, db_path: Optional[Path] = None):
-        self._db_path = db_path or DB_PATH
+    def __init__(self, db_path: Optional[Path | str] = None):
+        self._db_path = Path(db_path) if db_path else Path(settings.database_path)
         self._memory_events: list[AuditEvent] = []
         self._init_db()
 

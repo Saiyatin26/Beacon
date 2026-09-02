@@ -1,0 +1,46 @@
+{
+  "benchmark_id": "medical_triage",
+  "name": "Emergency Medical Triage Decision Benchmark",
+  "domain": "Healthcare & Critical Care",
+  "description": "Clinical triage priority scoring evaluating vital signs, oxygen saturation, and heart rate thresholds.",
+  "source": "Clinical Guideline Triage Rules (Controlled Reference Implementation)",
+  "source_repository": "https://github.com/Saiyatin26/Beacon",
+  "source_url": "https://github.com/Saiyatin26/Beacon/benchmarks/medical_triage",
+  "source_version": "1.0.0",
+  "source_license": "MIT",
+  "license": "MIT",
+  "language": "Python",
+  "legacy_version": "1.0.0",
+  "modernized_version": "2.0.0",
+  "provenance_category": "CONTROLLED",
+  "modernization_provenance": {
+    "clean_v2": "INDEPENDENT_REIMPLEMENTATION",
+    "buggy_v2": "CONTROLLED_MUTATION"
+  },
+  "input_schema": {
+    "heart_rate": "int",
+    "systolic_bp": "int",
+    "spo2": "float",
+    "is_responsive": "bool"
+  },
+  "output_schema": {
+    "triage_priority": "str",
+    "requires_icu": "bool"
+  },
+  "expected_behavior_source": "oracle_derived",
+  "dataset_source": "Controlled synthetic patient vitals evaluating emergency thresholds",
+  "dataset_license": "MIT",
+  "dataset_version": "1.0.0",
+  "adapter_version": "1.0.0",
+  "legacy_adapter_id": "medical_triage_legacy",
+  "modernized_adapters": {
+    "clean_v2": "medical_triage_modern_clean",
+    "buggy_v2": "medical_triage_modern_buggy"
+  },
+  "field_bounds": {
+    "heart_rate": [40.0, 200.0],
+    "systolic_bp": [60.0, 220.0],
+    "spo2": [70.0, 100.0]
+  },
+  "tags": ["medical", "triage", "healthcare", "controlled"]
+}

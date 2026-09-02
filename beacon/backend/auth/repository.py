@@ -10,19 +10,18 @@ from pathlib import Path
 import sqlite3
 from typing import Optional
 
+from common.config import settings
 from .models import ProjectMembership, User, UserRole
 from .security import hash_password
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).resolve().parents[2] / "data" / "beacon.sqlite3"
-
 
 class AuthRepository:
     """Manages persistent storage of users, credentials, and project memberships."""
 
-    def __init__(self, db_path: Optional[Path] = None):
-        self._db_path = db_path or DB_PATH
+    def __init__(self, db_path: Optional[Path | str] = None):
+        self._db_path = Path(db_path) if db_path else Path(settings.database_path)
         # In-memory storage for test isolation and fallback
         self._memory_users: dict[str, User] = {}  # user_id -> User
         self._memory_usernames: dict[str, str] = {}  # username.lower() -> user_id
@@ -76,7 +75,9 @@ class AuthRepository:
         import os
         from common.config import settings
         env = getattr(settings, "beacon_env", "production").lower()
-        if env == "production" and not os.getenv("BEACON_ALLOW_DEMO_SEEDING") and not force:
+        allow_demo_seeding = os.getenv("BEACON_SEED_DEMO_USERS", "").lower() in ("true", "1", "yes") or os.getenv("BEACON_ALLOW_DEMO_SEEDING", "").lower() in ("true", "1", "yes")
+        if env in ("production", "staging") and not allow_demo_seeding and not force:
+            logger.info("Demo user seeding skipped (production/staging mode without explicit BEACON_SEED_DEMO_USERS=true).")
             return
         try:
             if not force and self.get_user_by_username("admin"):

@@ -18,6 +18,7 @@ import uuid
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
+from common.config import settings
 from .errors import StateTransitionError
 from .logging_config import log_operational_event, get_logger
 
@@ -138,10 +139,9 @@ class CertificationJobTracker:
         self._lock = threading.RLock()
         self._jobs: dict[str, CertificationJob] = {}
         if db_path is None:
-            backend_dir = Path(__file__).resolve().parent.parent
-            self._db_path = str(backend_dir / "beacon.sqlite3")
+            self._db_path = str(settings.database_path)
         else:
-            self._db_path = db_path
+            self._db_path = str(db_path)
         self._init_db()
         self._load_active_jobs_from_db()
 

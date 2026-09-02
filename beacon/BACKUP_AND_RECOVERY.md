@@ -13,8 +13,8 @@ This guide details backup topologies, live snapshots, restoration procedures, an
 ## 1. SQLite Storage & Backup (Core / Mandatory)
 
 ### Storage Topology
-- **Default Database Path**: `./beacon.sqlite3`
-- **Configurable Path**: Set via `BEACON_DATABASE_PATH` environment variable (e.g. `/var/lib/beacon/beacon.sqlite3`).
+- **Default Database Path**: `./data/beacon.sqlite3`
+- **Configurable Path**: Set via `BEACON_DATABASE_PATH` environment variable (e.g. `/var/lib/beacon/beacon.sqlite3` or `data/beacon.sqlite3`).
 - **Files in WAL Mode**:
   - `beacon.sqlite3` (Main database file)
   - `beacon.sqlite3-wal` (Write-Ahead Log)

@@ -10,6 +10,7 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Optional
 
+from common.config import settings
 from certification.models import CertificationTestInput
 from .dataset_models import (
     DatasetIngestionManifest,
@@ -20,14 +21,12 @@ from .audit import AuditAction, audit_logger
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = Path(__file__).resolve().parents[1] / "beacon.sqlite3"
-
 
 class UserDatasetRegistry:
     """Manages storage, retrieval, listing, and deletion of custom user-supplied datasets."""
 
-    def __init__(self, db_path: Optional[Path] = None):
-        self._db_path = db_path or DB_PATH
+    def __init__(self, db_path: Optional[Path | str] = None):
+        self._db_path = Path(db_path) if db_path else Path(settings.database_path)
         self._memory_datasets: dict[str, UserDatasetRecord] = {}
         self._memory_inputs: dict[str, list[CertificationTestInput]] = {}
         self._init_db()
