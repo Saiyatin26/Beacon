@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
-load_dotenv()
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_dotenv(PROJECT_ROOT / ".env", override=False)
 
 BEACON_VERSION = "1.0.0"
 

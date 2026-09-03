@@ -110,9 +110,9 @@ class ProviderManager:
             "allow_auto_fallback": settings.allow_auto_fallback,
             "providers": {
                 "openrouter": {
-                    "available": self.providers["openrouter"].is_available(),
+                    "available": self.providers["openrouter"].check_connectivity(),
                     "model": settings.openrouter_model,
-                    "configured": bool(settings.openrouter_api_key),
+                    "configured": self.providers["openrouter"].is_configured(),
                     "role": "Primary Cloud Provider",
                 },
                 "anthropic": {

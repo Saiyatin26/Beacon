@@ -31,8 +31,31 @@ class OpenRouterProvider(LLMProvider):
         self.timeout = timeout
 
     def is_available(self) -> bool:
-        """Returns True if the OpenRouter API key is configured."""
+        """Returns whether this provider can be attempted by the fallback chain."""
+        return self.is_configured()
+
+    def is_configured(self) -> bool:
+        """Returns True when a non-empty API key is present."""
         return bool(self.api_key)
+
+    def check_connectivity(self) -> bool:
+        """Checks OpenRouter reachability without exposing credentials or response data."""
+        if not self.is_configured():
+            return False
+
+        request = urllib.request.Request(
+            f"{self.base_url}/models",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=min(self.timeout, 5.0)) as response:
+                response.read(1)
+            logger.info("OpenRouter connectivity check succeeded")
+            return True
+        except Exception:
+            logger.warning("OpenRouter connectivity check failed")
+            return False
 
     def generate(
         self,
@@ -118,7 +141,7 @@ class OpenRouterProvider(LLMProvider):
 
         except urllib.error.HTTPError as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = f"OpenRouter HTTP {exc.code}: {exc.reason}"
+            err_msg = f"OpenRouter HTTP request failed with status {exc.code}."
             logger.error(err_msg)
             return LLMResponse(
                 raw_text="",
@@ -130,7 +153,7 @@ class OpenRouterProvider(LLMProvider):
             )
         except Exception as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = f"OpenRouter request error: {exc}"
+            err_msg = "OpenRouter request failed."
             logger.error(err_msg)
             return LLMResponse(
                 raw_text="",

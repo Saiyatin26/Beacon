@@ -248,6 +248,45 @@ def test_provider_status_sanitization():
     assert "secret" not in status_str.lower()
 
 
+def test_openrouter_missing_key_is_not_configured_or_available():
+    provider = OpenRouterProvider(api_key="")
+
+    assert provider.is_configured() is False
+    assert provider.check_connectivity() is False
+
+
+def test_openrouter_configured_but_unreachable_is_not_available():
+    provider = OpenRouterProvider(api_key="test-openrouter-key")
+
+    with patch("urllib.request.urlopen", side_effect=OSError("connection refused")):
+        assert provider.is_configured() is True
+        assert provider.check_connectivity() is False
+
+
+def test_openrouter_connectivity_success_is_available():
+    mock_response = MagicMock()
+    mock_response.__enter__.return_value = mock_response
+    mock_response.read.return_value = b"{\"data\": []}"
+    provider = OpenRouterProvider(api_key="test-openrouter-key")
+
+    with patch("urllib.request.urlopen", return_value=mock_response):
+        assert provider.is_configured() is True
+        assert provider.check_connectivity() is True
+
+
+def test_openrouter_status_is_sanitized_and_keeps_secret_out_of_logs(caplog):
+    secret = "test-openrouter-key"
+    with patch.object(settings, "openrouter_api_key", secret), \
+         patch.object(OpenRouterProvider, "check_connectivity", return_value=False):
+        status = ProviderManager().get_status()
+
+    status_json = json.dumps(status)
+    assert status["providers"]["openrouter"]["configured"] is True
+    assert status["providers"]["openrouter"]["available"] is False
+    assert secret not in status_json
+    assert secret not in caplog.text
+
+
 # ==============================================================================
 # 7. Downstream Schema Consistency Across Providers
 # ==============================================================================
