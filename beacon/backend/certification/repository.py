@@ -486,6 +486,20 @@ class CertificationRepository:
     ) -> CertificationArtifact:
         """Atomically persists the input set, all certification cases, and the final artifact
         in a single SQLite transaction with strict immutability checks."""
+        from operations.logging_config import log_operational_event
+        import time
+        started = time.perf_counter()
+        log_operational_event(
+            event="certification_persistence_started",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="PERSISTENCE",
+            phase="10",
+            certification_run_id=artifact.certification_id,
+            cases=len(cases),
+            backend="SQLite",
+            message=f"[PHASE 10] START | SQLite transaction | run={artifact.certification_id} | cases={len(cases)}",
+        )
         with sqlite3.connect(self._db_path) as conn:
             try:
                 self._save_input_set_tx(input_set, conn)
@@ -495,9 +509,37 @@ class CertificationRepository:
             except Exception as exc:
                 conn.rollback()
                 logger.error(f"Atomic certification persistence failed; transaction rolled back: {exc}")
+                log_operational_event(
+                    event="certification_persistence_failed",
+                    level=logging.ERROR,
+                    logger_name="beacon.execution",
+                    operation="CERTIFICATION",
+                    step="PERSISTENCE",
+                    phase="10",
+                    certification_run_id=artifact.certification_id,
+                    backend="SQLite",
+                    outcome="ROLLED_BACK",
+                    duration_ms=round((time.perf_counter() - started) * 1000.0, 2),
+                    safe_error=str(exc),
+                    message="[PHASE 10] ERROR | SQLite transaction rolled back",
+                )
                 raise
 
         self._memory_artifacts[artifact.certification_id] = artifact
+        duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        log_operational_event(
+            event="certification_persistence_completed",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="PERSISTENCE",
+            phase="10",
+            certification_run_id=artifact.certification_id,
+            cases=len(cases),
+            backend="SQLite",
+            outcome="COMMITTED",
+            duration_ms=duration_ms,
+            message=f"[PHASE 10] COMPLETE | SQLite commit | run={artifact.certification_id} | duration={duration_ms:.2f}ms",
+        )
         return artifact
 
     def list_certification_cases(

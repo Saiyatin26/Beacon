@@ -8,6 +8,8 @@ import json
 import logging
 import re
 import contextvars
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -92,6 +94,15 @@ class StructuredJsonFormatter(logging.Formatter):
             "status_code",
             "method",
             "path",
+            "operation",
+            "phase",
+            "step",
+            "records",
+            "cases",
+            "oracles",
+            "regressions",
+            "matching",
+            "backend",
         ):
             val = getattr(record, attr, None)
             if val is not None:
@@ -108,8 +119,98 @@ class StructuredJsonFormatter(logging.Formatter):
         return json.dumps(log_data)
 
 
+class HumanReadableConsoleFilter(logging.Filter):
+    """Keeps the demonstration console focused on BEACON execution and HTTP events."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return (
+            record.name.startswith("beacon.execution")
+            or record.name == "beacon.operations.http"
+            or record.name == "beacon.lifecycle"
+        )
+
+
+class BeaconConsoleFormatter(logging.Formatter):
+    """Formats operational events as a compact, human-readable execution monitor."""
+
+    CHECK = "\N{CHECK MARK}"
+    CROSS = "\N{BALLOT X}"
+
+    @staticmethod
+    def _value(record: logging.LogRecord, name: str, default: Any = "") -> Any:
+        return getattr(record, name, default)
+
+    @staticmethod
+    def _status(outcome: str, level: int) -> str:
+        normalized = (outcome or "").upper()
+        if normalized in {"FAILED", "FAIL", "ABORTED", "NOT_CERTIFIED", "REGRESSION"} or level >= logging.ERROR:
+            return f"FAILED {BeaconConsoleFormatter.CROSS}"
+        if normalized in {"COMPLETE", "COMPLETED", "COMMITTED", "CERTIFIED", "READY", "SUCCESS", "HTTP_200"}:
+            return f"COMPLETED {BeaconConsoleFormatter.CHECK}"
+        return "STARTED"
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        if record.name == "beacon.operations.http":
+            method = self._value(record, "method", "?")
+            path = self._value(record, "path", "?")
+            status_code = self._value(record, "status_code", "?")
+            duration = self._value(record, "duration_ms", None)
+            status_text = "OK" if str(status_code).startswith("2") else "ERROR"
+            timing = f" ({duration:.2f} ms)" if isinstance(duration, (int, float)) else ""
+            return f"[{timestamp}] [HTTP] {method} {path} ..... {status_code} {status_text}{timing}"
+
+        if record.name == "beacon.lifecycle":
+            state = self._value(record, "event", "").replace("job_state_", "").replace("_", " ").upper()
+            marker = f" {self.CHECK}" if state == "COMPLETED" else (f" {self.CROSS}" if state in {"FAILED", "CANCELLED"} else "")
+            return f"[{timestamp}] JOB LIFECYCLE | {state}{marker}"
+
+        event = self._value(record, "event", "")
+        operation = self._value(record, "operation", "OPERATION")
+        step = self._value(record, "step", "")
+        outcome = self._value(record, "outcome", "")
+        run_id = self._value(record, "certification_run_id", "")
+        message = scrub_secrets(record.getMessage())
+
+        if event in {"certification_started", "custom_certification_started", "preflight_started"}:
+            lines = ["", "=" * 60, "                 BEACON EXECUTION MONITOR", "=" * 60]
+            lines.append(f"[{timestamp}] REQUEST RECEIVED")
+            lines.append(f"Operation : {operation}")
+            if run_id:
+                lines.append(f"Run ID    : {run_id}")
+            return "\n".join(lines)
+
+        if event in {"certification_completed", "custom_certification_completed"}:
+            status = outcome or "COMPLETE"
+            marker = self.CHECK if status in {"CERTIFIED", "CERTIFIED_WITH_WARNINGS"} else self.CROSS
+            duration = self._value(record, "duration_ms", None)
+            duration_text = f" | duration={duration:.2f}ms" if isinstance(duration, (int, float)) else ""
+            return (
+                f"[{timestamp}] FINAL RESULT    : {marker} {status}\n"
+                f"[{timestamp}] OPERATION COMPLETE{duration_text}"
+            )
+
+        if event in {"execution_step_started", "execution_step_completed", "execution_step_failed"}:
+            state = self._status(outcome, record.levelno)
+            duration = self._value(record, "duration_ms", None)
+            duration_text = f" | Duration: {duration:.2f} ms" if isinstance(duration, (int, float)) else ""
+            return f"[{timestamp}] {operation} | {step} | [{state}]{duration_text}"
+
+        if event == "certification_policy_decision":
+            return f"[{timestamp}] CERTIFICATION DECISION | {outcome} | {message}"
+
+        if event == "certification_persistence_started":
+            return f"[{timestamp}] DATABASE PERSISTENCE | [STARTED] | backend={self._value(record, 'backend', 'unknown')}"
+        if event == "certification_persistence_completed":
+            return f"[{timestamp}] DATABASE PERSISTENCE | [COMPLETED {self.CHECK}] | backend={self._value(record, 'backend', 'unknown')}"
+        if event == "certification_persistence_failed":
+            return f"[{timestamp}] DATABASE PERSISTENCE | [FAILED {self.CROSS}] | transaction rolled back"
+
+        return f"[{timestamp}] {message}"
+
+
 def setup_structured_logging(level: Optional[int] = None) -> None:
-    """Configures root beacon logger with structured JSON formatting and configured level."""
+    """Configures JSON debug output and a focused human-readable console output."""
     log_level_name = getattr(settings, "log_level", "INFO").upper()
     resolved_level = level if level is not None else getattr(logging, log_level_name, logging.INFO)
 
@@ -121,6 +222,12 @@ def setup_structured_logging(level: Optional[int] = None) -> None:
         handler = logging.StreamHandler()
         handler.setFormatter(StructuredJsonFormatter())
         root_logger.addHandler(handler)
+    if not any(getattr(h, "_beacon_human_console", False) for h in root_logger.handlers):
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(BeaconConsoleFormatter())
+        console_handler.addFilter(HumanReadableConsoleFilter())
+        console_handler._beacon_human_console = True
+        root_logger.addHandler(console_handler)
 
 
 def get_logger(name: str = "beacon.operations") -> logging.Logger:
@@ -176,5 +283,52 @@ def log_operational_event(
     except Exception:
         # Non-blocking: fail safely without interrupting business operations
         pass
+
+
+@contextmanager
+def execution_step(
+    operation: str,
+    step: str,
+    *,
+    phase: Optional[str] = None,
+    logger_name: str = "beacon.execution",
+    **fields: Any,
+):
+    """Logs a timed execution step without exposing payloads or changing control flow."""
+    started = time.perf_counter()
+    context = {"operation": operation, "step": step, **fields}
+    if phase:
+        context["phase"] = phase
+    log_operational_event(
+        event="execution_step_started",
+        logger_name=logger_name,
+        message=f"[{operation}] [{step}] START",
+        **context,
+    )
+    try:
+        yield
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        log_operational_event(
+            event="execution_step_failed",
+            level=logging.ERROR,
+            logger_name=logger_name,
+            duration_ms=duration_ms,
+            outcome="FAILED",
+            safe_error=str(exc),
+            message=f"[{operation}] [{step}] ERROR | duration={duration_ms:.2f}ms",
+            **context,
+        )
+        raise
+    else:
+        duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        log_operational_event(
+            event="execution_step_completed",
+            logger_name=logger_name,
+            duration_ms=duration_ms,
+            outcome="COMPLETE",
+            message=f"[{operation}] [{step}] COMPLETE | duration={duration_ms:.2f}ms",
+            **context,
+        )
 
 

@@ -36,6 +36,7 @@ from .models import (
 )
 from .repository import certification_repository
 from ingestion.audit import audit_logger, AuditAction
+from operations.logging_config import log_operational_event
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,19 @@ class CertificationEngine:
         pol_hash = cert_policy.compute_hash()
         timestamp = datetime.now(timezone.utc).isoformat()
         cert_id = f"CERT-{uuid.uuid4().hex[:8]}"
+
+        log_operational_event(
+            event="certification_engine_started",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="ENGINE",
+            certification_run_id=cert_id,
+            benchmark_id=project_id,
+            evaluation_mode=getattr(context, "evaluation_mode", "CONTROLLED") if context else "CONTROLLED",
+            target_variant=getattr(context, "modernization_variant_id", "") if context else "",
+            oracles=len(oracle_set.oracles),
+            message=f"[CERTIFICATION ENGINE] START | run={cert_id} | oracles={len(oracle_set.oracles)}",
+        )
 
         audit_logger.log(
             project_id=project_id,
@@ -161,6 +175,15 @@ class CertificationEngine:
                     "reason": "0 oracles available",
                 },
             )
+            log_operational_event(
+                event="certification_policy_decision",
+                logger_name="beacon.execution",
+                operation="CERTIFICATION",
+                step="POLICY",
+                certification_run_id=empty_cert_id,
+                outcome="INSUFFICIENT_COVERAGE",
+                message="[PHASE 09] DECISION | result=INSUFFICIENT_COVERAGE | reason=no oracles",
+            )
             return certification_repository.save_artifact(ic_artifact)
 
         content_hashes = [o.content_hash for o in oracle_set.oracles]
@@ -200,7 +223,28 @@ class CertificationEngine:
                 content_hash="",
             )
             err_artifact = temp_err.model_copy(update={"content_hash": compute_artifact_content_hash(temp_err)})
+            log_operational_event(
+                event="oracle_set_integrity_failed",
+                level=logging.ERROR,
+                logger_name="beacon.execution",
+                operation="CERTIFICATION",
+                step="ORACLE_SET",
+                certification_run_id=invalid_cert_id,
+                outcome="ABORTED",
+                message="[PHASE 05] ERROR | OracleSet hash verification failed | certification aborted",
+            )
             return certification_repository.save_artifact(err_artifact)
+
+        log_operational_event(
+            event="oracle_set_validated",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="ORACLE_SET",
+            phase="05",
+            certification_run_id=cert_id,
+            oracles=len(oracle_set.oracles),
+            message=f"[PHASE 05] COMPLETE | OracleSet={oracle_set.oracle_set_id} | oracles={len(oracle_set.oracles)}",
+        )
 
         # 2. Input Suite Resolution and Input Set Hashing
         from .input_generator import _extract_predicates
@@ -241,6 +285,16 @@ class CertificationEngine:
         # Compute complete canonical dataset hash
         input_set_hash = compute_input_set_canonical_hash(inputs)
         input_set_id = f"INPSET-{input_set_hash[:8]}"
+        log_operational_event(
+            event="input_set_prepared",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="INPUT_PREPARATION",
+            phase="02",
+            certification_run_id=cert_id,
+            cases=len(inputs),
+            message=f"[PHASE 02] COMPLETE | unique_inputs={len(inputs)} | input_set={input_set_id}",
+        )
 
         input_set = CertificationInputSet(
             input_set_id=input_set_id,
@@ -483,6 +537,22 @@ class CertificationEngine:
             overall_equivalence_score=phase9_report.overall_equivalence_score,
         )
 
+        log_operational_event(
+            event="certification_metrics_compiled",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="METRICS",
+            phase="06",
+            certification_run_id=cert_id,
+            cases=c_cases,
+            matching=m_cases,
+            regressions=r_cases,
+            message=(
+                f"[PHASE 06] METRICS | cases={c_cases} | matching={m_cases} "
+                f"| regressions={r_cases} | score={metrics.overall_equivalence_score:.4f}"
+            ),
+        )
+
         # 6. Apply Certification Policy Decision Flow
         blocking_reasons: list[str] = []
         warnings: list[str] = []
@@ -554,6 +624,18 @@ class CertificationEngine:
             final_status = CertificationStatus.CERTIFIED
 
         is_certified = final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS)
+        log_operational_event(
+            event="certification_policy_decision",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="POLICY",
+            phase="09",
+            certification_run_id=cert_id,
+            outcome=final_status.value,
+            cases=c_cases,
+            regressions=r_cases,
+            message=f"[PHASE 09] DECISION | result={final_status.value} | score={metrics.overall_equivalence_score:.4f}",
+        )
 
         # 7. Create Immutable Artifact and Compute Canonical Content Hash
         leg_impl_hash = getattr(legacy_adapter, "implementation_hash", "") or getattr(legacy_adapter, "version", "1.0.0")
@@ -646,6 +728,15 @@ class CertificationEngine:
         cert_content_hash = compute_artifact_content_hash(temp_artifact)
         final_context.certification_artifact_hash = cert_content_hash
         artifact = temp_artifact.model_copy(update={"content_hash": cert_content_hash, "context": final_context})
+        log_operational_event(
+            event="certification_hashes_generated",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="CRYPTOGRAPHIC_INTEGRITY",
+            phase="08",
+            certification_run_id=cert_id,
+            message=f"[PHASE 08] COMPLETE | artifact_hash={cert_content_hash[:16]}... | input_set_hash={input_set_hash[:16]}...",
+        )
 
         saved_artifact = certification_repository.save_certification_run_atomic(input_set, cases_to_save, artifact)
 

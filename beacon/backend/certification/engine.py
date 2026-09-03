@@ -12,6 +12,7 @@ from typing import Any, Optional, Union
 import uuid
 
 from common.config import settings
+from operations.logging_config import log_operational_event
 from oracle.evaluator import evaluate_oracle
 from oracle.models import OracleDefinition, OracleSet
 from .adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter
@@ -42,6 +43,8 @@ class CrossVersionCertificationEngine:
         seed: int = 42,
     ) -> CrossVersionCertificationReport:
         """Executes full cross-version equivalence certification and builds a comprehensive report."""
+        import time
+        started = time.perf_counter()
         # 1. Resolve Oracles and OracleSet Metadata
         oracle_set_id = ""
         oracle_set_hash = ""
@@ -72,6 +75,26 @@ class CrossVersionCertificationEngine:
                 n_diverse_samples=n_samples,
                 seed=seed,
             )
+
+        log_operational_event(
+            event="behavioral_comparison_started",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="BEHAVIORAL_COMPARISON",
+            phase="06",
+            oracles=len(resolved_oracles),
+            cases=len(inputs),
+            message=f"[PHASE 06] START | oracles={len(resolved_oracles)} | inputs={len(inputs)}",
+        )
+        log_operational_event(
+            event="reference_target_execution_started",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="REFERENCE_AND_TARGET_EXECUTION",
+            phase="03-04",
+            cases=len(inputs),
+            message="[PHASE 03/04] START | legacy and target adapters execute interleaved on shared inputs",
+        )
 
         # 3. Side-by-Side Execution & Evaluation Loop
         comparison_records: list[ComparisonRecord] = []
@@ -228,6 +251,16 @@ class CrossVersionCertificationEngine:
             else:
                 m.oracle_equivalence_rate = 1.0
 
+        log_operational_event(
+            event="reference_target_execution_completed",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="REFERENCE_AND_TARGET_EXECUTION",
+            phase="03-04",
+            cases=len(inputs),
+            message=f"[PHASE 03/04] COMPLETE | adapter pairs evaluated={len(inputs) * len(resolved_oracles)}",
+        )
+
         # 4. Overall Weighted Equivalence Score Calculation
         numerator = 0.0
         denominator = 0.0
@@ -275,7 +308,7 @@ class CrossVersionCertificationEngine:
 
         cert_id = f"RUN-{uuid.uuid4().hex[:8]}"
 
-        return CrossVersionCertificationReport(
+        report = CrossVersionCertificationReport(
             certification_id=cert_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
             oracle_set_id=oracle_set_id,
@@ -299,6 +332,24 @@ class CrossVersionCertificationEngine:
             total_not_applicable=total_not_applicable_count,
             certified=is_certified,
         )
+        duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        log_operational_event(
+            event="behavioral_comparison_completed",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="BEHAVIORAL_COMPARISON",
+            phase="06",
+            duration_ms=duration_ms,
+            cases=total_probes_count,
+            matching=total_matching_count,
+            regressions=len(regressions),
+            outcome="CERTIFIED" if is_certified else "NOT_CERTIFIED",
+            message=(
+                f"[PHASE 06] COMPLETE | cases={total_probes_count} | matching={total_matching_count} "
+                f"| regressions={len(regressions)} | duration={duration_ms:.2f}ms"
+            ),
+        )
+        return report
 
 
 certification_engine = CrossVersionCertificationEngine()

@@ -71,6 +71,7 @@ from operations import (
     operational_metrics,
     workload_protector,
     log_operational_event,
+    execution_step,
     ResourceLimitError,
     idempotency_manager,
     IdempotencyConflictError,
@@ -685,6 +686,19 @@ def validate_benchmark_endpoint(
     provider = request.preferred_provider if request and request.preferred_provider else preferred_provider
     d_name = request.dataset_name if request and request.dataset_name else dataset_name
 
+    log_operational_event(
+        event="preflight_started",
+        logger_name="beacon.execution",
+        operation="PRE-FLIGHT",
+        step="REQUEST",
+        phase="01",
+        benchmark_id=benchmark_id,
+        evaluation_mode=mode,
+        target_variant=variant,
+        provider=provider,
+        message=f"[PRE-FLIGHT] START | benchmark={benchmark_id} | mode={mode} | variant={variant}",
+    )
+
     result = benchmark_registry.validate_benchmark(
         benchmark_id=benchmark_id,
         evaluation_mode=mode,
@@ -694,6 +708,21 @@ def validate_benchmark_endpoint(
     )
     if not result.is_valid and any("not found in registry" in e for e in result.errors):
         raise HTTPException(status_code=404, detail=f"Benchmark '{benchmark_id}' not found.")
+    log_operational_event(
+        event="preflight_completed",
+        logger_name="beacon.execution",
+        operation="PRE-FLIGHT",
+        step="RESULT",
+        benchmark_id=benchmark_id,
+        evaluation_mode=result.evaluation_mode,
+        target_variant=result.target_variant,
+        outcome="READY" if result.is_valid else "NOT_READY",
+        records=result.dataset_record_count,
+        message=(
+            f"[PRE-FLIGHT] COMPLETE | status={'READY' if result.is_valid else 'NOT_READY'} "
+            f"| records={result.dataset_record_count} | errors={len(result.errors)}"
+        ),
+    )
     return result.model_dump(mode="json")
 
 
@@ -732,6 +761,21 @@ def run_certification_v1(
     """Executes a policy-driven behavioral certification run using registered ImplementationAdapters or Benchmarks."""
     resolved_project_id = project_id or request.project_id
 
+    log_operational_event(
+        event="certification_started",
+        logger_name="beacon.execution",
+        operation="CERTIFICATION",
+        step="REQUEST",
+        benchmark_id=request.benchmark_id or resolved_project_id,
+        evaluation_mode=request.discovery_mode,
+        target_variant=request.benchmark_variant or request.modernized_target or "clean_v2",
+        provider=request.preferred_provider,
+        message=(
+            f"[CERTIFICATION] START | benchmark={request.benchmark_id or resolved_project_id} "
+            f"| mode={request.discovery_mode} | implementation={request.implementation}"
+        ),
+    )
+
 
     # 1. Benchmark Resolution Mode
     test_inputs = None
@@ -753,6 +797,20 @@ def run_certification_v1(
             preferred_provider=pref_prov,
             use_llm=use_llm_flag,
         )
+        log_operational_event(
+            event="certification_configuration_resolved",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="CONFIGURATION",
+            benchmark_id=request.benchmark_id,
+            evaluation_mode=mode,
+            provider=pref_prov,
+            oracles=len(oracle_set.oracles),
+            message=(
+                f"[CERTIFICATION] CONFIGURATION COMPLETE | benchmark={request.benchmark_id} "
+                f"| mode={mode} | oracles={len(oracle_set.oracles)}"
+            ),
+        )
         legacy_adp = benchmark_registry.get_legacy_adapter(request.benchmark_id)
         if not legacy_adp:
             raise HTTPException(status_code=404, detail=f"Legacy adapter for benchmark '{request.benchmark_id}' not found.")
@@ -771,6 +829,16 @@ def run_certification_v1(
         # Load input dataset
         try:
             test_inputs = benchmark_registry.get_input_dataset(request.benchmark_id, dataset_name=request.dataset_name)
+            log_operational_event(
+                event="dataset_loaded",
+                logger_name="beacon.execution",
+                operation="CERTIFICATION",
+                step="DATASET",
+                benchmark_id=request.benchmark_id,
+                dataset_id=request.dataset_name,
+                records=len(test_inputs),
+                message=f"[CERTIFICATION] DATASET COMPLETE | records={len(test_inputs)}",
+            )
         except Exception as exc:
             logger.warning(f"Could not load dataset for benchmark {request.benchmark_id}: {exc}")
 
@@ -1051,6 +1119,27 @@ def run_certification_v1(
             certification_status=artifact.status.value,
             success=True,
         )
+        log_operational_event(
+            event="certification_completed",
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="RESULT",
+            certification_run_id=artifact.certification_id,
+            benchmark_id=request.benchmark_id or proj_id,
+            evaluation_mode=e_mode,
+            target_variant=t_variant,
+            duration_ms=round(duration_ms, 2),
+            outcome=artifact.status.value,
+            cases=artifact.metrics.certification_case_count,
+            regressions=artifact.metrics.regression_case_count,
+            matching=artifact.metrics.matching_case_count,
+            backend="SQLite",
+            message=(
+                f"[CERTIFICATION] COMPLETE | run={artifact.certification_id} "
+                f"| result={artifact.status.value} | cases={artifact.metrics.certification_case_count} "
+                f"| regressions={artifact.metrics.regression_case_count} | duration={duration_ms:.2f}ms"
+            ),
+        )
         if request.idempotency_key:
             idempotency_manager.record_completed(
                 project_id=proj_id,
@@ -1062,6 +1151,18 @@ def run_certification_v1(
             )
         return artifact.model_dump(mode="json")
     except Exception as exc:
+        log_operational_event(
+            event="certification_failed",
+            level=logging.ERROR,
+            logger_name="beacon.execution",
+            operation="CERTIFICATION",
+            step="REQUEST",
+            benchmark_id=request.benchmark_id or proj_id,
+            evaluation_mode=e_mode,
+            outcome="ABORTED",
+            safe_error=str(exc),
+            message="[CERTIFICATION] ERROR | execution aborted",
+        )
         if request.idempotency_key:
             idempotency_manager.record_failed(
                 project_id=proj_id,
@@ -1943,6 +2044,17 @@ def run_custom_certification(
     Enforces authoritative configuration fingerprint match against pre-flight, explicit OracleSet binding,
     and privacy boundaries.
     """
+    log_operational_event(
+        event="custom_certification_started",
+        logger_name="beacon.execution",
+        operation="CUSTOM_CERTIFICATION",
+        step="REQUEST",
+        dataset_id=req.dataset_id,
+        evaluation_mode=req.evaluation_mode,
+        target_variant=req.modernized_adapter_id,
+        provider=req.preferred_provider,
+        message=f"[CUSTOM CERTIFICATION] START | dataset={req.dataset_id} | mode={req.evaluation_mode}",
+    )
     record = user_dataset_registry.get_dataset(req.dataset_id)
     if not record:
         raise HTTPException(status_code=404, detail=f"Custom dataset '{req.dataset_id}' not found.")
@@ -2270,6 +2382,20 @@ def run_custom_certification(
                 "content_hash": artifact.content_hash,
             },
         )
+        log_operational_event(
+            event="custom_certification_completed",
+            logger_name="beacon.execution",
+            operation="CUSTOM_CERTIFICATION",
+            step="RESULT",
+            dataset_id=req.dataset_id,
+            certification_run_id=artifact.certification_id,
+            duration_ms=round(duration_ms, 2),
+            outcome=artifact.status.value,
+            cases=artifact.metrics.certification_case_count,
+            regressions=artifact.metrics.regression_case_count,
+            backend="SQLite",
+            message=f"[CUSTOM CERTIFICATION] COMPLETE | run={artifact.certification_id} | result={artifact.status.value} | duration={duration_ms:.2f}ms",
+        )
         if req.idempotency_key:
             idempotency_manager.record_completed(
                 project_id=req.project_id,
@@ -2433,6 +2559,14 @@ def verify_evidence_endpoint(
     current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Authoritatively reconstructs cryptographic hashes and verifies artifact integrity."""
+    log_operational_event(
+        event="integrity_verification_started",
+        logger_name="beacon.execution",
+        operation="INTEGRITY",
+        step="VERIFY_HASHES",
+        certification_run_id=certification_id,
+        message=f"[INTEGRITY] START | run={certification_id}",
+    )
     artifact = certification_repository.get_artifact(certification_id)
     if not artifact:
         raise HTTPException(status_code=404, detail=f"Certification artifact '{certification_id}' not found.")
@@ -2447,6 +2581,15 @@ def verify_evidence_endpoint(
         status="SUCCESS" if report.get("status") == "PASS" else "FAIL",
         certification_id=certification_id,
         details={"status": report.get("status"), "reasons": report.get("reasons", [])},
+    )
+    log_operational_event(
+        event="integrity_verification_completed",
+        logger_name="beacon.execution",
+        operation="INTEGRITY",
+        step="VERIFY_HASHES",
+        certification_run_id=certification_id,
+        outcome=report.get("status", "FAIL"),
+        message=f"[INTEGRITY] COMPLETE | run={certification_id} | status={report.get('status', 'FAIL')}",
     )
     return report
 

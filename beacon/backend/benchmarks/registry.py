@@ -14,6 +14,8 @@ import sys
 from typing import Any, Callable, Optional
 
 import hashlib
+import time
+import time
 from certification.adapter_registry import adapter_registry
 from certification.adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter, compute_implementation_hash
 from certification.models import CertificationTestInput
@@ -25,6 +27,8 @@ from oracle.models import (
 )
 from oracle.registry import registry as oracle_registry
 from oracle.serializer import compute_oracle_set_hash
+from operations.logging_config import log_operational_event
+from operations.logging_config import log_operational_event
 
 from .dataset_loader import compute_file_checksum, load_dataset_file
 from .models import (
@@ -429,6 +433,18 @@ class BenchmarkRegistry:
         dataset_name: str = "default",
     ) -> BenchmarkValidationResult:
         """Runs comprehensive pre-flight validation on benchmark schemas, adapters, datasets, and configuration."""
+        started = time.perf_counter()
+        log_operational_event(
+            event="benchmark_validation_started",
+            logger_name="beacon.execution",
+            operation="PRE-FLIGHT",
+            step="VALIDATE_BENCHMARK",
+            benchmark_id=benchmark_id,
+            evaluation_mode=evaluation_mode,
+            target_variant=target_variant,
+            provider=preferred_provider,
+            message=f"[STEP 01] START | benchmark={benchmark_id} | mode={evaluation_mode} | variant={target_variant}",
+        )
         spec = self.get_benchmark(benchmark_id)
         if not spec:
             return BenchmarkValidationResult(
@@ -554,7 +570,7 @@ class BenchmarkRegistry:
             json.dumps(fingerprint_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
 
-        return BenchmarkValidationResult(
+        result = BenchmarkValidationResult(
             benchmark_id=benchmark_id,
             evaluation_mode=norm_mode,
             target_variant=target_variant,
@@ -573,6 +589,22 @@ class BenchmarkRegistry:
             modernized_implementation_hash=mod_hash,
             metadata_provenance_valid=len(errors) == 0,
         )
+        duration_ms = round((time.perf_counter() - started) * 1000.0, 2)
+        log_operational_event(
+            event="benchmark_validation_completed",
+            logger_name="beacon.execution",
+            operation="PRE-FLIGHT",
+            step="VALIDATE_BENCHMARK",
+            benchmark_id=benchmark_id,
+            evaluation_mode=norm_mode,
+            target_variant=target_variant,
+            duration_ms=duration_ms,
+            outcome="READY" if result.is_valid else "NOT_READY",
+            records=record_count,
+            oracles=(len(orc_set.oracles) if norm_mode == "CONTROLLED" and 'orc_set' in locals() and orc_set else 0),
+            message=f"[STEP 01] COMPLETE | status={'READY' if result.is_valid else 'NOT_READY'} | duration={duration_ms:.2f}ms",
+        )
+        return result
 
     def get_or_create_oracle_set(
         self,
@@ -753,6 +785,16 @@ class BenchmarkRegistry:
         Invariant Mining -> Evidence Grounding -> Adversarial Validation ->
         Confidence Scoring -> Language-Independent Oracle Compilation.
         """
+        discovery_started = time.perf_counter()
+        log_operational_event(
+            event="full_beacon_discovery_started",
+            logger_name="beacon.execution",
+            operation="FULL_BEACON",
+            step="BEHAVIORAL_OBSERVATION",
+            benchmark_id=benchmark_id,
+            provider=preferred_provider or model_provider or "auto",
+            message=f"[FULL BEACON] START | benchmark={benchmark_id} | Atlas Vector Search=DISABLED",
+        )
         spec = self.get_benchmark(benchmark_id)
         if not spec:
             raise ValueError(f"Unknown benchmark '{benchmark_id}'")
@@ -786,6 +828,14 @@ class BenchmarkRegistry:
         # 2. Static AST Parsing
         from ingestion.legacy_parser import extract_ast_structure
         static_result = extract_ast_structure(source_path)
+        log_operational_event(
+            event="full_beacon_static_analysis_completed",
+            logger_name="beacon.execution",
+            operation="FULL_BEACON",
+            step="STATIC_ANALYSIS",
+            benchmark_id=benchmark_id,
+            message="[FULL BEACON] STATIC ANALYSIS COMPLETE | legacy source parsed",
+        )
 
         # 3. Dynamic Execution Tracing
         traces = []
@@ -801,6 +851,15 @@ class BenchmarkRegistry:
             sample_dicts = [inp.values for inp in dataset_inputs] if dataset_inputs else []
             tracer = PythonRuntimeTracer()
             traces = tracer.trace_batch(legacy_fn, sample_dicts) if sample_dicts else []
+        log_operational_event(
+            event="full_beacon_observation_completed",
+            logger_name="beacon.execution",
+            operation="FULL_BEACON",
+            step="BEHAVIORAL_OBSERVATION",
+            benchmark_id=benchmark_id,
+            records=len(traces),
+            message=f"[FULL BEACON] BEHAVIORAL OBSERVATION COMPLETE | traces={len(traces)}",
+        )
 
         # 4. Build Unified Evidence Package and Compute Canonical Evidence Hash
         from evidence.builder import build_evidence_package
@@ -808,6 +867,14 @@ class BenchmarkRegistry:
         evidence_pkg = build_evidence_package(static_result, traces)
         ev_hash = compute_evidence_package_hash(evidence_pkg)
         evidence_pkg.evidence_package_hash = ev_hash
+        log_operational_event(
+            event="full_beacon_evidence_completed",
+            logger_name="beacon.execution",
+            operation="FULL_BEACON",
+            step="EVIDENCE_PACKAGE",
+            benchmark_id=benchmark_id,
+            message=f"[FULL BEACON] EVIDENCE PACKAGE COMPLETE | hash={ev_hash[:16]}...",
+        )
 
         # Authoritative prompt version from mining.prompt_builder
         from mining.prompt_builder import PROMPT_VERSION
@@ -867,6 +934,15 @@ class BenchmarkRegistry:
             use_atlas=False,
             use_llm=use_llm,
             preferred_provider=pref_prov,
+        )
+        log_operational_event(
+            event="full_beacon_mining_completed",
+            logger_name="beacon.execution",
+            operation="FULL_BEACON",
+            step="INVARIANT_DISCOVERY",
+            benchmark_id=benchmark_id,
+            oracles=len(graduated_invariants),
+            message=f"[FULL BEACON] INVARIANT DISCOVERY COMPLETE | graduated={len(graduated_invariants)}",
         )
 
         # If zero invariants graduated from automated miner, graduate verified candidates from evidence
@@ -1016,6 +1092,17 @@ class BenchmarkRegistry:
             oracle_set_hash=set_hash,
         )
         oracle_registry.register_oracle_set(oracle_set)
+        log_operational_event(
+            event="full_beacon_oracle_set_completed",
+            logger_name="beacon.execution",
+            operation="FULL_BEACON",
+            step="ORACLE_SYNTHESIS",
+            benchmark_id=benchmark_id,
+            oracles=len(oracles),
+            outcome=oracle_set_source_type,
+            duration_ms=round((time.perf_counter() - discovery_started) * 1000.0, 2),
+            message=f"[FULL BEACON] ORACLE SYNTHESIS COMPLETE | oracles={len(oracles)} | source={oracle_set_source_type}",
+        )
         return oracle_set
 
     def create_execution_manifest(

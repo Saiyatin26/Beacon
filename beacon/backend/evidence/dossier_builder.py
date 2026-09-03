@@ -29,6 +29,7 @@ from benchmarks.registry import benchmark_registry
 from ingestion.dataset_registry import user_dataset_registry
 from ingestion.audit import audit_logger
 from oracle.registry import registry as oracle_registry
+from operations.logging_config import log_operational_event
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,14 @@ def build_evidence_dossier(
     project_id: Optional[str] = None,
 ) -> EvidenceDossier:
     """Assembles a unified, immutable Evidence Dossier for a specific certification run."""
+    log_operational_event(
+        event="evidence_dossier_started",
+        logger_name="beacon.execution",
+        operation="EVIDENCE",
+        step="DOSSIER_RECONSTRUCTION",
+        certification_run_id=certification_id,
+        message=f"[EVIDENCE DOSSIER] START | run={certification_id}",
+    )
     artifact = certification_repository.get_artifact(certification_id)
     if not artifact:
         raise ValueError(f"Certification artifact '{certification_id}' not found.")
@@ -333,7 +342,7 @@ def build_evidence_dossier(
 
     is_reused = bool(getattr(ctx, "idempotency_key", None)) and not getattr(ctx, "is_forced_recompute", False)
 
-    return EvidenceDossier(
+    dossier = EvidenceDossier(
         dossier_id=dossier_id,
         certification_id=artifact.certification_id,
         project_id=artifact.project_id,
@@ -354,3 +363,13 @@ def build_evidence_dossier(
         is_forced_recompute=bool(getattr(ctx, "is_forced_recompute", False)),
         dossier_hash=dossier_hash,
     )
+    log_operational_event(
+        event="evidence_dossier_completed",
+        logger_name="beacon.execution",
+        operation="EVIDENCE",
+        step="DOSSIER_RECONSTRUCTION",
+        certification_run_id=certification_id,
+        outcome="COMPLETE",
+        message=f"[EVIDENCE DOSSIER] COMPLETE | run={certification_id} | dossier_hash={dossier.dossier_hash[:16]}...",
+    )
+    return dossier

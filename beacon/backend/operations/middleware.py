@@ -117,12 +117,9 @@ class RequestCorrelationMiddleware(BaseHTTPMiddleware):
                 duration_ms=round(elapsed_ms, 2),
                 outcome=f"HTTP_{status_code}",
                 message=f"{request.method} {clean_path} returned {status_code} in {elapsed_ms:.2f}ms",
-                extra={
-                    "method": request.method,
-                    "path": clean_path,
-                    "status_code": status_code,
-                    "user_id": trusted_user_id,
-                },
+                method=request.method,
+                path=clean_path,
+                status_code=status_code,
             )
 
             current_request_id.reset(token_req)
