@@ -90,20 +90,8 @@ from auth import (
 )
 from api.application_router import application_router
 
-import legacy_loan_approval
-import modern_loan_approval
-import modern_clean_loan_approval
-from generate_traces import generate_traces
 from common.db_migration import consolidate_database_architecture
 
-
-ROOT = Path(__file__).resolve().parents[2]
-SAMPLE_DIR = ROOT / "legacy_sample"
-FIELD_BOUNDS = {
-    "credit_score": (400, 820),
-    "debt_ratio": (0.0, 0.9),
-    "annual_income": (10_000, 150_000),
-}
 
 
 @asynccontextmanager
@@ -227,11 +215,24 @@ class DriftRequest(BaseModel):
     project_id: str = "loan_demo"
 
 
+# ==============================================================================
+# V1 Demo / Local Sample Compatibility Fixtures & Helpers
+# ==============================================================================
+_DEMO_ROOT = Path(__file__).resolve().parents[2]
+_DEMO_SAMPLE_DIR = _DEMO_ROOT / "legacy_sample"
+_DEMO_FIELD_BOUNDS = {
+    "credit_score": (400, 820),
+    "debt_ratio": (0.0, 0.9),
+    "annual_income": (10_000, 150_000),
+}
+
+
 def _sample_traces():
-    trace_path = SAMPLE_DIR / "trace_log.json"
+    import generate_traces
+    trace_path = _DEMO_SAMPLE_DIR / "trace_log.json"
     if not trace_path.exists():
         import json
-        trace_path.write_text(json.dumps(generate_traces(), indent=2))
+        trace_path.write_text(json.dumps(generate_traces.generate_traces(), indent=2))
     return load_traces(trace_path)
 
 
@@ -240,15 +241,16 @@ from evidence.builder import build_evidence_package
 from mining.pipeline import run_mining_pipeline
 
 def _sample_oracles():
+    import legacy_loan_approval
     traces = _sample_traces()
-    legacy_file = str(SAMPLE_DIR / "legacy_loan_approval.py")
+    legacy_file = str(_DEMO_SAMPLE_DIR / "legacy_loan_approval.py")
     static_result = extract_ast_structure(legacy_file)
     evidence_pkg = build_evidence_package(static_result, traces)
     
     graduated, unconfirmed = run_mining_pipeline(
         evidence_package=evidence_pkg,
         legacy_fn=legacy_loan_approval.evaluate_loan,
-        field_bounds=FIELD_BOUNDS,
+        field_bounds=_DEMO_FIELD_BOUNDS,
         already_validated=[],
         use_atlas=False,
         use_llm=False
@@ -256,9 +258,12 @@ def _sample_oracles():
     return [synthesize_oracle(invariant) for invariant in graduated], graduated
 
 def _implementation(name: str):
+    import modern_loan_approval
+    import modern_clean_loan_approval
     if name == "buggy":
         return modern_loan_approval.evaluate_loan
     return modern_clean_loan_approval.evaluate_loan
+
 
 
 @app.get("/")
@@ -546,11 +551,12 @@ def run_demo(
     oracles, invariants = _sample_oracles()
     if not oracles:
         raise HTTPException(status_code=500, detail="No validated sample invariants were produced")
+    import legacy_loan_approval
     run = certify(
         oracles=oracles,
         modern_fn=_implementation(request.implementation),
         legacy_fn=legacy_loan_approval.evaluate_loan,
-        field_bounds=FIELD_BOUNDS,
+        field_bounds=_DEMO_FIELD_BOUNDS,
         domain_of={oracle.invariant_id: "Loan approval" for oracle in oracles},
     )
     local_store.save_run(run, project_id=request.project_id)
@@ -588,7 +594,7 @@ def check_demo_drift(
     if baseline is None:
         raise HTTPException(status_code=404, detail="Baseline certification run not found")
     oracles, _ = _sample_oracles()
-    results = [run_oracle(oracle, _implementation(request.implementation), FIELD_BOUNDS) for oracle in oracles]
+    results = [run_oracle(oracle, _implementation(request.implementation), _DEMO_FIELD_BOUNDS) for oracle in oracles]
     score = equivalence_score(results, {oracle.invariant_id: oracle for oracle in oracles})
     delta_pct = round((baseline["equivalence_score"] - score) * 100, 2)
     sample = DriftSample(

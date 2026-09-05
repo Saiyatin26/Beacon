@@ -242,26 +242,33 @@ class ApplicationResolver:
                 )
             return generated
 
-        # Default fallback sample inputs
+        # Phase 1 test/development fallback sample inputs (clearly distinguished from real application inputs)
         return [
             CertificationTestInput(
                 input_id=f"default_{i:04d}",
                 values={"x": i * 1.5, "flag": True},
                 origin="diverse_sampling",
-                provenance={"generator": "default_fallback"},
+                provenance={"source": "phase1_test_fallback", "generator": "default_fallback"},
             )
             for i in range(10)
         ]
 
     def resolve_oracle_set(self, spec: ApplicationSpec) -> OracleSet:
-        """Resolves or synthesizes an OracleSet for an ApplicationSpec."""
+        """Resolves an OracleSet for an ApplicationSpec.
+        
+        Strictly generic and domain-neutral:
+        1. Checks for explicit oracle_set_id in rule_config
+        2. Compiles explicit user-provided rules from rule_config
+        3. If no rules or OracleSet specified, returns a deferred empty OracleSet with explicit metadata.
+           Never invents domain-specific or heuristic rules.
+        """
         # 1. Check if oracle_set_id provided in rule_config
         if spec.rule_config and spec.rule_config.oracle_set_id:
             oset = oracle_registry.get_oracle_set(spec.rule_config.oracle_set_id)
             if oset:
                 return oset
 
-        # 2. Check if explicit rules provided in rule_config or synthesize from contract
+        # 2. Check if explicit rules provided in rule_config
         oracles: list[OracleDefinition] = []
         if spec.rule_config and spec.rule_config.rules:
             from common.models import CandidateInvariant
@@ -288,23 +295,8 @@ class ApplicationResolver:
                     except Exception as exc:
                         logger.warning(f"Could not compile rule #{idx} to oracle: {exc}")
 
-        if not oracles:
-            # Create a baseline equivalence oracle from input contract fields
-            from common.models import CandidateInvariant
-            from oracle.compiler import compile_candidate_to_oracle
-            first_field = list(spec.input_contract.fields.keys())[0] if spec.input_contract and spec.input_contract.fields else "soil_moisture"
-            candidate = CandidateInvariant(
-                invariant_id=f"{spec.application_id}_inv_base",
-                condition=f"{first_field} >= 0",
-                consequence="decision != None",
-                confidence=1.0,
-                severity="critical",
-            )
-            try:
-                compiled = compile_candidate_to_oracle(candidate)
-                oracles.append(compiled)
-            except Exception:
-                pass
+        # If no explicit oracles, DO NOT invent any domain-specific rules.
+        # Rule discovery is deferred to later Full BEACON phases.
 
         from oracle.serializer import compute_oracle_set_hash
         oracle_hashes = [o.content_hash for o in oracles]
@@ -314,13 +306,18 @@ class ApplicationResolver:
             oracle_set_id=f"oset_{spec.application_id}",
             name=f"OracleSet for {spec.name}",
             version=1,
-            domain=spec.domain or "default",
+            domain=spec.domain or "generic",
             benchmark_id=spec.application_id,
-            source_mode=spec.rule_config.mode if spec.rule_config else OracleSourceMode.CONTROLLED,
+            source_mode=spec.rule_config.mode if spec.rule_config else OracleSourceMode.USER_PROVIDED,
             oracles=oracles,
             oracle_ids=[o.oracle_id for o in oracles],
             oracle_set_hash=set_hash,
-            metadata={"application_id": spec.application_id, "mode": spec.rule_config.mode if spec.rule_config else "CONTROLLED"},
+            metadata={
+                "application_id": spec.application_id,
+                "mode": spec.rule_config.mode if spec.rule_config else "USER_PROVIDED",
+                "rules_count": len(oracles),
+                "rule_discovery_status": "deferred_to_full_beacon" if not oracles else "explicit_rules_loaded",
+            },
         )
         oracle_registry.register_oracle_set(oset)
         return oset

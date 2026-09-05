@@ -27,9 +27,10 @@ def run_oracle(
     first_counterexample = None
 
     for _ in range(n_samples):
-        sample = {f: rng.uniform(lo, hi) for f, (lo, hi) in field_bounds.items()}
-        if "credit_score" in sample:
-            sample["credit_score"] = int(sample["credit_score"])
+        sample = {
+            f: (int(rng.uniform(lo, hi)) if (isinstance(lo, int) and isinstance(hi, int)) else rng.uniform(lo, hi))
+            for f, (lo, hi) in field_bounds.items()
+        }
 
         # Execute target implementation
         try:

@@ -93,7 +93,7 @@ class DatasetConfig(BaseModel):
 
 class RuleConfig(BaseModel):
     """Configuration for oracle rules, invariants, and rule sources."""
-    mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED"
+    mode: Literal["CONTROLLED", "USER_PROVIDED", "FULL_BEACON", "FULL_BEACON_DISCOVERED", "RECONCILED"] = "CONTROLLED"
     rule_sources: list[str] = Field(default_factory=lambda: ["user_provided"])
     oracle_set_id: Optional[str] = None
     rules: list[dict[str, Any]] = Field(default_factory=list)

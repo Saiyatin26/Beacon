@@ -661,3 +661,200 @@ def test_application_api_endpoints():
     resp = client.delete("/api/v2/applications/app_rest_demo", headers=headers)
     assert resp.status_code == 204
 
+
+# ==============================================================================
+# 10. Generic Resolver Domain Independence & No Inventions Tests
+# ==============================================================================
+
+def reference_quantum_fisheries(biomass_density: float, sonar_frequency_khz: float, water_salinity_ppt: float) -> dict:
+    """Hypothetical reference implementation for fictional Quantum Fisheries domain."""
+    if biomass_density > 75.0 and sonar_frequency_khz < 45.0:
+        return {"harvest_clearance": "AUTHORIZED", "sonar_gain_db": 12.5, "zone_code": "QF_ALPHA"}
+    elif water_salinity_ppt < 20.0:
+        return {"harvest_clearance": "RESTRICTED", "sonar_gain_db": 6.0, "zone_code": "QF_ESTUARY"}
+    return {"harvest_clearance": "STANDBY", "sonar_gain_db": 0.0, "zone_code": "QF_OPEN"}
+
+
+def candidate_quantum_fisheries_clean(biomass_density: float, sonar_frequency_khz: float, water_salinity_ppt: float) -> dict:
+    """Modernized equivalent implementation for fictional Quantum Fisheries domain."""
+    if biomass_density > 75.0 and sonar_frequency_khz < 45.0:
+        return {"harvest_clearance": "AUTHORIZED", "sonar_gain_db": 12.5, "zone_code": "QF_ALPHA"}
+    elif water_salinity_ppt < 20.0:
+        return {"harvest_clearance": "RESTRICTED", "sonar_gain_db": 6.0, "zone_code": "QF_ESTUARY"}
+    return {"harvest_clearance": "STANDBY", "sonar_gain_db": 0.0, "zone_code": "QF_OPEN"}
+
+
+def test_generic_resolver_contains_no_domain_specific_defaults():
+    """Proves that an arbitrary fictional domain (Quantum Fisheries) works seamlessly with
+    explicit contracts and that removing explicit rules does NOT invent any domain-specific rules.
+    """
+    resolver = ApplicationResolver()
+
+    # 1. Spec with explicit rules for novel domain
+    spec = ApplicationSpec(
+        application_id="app_quantum_fisheries_001",
+        name="Quantum Marine Harvest Control",
+        domain="quantum_fisheries",
+        reference_implementation=ImplementationTarget(
+            target_id="qf_ref_v1",
+            name="qf_firmware_legacy",
+            role=ApplicationRole.REFERENCE,
+            entrypoint=reference_quantum_fisheries,
+        ),
+        target_implementations=[
+            ImplementationTarget(
+                target_id="qf_target_v2",
+                name="qf_service_modern",
+                role=ApplicationRole.TARGET,
+                entrypoint=candidate_quantum_fisheries_clean,
+            )
+        ],
+        input_contract=InputContract(
+            fields={
+                "biomass_density": (10.0, 100.0),
+                "sonar_frequency_khz": (20.0, 80.0),
+                "water_salinity_ppt": (5.0, 40.0),
+            }
+        ),
+        output_contract=OutputContract(normalizer="preserve_case"),
+        dataset_config=DatasetConfig(sample_count=25, seed=777),
+        rule_config=RuleConfig(
+            mode="USER_PROVIDED",
+            rules=[
+                {
+                    "rule_id": "qf_rule_01",
+                    "condition": "biomass_density > 75.0 and sonar_frequency_khz < 45.0",
+                    "consequence": "harvest_clearance == 'AUTHORIZED'",
+                    "severity": "CRITICAL",
+                },
+                {
+                    "rule_id": "qf_rule_02",
+                    "condition": "water_salinity_ppt < 20.0",
+                    "consequence": "harvest_clearance == 'RESTRICTED'",
+                    "severity": "HIGH",
+                },
+            ],
+        ),
+    )
+
+    ref_adapter, target_adapter = resolver.resolve_adapters(spec)
+    inputs = resolver.resolve_inputs(spec)
+    oracle_set = resolver.resolve_oracle_set(spec)
+
+    assert len(inputs) == 25
+    assert len(oracle_set.oracles) == 2
+    assert oracle_set.metadata["rule_discovery_status"] == "explicit_rules_loaded"
+
+    # Verify certification succeeds deterministically
+    engine = CertificationEngine()
+    policy = CertificationPolicy(min_equivalence_score=0.999)
+    artifact = engine.certify(
+        reference_adapter=ref_adapter,
+        modernized_adapter=target_adapter,
+        oracle_set=oracle_set,
+        test_inputs=inputs,
+        policy=policy,
+        application_id="app_quantum_fisheries_001",
+    )
+    assert artifact.status == CertificationStatus.CERTIFIED
+    assert artifact.score == 1.0
+    assert artifact.metrics.overall_equivalence_score == 1.0
+
+    # 2. Spec with NO explicit rules and NO OracleSet:
+    # Verify BEACON does NOT invent soil_moisture, credit_score, tax, medical, retail, loan, or any heuristic rules.
+    spec_no_rules = ApplicationSpec(
+        application_id="app_quantum_fisheries_norules",
+        name="Quantum Marine Harvest Control No Rules",
+        domain="quantum_fisheries",
+        reference_implementation=ImplementationTarget(
+            target_id="qf_ref_v1",
+            name="qf_firmware_legacy",
+            role=ApplicationRole.REFERENCE,
+            entrypoint=reference_quantum_fisheries,
+        ),
+        target_implementations=[
+            ImplementationTarget(
+                target_id="qf_target_v2",
+                name="qf_service_modern",
+                role=ApplicationRole.TARGET,
+                entrypoint=candidate_quantum_fisheries_clean,
+            )
+        ],
+        input_contract=InputContract(
+            fields={
+                "biomass_density": (10.0, 100.0),
+                "sonar_frequency_khz": (20.0, 80.0),
+                "water_salinity_ppt": (5.0, 40.0),
+            }
+        ),
+    )
+
+    oset_deferred = resolver.resolve_oracle_set(spec_no_rules)
+    assert len(oset_deferred.oracles) == 0
+    assert oset_deferred.metadata["rule_discovery_status"] == "deferred_to_full_beacon"
+    assert oset_deferred.metadata["rules_count"] == 0
+
+    # Confirm none of the forbidden domain words exist in the resolved oracle definitions
+    all_conditions = [o.condition for o in oset_deferred.oracles]
+    forbidden_terms = ["soil_moisture", "credit_score", "annual_income", "tax", "medical", "retail", "loan"]
+    for cond in all_conditions:
+        for term in forbidden_terms:
+            assert term not in cond
+
+
+def test_generic_adapter_registry_registration_and_resolution():
+    """Proves that generic AdapterRegistry can register and resolve arbitrary custom adapters
+    without benchmark or domain knowledge.
+    """
+    custom_registry = AdapterRegistry()
+
+    def dummy_fn(x: float) -> dict:
+        return {"result": x * 2.0}
+
+    custom_adapter = ReferenceAdapter(
+        target_fn=dummy_fn,
+        name="custom_reference_adapter_001",
+        version="3.1.4",
+    )
+
+    custom_reg_record = AdapterRegistration(
+        adapter_id="custom_reference_adapter_001:3.1.4",
+        name="custom_reference_adapter_001",
+        role="reference",
+        version="3.1.4",
+        implementation_type="custom",
+        capabilities=["execution", "evidence_capture"],
+        metadata={"custom_flag": True},
+    )
+
+    custom_registry.register_adapter(custom_adapter, registration=custom_reg_record)
+
+    resolved = custom_registry.get_adapter("custom_reference_adapter_001", version="3.1.4")
+    assert resolved is not None
+    assert resolved.name == "custom_reference_adapter_001"
+    assert resolved.version == "3.1.4"
+
+    reg_meta = custom_registry.get_registration("custom_reference_adapter_001", version="3.1.4")
+    assert reg_meta is not None
+    assert reg_meta.adapter_id == "custom_reference_adapter_001:3.1.4"
+    assert reg_meta.role == "reference"
+    assert reg_meta.implementation_type == "custom"
+    assert reg_meta.capabilities == ["execution", "evidence_capture"]
+    assert reg_meta.metadata == {"custom_flag": True}
+
+
+def test_resolver_inputs_fallback_marks_test_source():
+    """Verifies that development fallback inputs are explicitly tagged with source metadata."""
+    resolver = ApplicationResolver()
+    spec_empty = ApplicationSpec(
+        application_id="app_empty_contract",
+        name="Empty Contract Application",
+        reference_implementation="calc_ref",
+    )
+
+    inputs = resolver.resolve_inputs(spec_empty)
+    assert len(inputs) == 10
+    for inp in inputs:
+        assert inp.provenance.get("source") == "phase1_test_fallback"
+
+

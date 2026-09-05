@@ -34,7 +34,10 @@ class AdapterRegistration(BaseModel):
 
 
 class AdapterRegistry:
-    """Thread-safe registry for resolving target ImplementationAdapter instances."""
+    """Thread-safe registry for resolving target ImplementationAdapter instances.
+    
+    Operates in a completely domain-agnostic manner by identity and metadata.
+    """
 
     def __init__(self):
         # (target_name, version) -> ImplementationAdapter
@@ -59,6 +62,8 @@ class AdapterRegistry:
                 role=str(getattr(adapter, "role", "target")),
                 version=adapter.version,
                 implementation_type=type(adapter).__name__,
+                capabilities=getattr(adapter, "capabilities", []),
+                metadata=getattr(adapter, "metadata", {}),
             )
 
         logger.debug(f"Registered ImplementationAdapter '{adapter.name}' (v{adapter.version})")
@@ -68,27 +73,22 @@ class AdapterRegistry:
         """Resolves an ImplementationAdapter by name, and optionally version.
         If version is omitted, returns the latest registered version matching target_name.
         """
-        # Backward-compatible alias mappings for V1 benchmarks
-        alias_map = {
-            "retail_discount_legacy": "retail_pricing_legacy",
-            "retail_discount_modern_clean": "retail_pricing_modern_clean",
-            "retail_discount_modern_buggy_threshold": "retail_pricing_modern_buggy_threshold",
-            "retail_discount_modern_buggy_operator": "retail_pricing_modern_buggy_operator",
-            "payroll_tax_legacy": "payroll_legacy",
-            "payroll_tax_modern_clean": "payroll_modern_clean",
-            "payroll_tax_modern_buggy_bracket": "payroll_modern_buggy_bracket",
-            "payroll_tax_modern_buggy_deduction": "payroll_modern_buggy_deduction",
-        }
-        resolved_name = alias_map.get(target_name, target_name)
-
         if version is not None:
-            if (resolved_name, version) in self._adapters:
-                return self._adapters[(resolved_name, version)]
             if (target_name, version) in self._adapters:
                 return self._adapters[(target_name, version)]
 
-        # Find matching adapters and select the latest
-        matches = [a for (name, ver), a in self._adapters.items() if name in (resolved_name, target_name)]
+        # Find matching adapters and select the latest registered
+        matches = [a for (name, ver), a in self._adapters.items() if name == target_name]
+        if matches:
+            return matches[-1]
+        return None
+
+    def get_registration(self, target_name: str, version: Optional[str] = None) -> Optional[AdapterRegistration]:
+        """Retrieves metadata registration record for an adapter."""
+        if version is not None:
+            if (target_name, version) in self._registrations:
+                return self._registrations[(target_name, version)]
+        matches = [r for (name, ver), r in self._registrations.items() if name == target_name]
         if matches:
             return matches[-1]
         return None
@@ -113,42 +113,13 @@ class AdapterRegistry:
         self._adapters.clear()
         self._registrations.clear()
         if reinit_benchmarks:
-            _init_benchmark_adapters()
+            try:
+                from benchmarks import benchmark_registry
+                benchmark_registry.refresh()
+            except Exception:
+                pass
 
 
 # Default singleton instance
 adapter_registry = AdapterRegistry()
 
-
-def _init_benchmark_adapters():
-    """Initializes standard benchmark demonstration adapters if available."""
-    try:
-        import legacy_loan_approval
-        import modern_loan_approval
-
-        adapter_registry.register_adapter(
-            LegacyAdapter(
-                target_fn=legacy_loan_approval.evaluate_loan,
-                name="loan_approval_legacy",
-                version="1.0.0",
-            )
-        )
-        adapter_registry.register_adapter(
-            ModernizedAdapter(
-                target_fn=legacy_loan_approval.evaluate_loan,
-                name="loan_approval_modern_equiv",
-                version="2.0.0",
-            )
-        )
-        adapter_registry.register_adapter(
-            ModernizedAdapter(
-                target_fn=modern_loan_approval.evaluate_loan,
-                name="loan_approval_modern_buggy",
-                version="2.0.0",
-            )
-        )
-    except ImportError:
-        logger.debug("Benchmark loan approval modules not in path for pre-registration.")
-
-
-_init_benchmark_adapters()

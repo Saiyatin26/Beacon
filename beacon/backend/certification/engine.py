@@ -61,11 +61,22 @@ class CrossVersionCertificationEngine:
                 oracle_set_hash = compute_oracle_set_hash([o.content_hash for o in resolved_oracles])
 
         # 2. Build or Use Shared Test Input Suite
-        bounds = field_bounds or {
-            "credit_score": (400, 820),
-            "debt_ratio": (0.0, 0.9),
-            "annual_income": (10_000, 150_000),
-        }
+        bounds = dict(field_bounds) if field_bounds else {}
+        for orc in resolved_oracles:
+            from certification.input_generator import _extract_predicates
+            for pred in _extract_predicates(orc.condition):
+                if pred.variable not in bounds:
+                    val = pred.value
+                    if isinstance(val, (int, float)):
+                        if val > 0:
+                            bounds[pred.variable] = (0.0, float(val * 2.0))
+                        else:
+                            bounds[pred.variable] = (float(val - 100.0), float(val + 100.0))
+                    else:
+                        bounds[pred.variable] = (0.0, 100.0)
+
+        if not bounds:
+            bounds = {"x": (0.0, 100.0)}
 
         inputs = test_inputs
         if inputs is None:

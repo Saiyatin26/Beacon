@@ -52,6 +52,11 @@ class CertificationEngine:
         project_id: str = "default",
         legacy_adapter: Optional[ImplementationAdapter] = None,
         modern_adapter: Optional[ImplementationAdapter] = None,
+        reference_adapter: Optional[ImplementationAdapter] = None,
+        target_adapter: Optional[ImplementationAdapter] = None,
+        modernized_adapter: Optional[ImplementationAdapter] = None,
+        candidate_adapter: Optional[ImplementationAdapter] = None,
+        application_id: Optional[str] = None,
         oracle_set: Optional[OracleSet] = None,
         policy: Optional[CertificationPolicy] = None,
         test_inputs: Optional[list[CertificationTestInput]] = None,
@@ -62,6 +67,11 @@ class CertificationEngine:
         seed: int = 42,
     ) -> CertificationArtifact:
         """Executes full policy-driven behavioral certification and produces an immutable CertificationArtifact."""
+        legacy_adapter = legacy_adapter or reference_adapter
+        modern_adapter = modern_adapter or target_adapter or modernized_adapter or candidate_adapter
+        if application_id and project_id == "default":
+            project_id = application_id
+
         cert_policy = policy or CertificationPolicy()
         pol_hash = cert_policy.compute_hash()
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -249,18 +259,9 @@ class CertificationEngine:
         # 2. Input Suite Resolution and Input Set Hashing
         from .input_generator import _extract_predicates
 
-        default_base_bounds = {
-            "credit_score": (400.0, 820.0),
-            "debt_ratio": (0.0, 0.9),
-            "annual_income": (10_000.0, 150_000.0),
-        }
+        bounds = dict(field_bounds) if field_bounds else {}
 
-        if field_bounds:
-            bounds = dict(field_bounds)
-        else:
-            bounds = dict(default_base_bounds)
-
-        # Discover any additional variables in oracle conditions
+        # Discover any additional variables and ranges from oracle conditions
         for orc in oracle_set.oracles:
             for pred in _extract_predicates(orc.condition):
                 if pred.variable not in bounds:
@@ -272,6 +273,24 @@ class CertificationEngine:
                             bounds[pred.variable] = (float(val - 100.0), float(val + 100.0))
                     else:
                         bounds[pred.variable] = (0.0, 100.0)
+
+        # Discover parameter names from callable adapters if present
+        for adp in (legacy_adapter, modern_adapter):
+            if adp is not None:
+                fn = getattr(adp, "target_fn", getattr(adp, "_target_fn", None))
+                if callable(fn):
+                    import inspect
+                    try:
+                        sig = inspect.signature(fn)
+                        for p_name, param in sig.parameters.items():
+                            if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                                if p_name not in bounds:
+                                    bounds[p_name] = (0.0, 100000.0)
+                    except Exception:
+                        pass
+
+        if not bounds:
+            bounds = {"x": (0.0, 100.0)}
 
         inputs = test_inputs
         if inputs is None:

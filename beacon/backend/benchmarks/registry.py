@@ -15,9 +15,8 @@ from typing import Any, Callable, Optional
 
 import hashlib
 import time
-import time
 from certification.adapter_registry import adapter_registry
-from certification.adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter, compute_implementation_hash
+from certification.adapters import FunctionAdapter, ImplementationAdapter, LegacyAdapter, ModernizedAdapter, compute_implementation_hash
 from certification.models import CertificationTestInput
 from common.config import settings
 from oracle.models import (
@@ -83,12 +82,40 @@ class BenchmarkRegistry:
                 if bench_path.is_dir() and (bench_path / "metadata.json").exists():
                     self._load_external_benchmark(bench_path)
 
-        # 4. Pre-load Controlled Baseline OracleSets into Oracle Registry
+        # 4. Register benchmark-scoped V1 compatibility adapter aliases
+        self._register_benchmark_adapter_aliases()
+
+        # 5. Pre-load Controlled Baseline OracleSets into Oracle Registry
         for b_id in list(self._specs.keys()):
             try:
                 self.resolve_controlled_oracle_set(b_id)
             except Exception as exc:
                 logger.debug(f"Controlled oracle set pre-load note for {b_id}: {exc}")
+
+    def _register_benchmark_adapter_aliases(self):
+        """Registers benchmark-scoped V1 adapter aliases for backward compatibility."""
+        alias_map = {
+            "retail_discount_legacy": "retail_pricing_legacy",
+            "retail_discount_modern_clean": "retail_pricing_modern_clean",
+            "retail_discount_modern_buggy_threshold": "retail_pricing_modern_buggy_threshold",
+            "retail_discount_modern_buggy_operator": "retail_pricing_modern_buggy_operator",
+            "payroll_tax_legacy": "payroll_legacy",
+            "payroll_tax_modern_clean": "payroll_modern_clean",
+            "payroll_tax_modern_buggy_bracket": "payroll_modern_buggy_bracket",
+            "payroll_tax_modern_buggy_deduction": "payroll_modern_buggy_deduction",
+        }
+        for alias_name, target_adapter_name in alias_map.items():
+            target_adp = adapter_registry.get_adapter(target_adapter_name)
+            if target_adp and not adapter_registry.get_adapter(alias_name):
+                alias_adp = FunctionAdapter(
+                    target_fn=getattr(target_adp, "target_fn", getattr(target_adp, "_target_fn", None)),
+                    name=alias_name,
+                    version=target_adp.version,
+                    role=getattr(target_adp, "role", "target"),
+                    output_normalizer=getattr(target_adp, "output_normalizer", None),
+                )
+                alias_adp.implementation_hash = getattr(target_adp, "implementation_hash", "")
+                adapter_registry.register_adapter(alias_adp)
 
     def resolve_controlled_oracle_set(self, benchmark_id: str) -> OracleSet:
         """Resolves/pre-loads the controlled baseline OracleSet for a benchmark."""

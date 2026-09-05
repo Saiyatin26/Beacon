@@ -17,9 +17,10 @@ def sample_traffic(
     rng = random.Random(seed)
     samples = []
     for _ in range(n_samples):
-        inputs = {f: rng.uniform(lo, hi) for f, (lo, hi) in field_bounds.items()}
-        if "credit_score" in inputs:
-            inputs["credit_score"] = int(inputs["credit_score"])
+        inputs = {
+            f: (int(rng.uniform(lo, hi)) if (isinstance(lo, int) and isinstance(hi, int)) else rng.uniform(lo, hi))
+            for f, (lo, hi) in field_bounds.items()
+        }
         output = impl_fn(**inputs)
         samples.append({"inputs": inputs, "output": output})
     return samples
