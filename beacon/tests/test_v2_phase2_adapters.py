@@ -661,3 +661,160 @@ def test_application_resolver_input_fallback_marks_warning_and_test_only():
     assert inputs[0].provenance.get("source") == "phase1_test_fallback"
     assert "warning" in inputs[0].provenance
 
+
+def test_ssrf_dns_failure_fails_closed():
+    """SSRFValidator must FAIL CLOSED when DNS resolution raises socket.gaierror or other resolution errors."""
+    import socket
+
+    def mock_failing_dns(host: str):
+        raise socket.gaierror(-2, "Name or service not known")
+
+    with pytest.raises(PermissionError) as exc:
+        SSRFValidator.validate_url(
+            "https://unresolvable-evil-host.unknown/api",
+            allow_private=True,
+            dns_resolver=mock_failing_dns,
+        )
+    assert "Unable to resolve hostname" in str(exc.value)
+    assert "blocked by SSRF policy" in str(exc.value)
+
+
+def test_ssrf_empty_dns_resolution_fails_closed():
+    """SSRFValidator must FAIL CLOSED when DNS resolution returns an empty list."""
+    def mock_empty_dns(host: str):
+        return []
+
+    with pytest.raises(PermissionError) as exc:
+        SSRFValidator.validate_url(
+            "https://empty-dns-record.example/api",
+            allow_private=True,
+            dns_resolver=mock_empty_dns,
+        )
+    assert "Unable to resolve hostname" in str(exc.value)
+
+
+def test_ssrf_mixed_resolution_blocks_unsafe():
+    """SSRFValidator rejects requests where DNS resolves to both a public and a private/metadata address."""
+    mock_mixed_dns = lambda host: ["93.184.216.34", "10.0.0.10"]
+    with pytest.raises(PermissionError) as exc:
+        SSRFValidator.validate_url(
+            "https://mixed-resolution.example.com/api",
+            allow_private=False,
+            dns_resolver=mock_mixed_dns,
+        )
+    assert "private network IP" in str(exc.value)
+
+    mock_mixed_meta_dns = lambda host: ["93.184.216.34", "169.254.169.254"]
+    with pytest.raises(PermissionError) as exc_meta:
+        SSRFValidator.validate_url(
+            "https://mixed-meta.example.com/api",
+            allow_private=True,
+            dns_resolver=mock_mixed_meta_dns,
+        )
+    assert "metadata IP" in str(exc_meta.value)
+
+
+def test_secret_redaction_http_headers_and_cookie_syntax():
+    """SecretRedactor redacts HTTP headers, Bearer tokens, Cookies, and API keys across various casings and formats."""
+    raw_texts = [
+        "Authorization: Bearer VERY_SECRET_JWT_TOKEN",
+        "authorization: Bearer my-access-token",
+        "AUTHORIZATION=Bearer abcdef12345",
+        "Cookie: session=VERY_SECRET_SESSION_TOKEN",
+        "Set-Cookie: session=VERY_SECRET_SESSION_TOKEN; Secure; HttpOnly",
+        "X-API-Key: VERY_SECRET_API_KEY",
+        "Api-Key: VERY_SECRET_API_KEY",
+        "Proxy-Authorization: Basic dXNlcjpwYXNz",
+        "db_password=my_database_pw",
+        "client_secret='super_secret_client_val'",
+    ]
+
+    for raw in raw_texts:
+        redacted = SecretRedactor.redact_string(raw)
+        assert "VERY_SECRET" not in redacted
+        assert "abcdef12345" not in redacted
+        assert "my_database_pw" not in redacted
+        assert "super_secret_client_val" not in redacted
+        assert "[REDACTED]" in redacted
+
+
+def test_secret_redaction_preserves_business_metrics():
+    """SecretRedactor preserves non-sensitive business values while removing credentials."""
+    business_text = "price=120\ndiscount=10\nstatus=200\npassword=secret123\nresult=45.5"
+    redacted = SecretRedactor.redact_string(business_text)
+
+    assert "price=120" in redacted
+    assert "discount=10" in redacted
+    assert "status=200" in redacted
+    assert "result=45.5" in redacted
+    assert "secret123" not in redacted
+    assert "password=[REDACTED]" in redacted
+
+
+def test_process_adapter_redacts_stdout_and_stderr(tmp_path):
+    """ProcessAdapter sanitizes raw stdout and stderr before creating Observation and ExecutionResult."""
+    # Create a small script that prints sensitive headers and credentials
+    script_path = tmp_path / "leaking_script.py"
+    script_path.write_text(
+        "import sys\n"
+        "print('Authorization: Bearer LEAKED_STDOUT_TOKEN_123')\n"
+        "print('result=42.0')\n"
+        "sys.stderr.write('Cookie: session=LEAKED_STDERR_SESSION_456\\n')\n"
+    )
+
+    adapter = ProcessAdapter(
+        command=[sys.executable, str(script_path)],
+        name="test_leak_process",
+    )
+
+    inp = CanonicalInput(input_id="INP-LEAK-1", payload={})
+    res = application_executor.execute_single(adapter, inp, input_id="INP-LEAK-1")
+
+    assert res.status == ExecutionStatus.SUCCEEDED
+    assert "LEAKED_STDOUT_TOKEN_123" not in res.stdout
+    assert "LEAKED_STDERR_SESSION_456" not in res.stderr
+    assert "[REDACTED]" in res.stdout
+    assert "[REDACTED]" in res.stderr
+    assert "result=42.0" in res.stdout
+    assert "LEAKED_STDOUT_TOKEN_123" not in str(res.observation.provenance)
+    assert "LEAKED_STDERR_SESSION_456" not in str(res.observation.provenance)
+
+
+def test_container_adapter_missing_secret_reference_fails_closed():
+    """ContainerAdapter marks health as MISCONFIGURED and fails closed when secret references are missing."""
+    # Ensure environment variable is NOT set
+    os.environ.pop("MISSING_BEACON_HOST_ENV_VAR", None)
+
+    adapter = ContainerAdapter(
+        image="alpine:latest",
+        secret_references={"CONTAINER_SECRET": "MISSING_BEACON_HOST_ENV_VAR"},
+        name="test_missing_secret_container",
+    )
+
+    health = adapter.health_check()
+    assert health.is_ready is False
+    assert health.status == AdapterHealthStatus.MISCONFIGURED
+    assert "MISSING_BEACON_HOST_ENV_VAR" in health.diagnostics
+    assert "unavailable" in health.diagnostics
+
+    obs = adapter.execute(CanonicalInput(input_id="INP-MISS-SEC", payload={}))
+    assert obs.execution_status == "EXCEPTION"
+    assert "unavailable" in obs.error_message
+
+
+def test_application_executor_sanitizes_exception_secrets():
+    """ApplicationExecutor redacts sensitive tokens appearing in exception messages."""
+    class LeakingExceptionAdapter(ImplementationAdapter):
+        name = "leak_exc_adapter"
+        def execute(self, inputs, input_id=""):
+            raise RuntimeError("Database connection failed with password=SUPER_SECRET_DB_PASS at host 10.0.0.1")
+
+    adapter = LeakingExceptionAdapter()
+    res = application_executor.execute_single(adapter, CanonicalInput(input_id="INP-EXC-1", payload={}))
+
+    assert res.status == ExecutionStatus.ADAPTER_ERROR
+    assert "SUPER_SECRET_DB_PASS" not in res.error_message
+    assert "SUPER_SECRET_DB_PASS" not in res.observation.error_message
+    assert "password=[REDACTED]" in res.error_message
+
+

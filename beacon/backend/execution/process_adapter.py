@@ -208,40 +208,48 @@ class ProcessAdapter(ImplementationAdapter):
                 stderr_text = stderr_text[:self.max_output_bytes] + "\n[TRUNCATED: Stderr exceeded size limit]"
                 stderr_truncated = True
 
+            # Redact raw stdout and stderr to prevent credential leakage into observations/evidence
+            safe_stdout = SecretRedactor.redact_string(stdout_text)
+            safe_stderr = SecretRedactor.redact_string(stderr_text)
+            safe_inputs = SecretRedactor.redact(raw_inputs)
+
             # Determine execution status based on exit code
             if execution_status != "TIMEOUT":
                 if exit_code != 0:
                     execution_status = "EXCEPTION"
-                    error_msg = f"Process exited with non-zero status code {exit_code}: {stderr_text.strip()}"
+                    error_msg = f"Process exited with non-zero status code {exit_code}: {safe_stderr.strip()}"
                 else:
                     execution_status = "SUCCESS"
+
+            safe_error_msg = SecretRedactor.redact_string(error_msg) if error_msg else None
 
             # Map outputs
             mapped_outputs = self.output_mapper.map_output(
                 raw_output=None,
-                stdout=stdout_text,
-                stderr=stderr_text,
+                stdout=safe_stdout,
+                stderr=safe_stderr,
                 exit_code=exit_code,
             )
-            norm_outputs = self.normalize_output(mapped_outputs)
+            safe_outputs = SecretRedactor.redact(mapped_outputs)
+            norm_outputs = self.normalize_output(safe_outputs)
 
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
-                raw_outputs=mapped_outputs,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
+                raw_outputs=safe_outputs,
                 normalized_outputs=norm_outputs,
                 execution_status=execution_status,
                 implementation_name=self.name,
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
-                error_message=error_msg,
+                error_message=safe_error_msg,
                 provenance={
                     "adapter_type": AdapterType.PROCESS.value,
                     "role": str(self.role),
                     "exit_code": exit_code,
-                    "stdout": stdout_text,
-                    "stderr": stderr_text,
+                    "stdout": safe_stdout,
+                    "stderr": safe_stderr,
                     "stdout_truncated": stdout_truncated,
                     "stderr_truncated": stderr_truncated,
                 },
@@ -249,21 +257,23 @@ class ProcessAdapter(ImplementationAdapter):
 
         except Exception as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
-            logger.error(f"ProcessAdapter '{self.name}' unexpected execution failure: {exc}")
+            safe_exc = SecretRedactor.redact_string(str(exc))
+            logger.error(f"ProcessAdapter '{self.name}' unexpected execution failure: {safe_exc}")
             if process:
                 self._terminate_process_tree(process)
 
+            safe_inputs = SecretRedactor.redact(raw_inputs)
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
-                raw_outputs={"error": str(exc)},
-                normalized_outputs={"error": str(exc)},
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
+                raw_outputs={"error": safe_exc},
+                normalized_outputs={"error": safe_exc},
                 execution_status="EXCEPTION",
                 implementation_name=self.name,
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
-                error_message=str(exc),
+                error_message=safe_exc,
                 provenance={
                     "adapter_type": AdapterType.PROCESS.value,
                     "role": str(self.role),

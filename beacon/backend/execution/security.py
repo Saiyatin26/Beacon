@@ -39,6 +39,7 @@ class SecretRedactor:
 
     @classmethod
     def redact(cls, data: Any) -> Any:
+        """Recursively sanitizes dictionary, list, and string structures."""
         if isinstance(data, dict):
             redacted_dict: dict[str, Any] = {}
             for k, v in data.items():
@@ -49,31 +50,57 @@ class SecretRedactor:
             return redacted_dict
         elif isinstance(data, list):
             return [cls.redact(item) for item in data]
+        elif isinstance(data, tuple):
+            return tuple(cls.redact(item) for item in data)
         elif isinstance(data, str):
-            # Mask Bearer tokens or sensitive headers formatted as "Bearer ..."
-            if data.lower().startswith("bearer "):
-                return "Bearer [REDACTED]"
             return cls.redact_string(data)
         return data
 
     @classmethod
     def redact_string(cls, text: str) -> str:
-        """Redacts embedded sensitive tokens and credentials from unstructured strings."""
+        """Redacts embedded sensitive tokens, HTTP headers, and credentials from unstructured text."""
         if not text:
             return text
-        # Redact Bearer tokens
-        text = re.sub(r"(?i)bearer\s+[A-Za-z0-9\-_.]+", "Bearer [REDACTED]", text)
-        # Redact key=value pairs with sensitive names
+
+        # 1. Redact Bearer tokens
+        text = re.sub(r"(?i)\bbearer\s+[A-Za-z0-9\-_.]+", "Bearer [REDACTED]", text)
+
+        # 2. Redact HTTP-style authorization headers (case-insensitive with various separators)
         text = re.sub(
-            r"(?i)(password|secret|token|api_?key|auth)\s*[:=]\s*['\"]?[^'\"\s,;&]+['\"]?",
-            r"\1=[REDACTED]",
+            r"(?i)\b(authorization|proxy-authorization)\s*[:=]\s*(?:bearer\s+)?([^\r\n,;]+)",
+            r"\1: [REDACTED]",
             text,
         )
+        text = re.sub(
+            r"(?i)\b(x-api-key|api-key)\s*[:=]\s*([^\r\n,;]+)",
+            r"\1: [REDACTED]",
+            text,
+        )
+        text = re.sub(
+            r"(?i)\b(cookie|set-cookie)\s*[:=]\s*([^\r\n,;]+)",
+            r"\1: [REDACTED]",
+            text,
+        )
+
+        # 3. Redact key-value pairs with sensitive names (passwords, tokens, keys)
+        text = re.sub(
+            r"(?i)\b(password|passwd|secret|access_token|refresh_token|token|api_?key|apikey|credential|private_key|client_secret|database_password|db_password|db_pass)\b\s*([:=])\s*['\"]?([^'\"\s,;&\r\n]+)['\"]?",
+            r"\1\2[REDACTED]",
+            text,
+        )
+
+        # 4. Redact URL query parameters
+        text = re.sub(
+            r"(?i)([?&](?:api_?key|token|access_token|secret|password|auth)=)[^&\s]+",
+            r"\1[REDACTED]",
+            text,
+        )
+
         return text
 
     @classmethod
     def redact_command(cls, command_args: list[str]) -> list[str]:
-        """Redacts sensitive values in CLI argument lists (e.g. --password secret -> --password [REDACTED])."""
+        """Redacts sensitive values in CLI argument lists (e.g. --password secret -> --password [REDACTED], -e KEY=secret -> -e KEY=[REDACTED])."""
         redacted = []
         mask_next = False
         for arg in command_args:
@@ -82,15 +109,18 @@ class SecretRedactor:
                 mask_next = False
                 continue
 
-            if any(arg.lower().startswith(f"--{prefix}=") for prefix in ["token", "secret", "password", "key", "auth"]):
+            if any(arg.lower().startswith(f"--{prefix}=") for prefix in ["token", "secret", "password", "key", "auth", "passwd"]):
                 flag, _ = arg.split("=", 1)
                 redacted.append(f"{flag}={cls.REDACTED_TEXT}")
             elif arg.lower() in ["--token", "--secret", "--password", "--key", "--auth", "-p"]:
                 redacted.append(arg)
                 mask_next = True
-            elif "=" in arg and any(arg.lower().startswith(f"{prefix}=") for prefix in ["token", "secret", "password", "key", "auth"]):
+            elif "=" in arg and any(arg.lower().startswith(f"{prefix}=") for prefix in ["token", "secret", "password", "key", "auth", "passwd"]):
                 flag, _ = arg.split("=", 1)
                 redacted.append(f"{flag}={cls.REDACTED_TEXT}")
+            elif arg.startswith("-e") and "=" in arg:
+                var_name, _ = arg.split("=", 1)
+                redacted.append(f"{var_name}=[REDACTED]")
             else:
                 redacted.append(arg)
         return redacted
@@ -185,6 +215,7 @@ class SSRFValidator:
         
         allow_private allows local loopback (localhost/127.0.0.1) and RFC1918 private IPs for local testing.
         dns_resolver allows injecting a mock resolver for deterministic testing.
+        Fails closed if hostname resolution fails or returns no IP addresses.
         """
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -208,21 +239,41 @@ class SSRFValidator:
         # Hostname is a domain name: resolve to IP addresses
         resolved_ips: list[str] = []
         if dns_resolver is not None:
-            resolved_ips = dns_resolver(host)
+            try:
+                resolved_ips = dns_resolver(host)
+            except Exception as exc:
+                # Fail closed if custom resolver raises an error
+                raise PermissionError(
+                    f"Unable to resolve hostname '{host}'; HTTP request blocked by SSRF policy."
+                ) from exc
         else:
-            # Standard socket resolution
+            # Standard socket resolution (fails closed on gaierror / resolution failure)
             try:
                 addr_info = socket.getaddrinfo(host, None)
                 resolved_ips = list({info[4][0] for info in addr_info if info[4]})
-            except socket.gaierror as exc:
-                logger.debug(f"DNS resolution warning for host '{host}': {exc}")
+            except (socket.gaierror, socket.herror, socket.timeout, OSError) as exc:
+                raise PermissionError(
+                    f"Unable to resolve hostname '{host}'; HTTP request blocked by SSRF policy."
+                ) from exc
+            except Exception as exc:
+                raise PermissionError(
+                    f"Unable to resolve hostname '{host}'; HTTP request blocked by SSRF policy."
+                ) from exc
 
-        # Inspect ALL resolved IPs
+        # Empty DNS results MUST fail closed
+        if not resolved_ips:
+            raise PermissionError(
+                f"Unable to resolve hostname '{host}'; HTTP request blocked by SSRF policy."
+            )
+
+        # Inspect ALL resolved IPs: if ANY IP violates policy, REJECT
         for ip_str in resolved_ips:
             try:
                 ip_obj = ipaddress.ip_address(ip_str)
                 cls._inspect_ip(ip_obj, allow_private=allow_private)
             except ValueError:
-                continue
+                raise PermissionError(
+                    f"Invalid resolved IP address '{ip_str}' for host '{host}'; HTTP request blocked by SSRF policy."
+                )
 
         return url

@@ -100,7 +100,23 @@ class ContainerAdapter(ImplementationAdapter):
         return hashlib.sha256(str(payload).encode()).hexdigest()
 
     def health_check(self) -> AdapterHealth:
-        """Capability-based check detecting container engine presence."""
+        """Capability-based check detecting container engine presence and secret availability."""
+        # 1. Check required secret references from host environment
+        for container_var, host_env in self.secret_references.items():
+            if host_env not in os.environ:
+                return AdapterHealth(
+                    adapter_id=f"{self.name}:{self.version}",
+                    status=AdapterHealthStatus.MISCONFIGURED,
+                    is_ready=False,
+                    diagnostics=f"Required secret reference '{host_env}' is unavailable.",
+                    capabilities=self.capabilities,
+                    details={
+                        "image": self.image,
+                        "missing_secret_reference": host_env,
+                    },
+                )
+
+        # 2. Check container engine presence in system PATH
         engine_path = shutil.which(self.container_engine)
         if not engine_path:
             return AdapterHealth(
@@ -161,9 +177,11 @@ class ContainerAdapter(ImplementationAdapter):
             run_cmd.extend(["-e", f"{k}={v}"])
             safe_cmd.extend(["-e", f"{k}={v}"])
 
-        # Secret references resolved from host environment
+        # Secret references resolved from host environment (fails if missing)
         for container_var, host_env in self.secret_references.items():
-            secret_val = os.environ.get(host_env, "")
+            if host_env not in os.environ:
+                raise ValueError(f"Required secret reference '{host_env}' is unavailable.")
+            secret_val = os.environ[host_env]
             run_cmd.extend(["-e", f"{container_var}={secret_val}"])
             safe_cmd.extend(["-e", f"{container_var}=[REDACTED]"])
 
@@ -184,12 +202,13 @@ class ContainerAdapter(ImplementationAdapter):
         else:
             raw_inputs = dict(inputs)
 
+        safe_inputs = SecretRedactor.redact(raw_inputs)
         health = self.health_check()
         if not health.is_ready:
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
                 raw_outputs={"error": health.diagnostics},
                 normalized_outputs={"error": health.diagnostics},
                 execution_status="EXCEPTION",
@@ -208,7 +227,26 @@ class ContainerAdapter(ImplementationAdapter):
         import subprocess
         import time
 
-        run_cmd, safe_cmd = self._build_container_command()
+        try:
+            run_cmd, safe_cmd = self._build_container_command()
+        except Exception as exc:
+            safe_exc = SecretRedactor.redact_string(str(exc))
+            return Observation(
+                input_id=actual_input_id,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
+                raw_outputs={"error": safe_exc},
+                normalized_outputs={"error": safe_exc},
+                execution_status="EXCEPTION",
+                implementation_name=self.name,
+                implementation_version=self.version,
+                error_message=safe_exc,
+                provenance={
+                    "adapter_type": AdapterType.CONTAINER.value,
+                    "role": str(self.role),
+                },
+            )
+
         logger.info(f"Executing container adapter '{self.name}' on input #{actual_input_id}: {' '.join(safe_cmd)}")
 
         start_time = time.perf_counter()
@@ -232,11 +270,14 @@ class ContainerAdapter(ImplementationAdapter):
             status = "SUCCESS" if proc.returncode == 0 else "EXCEPTION"
             err_msg = SecretRedactor.redact_string(proc.stderr.strip()) if proc.returncode != 0 else None
 
+            safe_stdout = SecretRedactor.redact_string(out_text)
+            safe_stderr = SecretRedactor.redact_string(proc.stderr.strip()) if proc.returncode != 0 else ""
             safe_outputs = SecretRedactor.redact(raw_out)
+
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
                 raw_outputs=safe_outputs,
                 normalized_outputs=self.normalize_output(safe_outputs),
                 execution_status=status,
@@ -248,16 +289,16 @@ class ContainerAdapter(ImplementationAdapter):
                     "adapter_type": AdapterType.CONTAINER.value,
                     "role": str(self.role),
                     "exit_code": proc.returncode,
-                    "stdout": out_text,
-                    "stderr": proc.stderr.strip() if proc.returncode != 0 else "",
+                    "stdout": safe_stdout,
+                    "stderr": safe_stderr,
                 },
             )
         except subprocess.TimeoutExpired:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
                 raw_outputs={"error": f"Container execution timed out after {self.timeout_seconds} seconds"},
                 normalized_outputs={"error": f"Container execution timed out after {self.timeout_seconds} seconds"},
                 execution_status="TIMEOUT",
@@ -272,8 +313,8 @@ class ContainerAdapter(ImplementationAdapter):
             safe_exc = SecretRedactor.redact_string(str(exc))
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
                 raw_outputs={"error": safe_exc},
                 normalized_outputs={"error": safe_exc},
                 execution_status="EXCEPTION",

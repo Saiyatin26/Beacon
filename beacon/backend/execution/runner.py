@@ -18,6 +18,7 @@ from .mapping import InputMapper, OutputMapper
 from .models import ExecutionRequest, ExecutionResult, ExecutionSession, ExecutionStatus
 from .preflight import PreFlightResult, PreFlightValidator, preflight_validator
 from .repository import ExecutionRepository, execution_repository
+from .security import SecretRedactor
 
 logger = logging.getLogger("beacon.execution.runner")
 
@@ -104,18 +105,21 @@ class ApplicationExecutor:
 
         except Exception as exc:
             duration_ms = round((time.perf_counter() - start_time) * 1000, 3)
-            logger.error(f"[PHASE 02] ADAPTER_ERROR | adapter={adapter.name} | error={exc}")
+            safe_exc = SecretRedactor.redact_string(str(exc))
+            logger.error(f"[PHASE 02] ADAPTER_ERROR | adapter={adapter.name} | error={safe_exc}")
+            raw_in = input_data.get_data() if isinstance(input_data, CanonicalInput) else dict(input_data)
+            safe_inputs = SecretRedactor.redact(raw_in)
             obs = Observation(
                 input_id=actual_input_id,
-                raw_inputs=input_data.get_data() if isinstance(input_data, CanonicalInput) else dict(input_data),
-                normalized_inputs=input_data.get_data() if isinstance(input_data, CanonicalInput) else dict(input_data),
-                raw_outputs={"error": str(exc)},
-                normalized_outputs={"error": str(exc)},
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
+                raw_outputs={"error": safe_exc},
+                normalized_outputs={"error": safe_exc},
                 execution_status="EXCEPTION",
                 implementation_name=adapter.name,
                 implementation_version=adapter.version,
                 execution_time_ms=duration_ms,
-                error_message=str(exc),
+                error_message=safe_exc,
                 provenance={"adapter_error": True, "role": str(adapter.role)},
             )
 
@@ -129,7 +133,7 @@ class ApplicationExecutor:
                 observation=obs,
                 duration_ms=duration_ms,
                 error_type=type(exc).__name__,
-                error_message=str(exc),
+                error_message=safe_exc,
                 implementation_identity={"name": adapter.name, "version": adapter.version, "hash": adapter.implementation_hash},
             )
             self.repository.save_result(result)
