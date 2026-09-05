@@ -108,6 +108,13 @@ class Settings:
         """Returns the authoritative execution sandbox root directory."""
         return self.sandbox_root
 
+    # Phase 2 Synthetic Input Fallback (Strictly False by default; TEST/DEV only)
+    allow_synthetic_inputs: bool = os.getenv("BEACON_ALLOW_SYNTHETIC_INPUTS", "false").lower() in ("true", "1", "yes")
+
+    def get_allow_synthetic_inputs(self) -> bool:
+        """Returns whether synthetic input fallback is explicitly enabled for test/dev."""
+        return os.getenv("BEACON_ALLOW_SYNTHETIC_INPUTS", "false").lower() in ("true", "1", "yes") or self.allow_synthetic_inputs
+
     # Trusted Reverse Proxies (for secure X-Forwarded-For resolution)
     trusted_proxies: list[str] = [
         ip.strip()

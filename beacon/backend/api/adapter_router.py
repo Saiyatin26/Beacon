@@ -89,13 +89,19 @@ def trigger_execution_session(
     if not spec:
         raise HTTPException(status_code=404, detail=f"Application '{req.application_id}' not found.")
 
-    from application.resolver import application_resolver
+    from application.resolver import ApplicationResolutionError, application_resolver
     ref_adp, target_adp = application_resolver.resolve_adapters(spec)
 
-    test_inputs = req.inputs or [
-        inp.values if hasattr(inp, "values") else inp
-        for inp in application_resolver.resolve_inputs(spec)
-    ]
+    try:
+        test_inputs = req.inputs or [
+            inp.values if hasattr(inp, "values") else inp
+            for inp in application_resolver.resolve_inputs(spec)
+        ]
+    except ApplicationResolutionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"message": "Input resolution failed", "error": str(exc)},
+        )
 
     # Pre-flight validation
     preflight = application_executor.preflight_check(spec, ref_adp, [target_adp])

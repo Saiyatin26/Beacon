@@ -207,8 +207,27 @@ beacon/
 ├── RELEASE_CHECKLIST.md   Production release candidate verification checklist
 ├── BACKUP_AND_RECOVERY.md SQLite backup, WAL snapshots & disaster recovery guide
 ├── scripts/               End-to-end demo runner
-└── tests/                 Comprehensive pytest test suite (369+ passed tests)
+└── tests/                 Comprehensive pytest test suite (480 passed tests)
 ```
+
+---
+
+## Phase 2 Application Input Resolution Contract
+
+BEACON enforces a strict, fail-closed input resolution hierarchy for real-world applications:
+
+1. **Explicit Dataset (Primary)**:
+   - Configured via `dataset_path`, registered `dataset_id`, or inline records.
+   - If configured dataset is missing, corrupted, or invalid, BEACON fails closed immediately (`ApplicationResolutionError`). It will never silently invent inputs.
+
+2. **Explicit Input Contract Fields**:
+   - Generated deterministically based on defined field schemas and constraints in `InputContract`.
+   - If contract generation fails, BEACON fails closed immediately.
+
+3. **Synthetic Input Fallback (Strictly TEST/DEVELOPMENT ONLY)**:
+   - Real application inputs are required by default. BEACON does not automatically understand or guess arbitrary application inputs in production.
+   - If neither a dataset nor input contract fields exist, execution **fails closed** with a validation/configuration error unless synthetic fallback is explicitly enabled (`allow_synthetic_inputs=True` or `BEACON_ALLOW_SYNTHETIC_INPUTS=true`).
+   - When explicitly enabled for test/dev, synthetic inputs are tagged with explicit provenance (`source="phase2_test_development_fallback"`, `mode="test_development_fallback_only"`, `synthetic=True`, `explicitly_enabled=True`).
 
 ---
 
@@ -245,4 +264,3 @@ python -m pytest -q tests
 # Run frontend production build
 cd frontend && npm run build
 ```
-

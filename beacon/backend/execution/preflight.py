@@ -55,6 +55,7 @@ class PreFlightValidator:
         spec: ApplicationSpec,
         reference_adapter: Optional[ImplementationAdapter] = None,
         target_adapters: Optional[list[ImplementationAdapter]] = None,
+        allow_synthetic_inputs: Optional[bool] = None,
     ) -> PreFlightResult:
         checks: list[PreFlightCheck] = []
         errors: list[str] = []
@@ -146,22 +147,119 @@ class PreFlightValidator:
                         message=f"Target {t.name} entrypoint check.",
                     ))
 
-        # 4. Validate Input Contract
-        if spec.input_contract and spec.input_contract.fields:
+        # 4. Validate Input Source (Explicit Dataset, InputContract fields, or Explicit Synthetic Fallback)
+        from pathlib import Path
+        has_dataset = False
+        dataset_desc = ""
+
+        # 4A. Check dataset_config
+        if spec.dataset_config:
+            if spec.dataset_config.dataset_path:
+                p = Path(spec.dataset_config.dataset_path)
+                if not p.exists():
+                    errors.append(f"Configured dataset_path does not exist: '{spec.dataset_config.dataset_path}'")
+                    checks.append(PreFlightCheck(
+                        check_name="input_source_check",
+                        target="dataset",
+                        passed=False,
+                        message=f"Dataset file '{spec.dataset_config.dataset_path}' does not exist.",
+                    ))
+                else:
+                    has_dataset = True
+                    dataset_desc = f"path '{p.name}'"
+            elif getattr(spec.dataset_config, "dataset_id", None):
+                ds_id = spec.dataset_config.dataset_id
+                try:
+                    from ingestion.dataset_registry import user_dataset_registry
+                    if not user_dataset_registry.get_dataset(ds_id):
+                        errors.append(f"Configured dataset_id '{ds_id}' not found in registry.")
+                        checks.append(PreFlightCheck(
+                            check_name="input_source_check",
+                            target="dataset",
+                            passed=False,
+                            message=f"Dataset '{ds_id}' not found in registry.",
+                        ))
+                    else:
+                        has_dataset = True
+                        dataset_desc = f"registered dataset '{ds_id}'"
+                except Exception:
+                    has_dataset = True
+                    dataset_desc = f"registered dataset '{ds_id}'"
+            elif spec.dataset_config.metadata.get("records"):
+                has_dataset = True
+                dataset_desc = f"inline records ({len(spec.dataset_config.metadata['records'])})"
+
+        # 4B. Check spec metadata dataset references
+        if not has_dataset and not any(c.check_name == "input_source_check" and not c.passed for c in checks):
+            if spec.metadata.get("dataset_path"):
+                p = Path(spec.metadata["dataset_path"])
+                if not p.exists():
+                    errors.append(f"Metadata dataset_path does not exist: '{spec.metadata['dataset_path']}'")
+                    checks.append(PreFlightCheck(
+                        check_name="input_source_check",
+                        target="dataset",
+                        passed=False,
+                        message=f"Dataset file '{spec.metadata['dataset_path']}' does not exist.",
+                    ))
+                else:
+                    has_dataset = True
+                    dataset_desc = f"metadata dataset path '{p.name}'"
+            elif spec.metadata.get("dataset_id"):
+                has_dataset = True
+                dataset_desc = f"metadata dataset '{spec.metadata['dataset_id']}'"
+            elif spec.metadata.get("dataset_records"):
+                has_dataset = True
+                dataset_desc = "metadata inline dataset records"
+
+        # 4C. Evaluate input source pass/fail
+        if has_dataset and not any(c.check_name == "input_source_check" and not c.passed for c in checks):
             checks.append(PreFlightCheck(
-                check_name="input_contract_check",
-                target="input_contract",
+                check_name="input_source_check",
+                target="dataset",
                 passed=True,
-                message=f"Input contract defines {len(spec.input_contract.fields)} fields.",
+                message=f"Explicit dataset configured: {dataset_desc}.",
             ))
-        else:
-            warnings.append("No explicit InputContract fields declared; fallback input synthesis will be used.")
-            checks.append(PreFlightCheck(
-                check_name="input_contract_check",
-                target="input_contract",
-                passed=True,
-                message="Input contract has no explicit field schemas (fallback enabled).",
-            ))
+        elif not any(c.check_name == "input_source_check" and not c.passed for c in checks):
+            # Check Input Contract
+            if spec.input_contract and spec.input_contract.fields:
+                checks.append(PreFlightCheck(
+                    check_name="input_source_check",
+                    target="input_contract",
+                    passed=True,
+                    message=f"Input contract defines {len(spec.input_contract.fields)} fields.",
+                ))
+            else:
+                # No dataset and no input contract fields -> check explicit synthetic fallback
+                effective_allow_synthetic = allow_synthetic_inputs
+                if effective_allow_synthetic is None:
+                    if "allow_synthetic_inputs" in spec.metadata:
+                        effective_allow_synthetic = bool(spec.metadata["allow_synthetic_inputs"])
+                    else:
+                        from common.config import settings
+                        if callable(getattr(settings, "get_allow_synthetic_inputs", None)):
+                            effective_allow_synthetic = settings.get_allow_synthetic_inputs()
+                        else:
+                            effective_allow_synthetic = getattr(settings, "allow_synthetic_inputs", False)
+
+                if effective_allow_synthetic:
+                    warnings.append("TEST/DEVELOPMENT ONLY: No explicit input source; synthetic input fallback is explicitly enabled.")
+                    checks.append(PreFlightCheck(
+                        check_name="input_source_check",
+                        target="synthetic_fallback",
+                        passed=True,
+                        message="Synthetic input fallback explicitly enabled for test/development.",
+                    ))
+                else:
+                    errors.append(
+                        f"ApplicationSpec '{spec.application_id}' has no valid input source: "
+                        "no dataset provided, no explicit InputContract fields declared, and synthetic fallback is disabled."
+                    )
+                    checks.append(PreFlightCheck(
+                        check_name="input_source_check",
+                        target="input_source",
+                        passed=False,
+                        message="No valid input source configured.",
+                    ))
 
         # 5. Validate Runtime Configuration if present
         if spec.runtime:

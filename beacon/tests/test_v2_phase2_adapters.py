@@ -642,9 +642,46 @@ def test_execution_result_captures_stdout_stderr_exit_code():
     assert result.duration_ms > 0
 
 
+def test_execution_result_process_nonzero_exit_maps_to_app_execution_error():
+    """Section 10/11: Process launched and exited with non-zero code maps to APP_EXECUTION_ERROR with stderr & exit_code preserved."""
+    adapter = ProcessAdapter(
+        command=[sys.executable, str(CLI_FIXTURE_SCRIPT)],
+        name="test_exec_nonzero_exit",
+        input_mapper=InputMapper(InputMapperConfig(
+            field_mappings={"operation": "payload.op"}
+        )),
+    )
+
+    inp = CanonicalInput(input_id="INP-RES-ERR", payload={"op": "error"})
+    result = application_executor.execute_single(adapter, inp, input_id="INP-RES-ERR")
+
+    # Application ran and failed, not adapter infrastructure failure
+    assert result.status == ExecutionStatus.APP_EXECUTION_ERROR
+    assert result.exit_code == 2
+    assert result.stderr is not None and len(result.stderr) > 0
+    assert "Simulated CLI fatal error" in result.stderr
+    assert result.duration_ms > 0
+
+
+def test_execution_result_unlaunchable_process_maps_to_unavailable():
+    """Section 10: Non-existent executable cannot be launched and maps to UNAVAILABLE or ADAPTER_ERROR."""
+    adapter = ProcessAdapter(
+        command=["non_existent_binary_beacon_xyz_12345"],
+        name="test_exec_unlaunchable",
+    )
+
+    inp = CanonicalInput(input_id="INP-RES-UNAVAIL", payload={"x": 1})
+    result = application_executor.execute_single(adapter, inp, input_id="INP-RES-UNAVAIL")
+
+    # Adapter infrastructure failure, cannot launch
+    assert result.status in (ExecutionStatus.UNAVAILABLE, ExecutionStatus.ADAPTER_ERROR)
+    assert result.exit_code is None
+
+
+
 def test_application_resolver_input_fallback_marks_warning_and_test_only():
-    """ApplicationResolver clearly identifies synthetic input fallback as TEST/DEVELOPMENT ONLY."""
-    from application.resolver import ApplicationResolver
+    """ApplicationResolver clearly identifies synthetic input fallback as TEST/DEVELOPMENT ONLY and fails closed by default."""
+    from application.resolver import ApplicationResolutionError, ApplicationResolver
     resolver = ApplicationResolver()
 
     # Spec without dataset or contract
@@ -655,10 +692,18 @@ def test_application_resolver_input_fallback_marks_warning_and_test_only():
         target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
     )
 
-    inputs = resolver.resolve_inputs(spec)
+    # 1. By default (allow_synthetic_inputs=False), fails closed
+    with pytest.raises(ApplicationResolutionError) as exc_info:
+        resolver.resolve_inputs(spec)
+    assert "no valid input source" in str(exc_info.value).lower()
+
+    # 2. When explicitly enabled (allow_synthetic_inputs=True), generates fallback inputs with clear provenance
+    inputs = resolver.resolve_inputs(spec, allow_synthetic_inputs=True)
     assert len(inputs) == 10
     assert inputs[0].provenance.get("mode") == "test_development_fallback_only"
-    assert inputs[0].provenance.get("source") == "phase1_test_fallback"
+    assert inputs[0].provenance.get("source") == "phase2_test_development_fallback"
+    assert inputs[0].provenance.get("synthetic") is True
+    assert inputs[0].provenance.get("explicitly_enabled") is True
     assert "warning" in inputs[0].provenance
 
 
@@ -1477,6 +1522,231 @@ def test_synthetic_fallback_behavior_production_safety():
     # The payload must match the exact provided data, never fabricated synthetic defaults
     assert can.payload == {"amount": 100.0}
     assert can.metadata.get("synthetic") is not True
+
+
+# ==============================================================================
+# SECTION 7: SYNTHETIC INPUT RESOLUTION & FALLBACK CONTROL REGRESSION SUITE
+# ==============================================================================
+
+def test_input_resolution_test_a_no_dataset_no_contract_default_fails_closed():
+    """TEST A: No dataset + No InputContract + default configuration -> validation failure,
+    zero synthetic inputs generated, application execution does not occur.
+    """
+    from application.resolver import ApplicationResolutionError, ApplicationResolver
+    resolver = ApplicationResolver()
+
+    spec = ApplicationSpec(
+        application_id="app_test_a",
+        name="Test A Empty Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+    )
+
+    # 1. Resolver raises structured validation error
+    with pytest.raises(ApplicationResolutionError) as exc_info:
+        resolver.resolve_inputs(spec)
+    assert "no valid input source" in str(exc_info.value).lower()
+    assert "allow_synthetic_inputs is disabled" in str(exc_info.value).lower()
+
+    # 2. Preflight also rejects execution readiness
+    preflight = preflight_validator.validate(spec)
+    assert preflight.is_ready is False
+    assert any("no valid input source" in err.lower() for err in preflight.errors)
+    input_checks = [c for c in preflight.checks if c.check_name == "input_source_check"]
+    assert len(input_checks) == 1
+    assert input_checks[0].passed is False
+
+
+def test_input_resolution_test_b_no_dataset_no_contract_explicit_false():
+    """TEST B: No dataset + No InputContract + allow_synthetic_inputs=False -> validation failure."""
+    from application.resolver import ApplicationResolutionError, ApplicationResolver
+    resolver = ApplicationResolver()
+
+    spec = ApplicationSpec(
+        application_id="app_test_b",
+        name="Test B Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+    )
+
+    with pytest.raises(ApplicationResolutionError) as exc_info:
+        resolver.resolve_inputs(spec, allow_synthetic_inputs=False)
+    assert "no valid input source" in str(exc_info.value).lower()
+
+    # Preflight with allow_synthetic_inputs=False
+    preflight = preflight_validator.validate(spec, allow_synthetic_inputs=False)
+    assert preflight.is_ready is False
+
+
+def test_input_resolution_test_c_no_dataset_no_contract_explicit_true():
+    """TEST C: No dataset + No InputContract + allow_synthetic_inputs=True -> synthetic inputs
+    generated with exact provenance identifying test/development fallback.
+    """
+    from application.resolver import ApplicationResolver
+    resolver = ApplicationResolver()
+
+    spec = ApplicationSpec(
+        application_id="app_test_c",
+        name="Test C Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+    )
+
+    inputs = resolver.resolve_inputs(spec, allow_synthetic_inputs=True)
+    assert len(inputs) > 0
+    for inp in inputs:
+        assert inp.origin in ("diverse_sampling", "explicit_case")
+        prov = inp.provenance
+        assert prov.get("source") == "phase2_test_development_fallback"
+        assert prov.get("mode") == "test_development_fallback_only"
+        assert prov.get("synthetic") is True
+        assert prov.get("explicitly_enabled") is True
+        assert "warning" in prov
+
+    # Preflight passes with warning when allow_synthetic_inputs=True
+    preflight = preflight_validator.validate(spec, allow_synthetic_inputs=True)
+    assert any("TEST/DEVELOPMENT ONLY" in w for w in preflight.warnings)
+    input_checks = [c for c in preflight.checks if c.check_name == "input_source_check"]
+    assert len(input_checks) == 1
+    assert input_checks[0].passed is True
+
+
+def test_input_resolution_test_d_production_default_never_silently_enables(monkeypatch):
+    """TEST D: Production/default mode MUST NEVER silently enable allow_synthetic_inputs=True."""
+    from common.config import settings
+    from application.resolver import ApplicationResolutionError, ApplicationResolver
+    resolver = ApplicationResolver()
+
+    monkeypatch.delenv("BEACON_ALLOW_SYNTHETIC_INPUTS", raising=False)
+    # Explicitly verify settings default is False
+    assert settings.get_allow_synthetic_inputs() is False
+
+    spec = ApplicationSpec(
+        application_id="app_test_d",
+        name="Test D Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+    )
+
+    with pytest.raises(ApplicationResolutionError):
+        resolver.resolve_inputs(spec)
+
+
+def test_input_resolution_test_e_explicit_dataset_used(tmp_path):
+    """TEST E: Explicit dataset exists -> dataset is used, synthetic fallback is NOT used."""
+    from application.resolver import ApplicationResolver
+    resolver = ApplicationResolver()
+
+    # Create explicit JSON dataset file
+    ds_file = tmp_path / "real_dataset.json"
+    ds_data = [
+        {"input_id": "INP-001", "values": {"x": 10.0, "y": 20.0}},
+        {"input_id": "INP-002", "values": {"x": 30.0, "y": 40.0}},
+        {"input_id": "INP-003", "values": {"x": 50.0, "y": 60.0}},
+    ]
+    ds_file.write_text(json.dumps(ds_data), encoding="utf-8")
+
+    spec = ApplicationSpec(
+        application_id="app_test_e",
+        name="Test E Dataset Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+        dataset_config=DatasetConfig(dataset_path=str(ds_file), sample_count=3),
+    )
+
+    inputs = resolver.resolve_inputs(spec)
+    assert len(inputs) == 3
+    assert inputs[0].values == {"x": 10.0, "y": 20.0}
+    assert inputs[0].provenance.get("source") == "explicit_dataset_path"
+    assert inputs[0].provenance.get("synthetic") is not True
+
+
+def test_input_resolution_test_f_explicit_input_contract_used():
+    """TEST F: Explicit InputContract exists -> inputs are generated/resolved from contract,
+    synthetic fallback is NOT used.
+    """
+    from application.resolver import ApplicationResolver
+    resolver = ApplicationResolver()
+
+    spec = ApplicationSpec(
+        application_id="app_test_f",
+        name="Test F Contract Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+        input_contract=InputContract(
+            fields={"temperature": (15.0, 30.0), "humidity": (40, 80)},
+        ),
+        dataset_config=DatasetConfig(sample_count=5, seed=123),
+    )
+
+    inputs = resolver.resolve_inputs(spec)
+    assert len(inputs) == 5
+    for inp in inputs:
+        assert "temperature" in inp.values
+        assert 15.0 <= inp.values["temperature"] <= 30.0
+        assert "humidity" in inp.values
+        assert 40 <= inp.values["humidity"] <= 80
+        assert inp.provenance.get("generator") == "contract_synthesizer"
+        assert inp.provenance.get("source") == "input_contract"
+        assert inp.provenance.get("synthetic") is not True
+
+
+def test_input_resolution_test_g_dataset_invalid_fails_closed(tmp_path):
+    """TEST G: Dataset exists but is invalid -> validation failure.
+    DO NOT silently replace invalid dataset with synthetic inputs!
+    """
+    from application.resolver import ApplicationResolutionError, ApplicationResolver
+    resolver = ApplicationResolver()
+
+    # 1. Non-existent dataset file path
+    spec_missing = ApplicationSpec(
+        application_id="app_test_g1",
+        name="Missing Dataset File",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+        dataset_config=DatasetConfig(dataset_path=str(tmp_path / "non_existent_file.json")),
+    )
+    with pytest.raises(ApplicationResolutionError) as exc_info1:
+        resolver.resolve_inputs(spec_missing, allow_synthetic_inputs=True)
+    assert "does not exist" in str(exc_info1.value).lower()
+
+    # 2. Corrupt JSON dataset file
+    corrupt_file = tmp_path / "corrupt.json"
+    corrupt_file.write_text("{{not_valid_json!", encoding="utf-8")
+    spec_corrupt = ApplicationSpec(
+        application_id="app_test_g2",
+        name="Corrupt Dataset File",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+        dataset_config=DatasetConfig(dataset_path=str(corrupt_file)),
+    )
+    with pytest.raises(ApplicationResolutionError) as exc_info2:
+        resolver.resolve_inputs(spec_corrupt, allow_synthetic_inputs=True)
+    assert "failed to load dataset" in str(exc_info2.value).lower()
+
+
+def test_input_resolution_test_h_input_contract_invalid_fails_closed():
+    """TEST H: InputContract exists but input generation fails -> validation failure.
+    DO NOT silently replace it with synthetic fallback!
+    """
+    from application.resolver import ApplicationResolutionError, ApplicationResolver
+    resolver = ApplicationResolver()
+
+    # Field definition that causes generation failure (min > max in tuple causes randint ValueError)
+    spec_bad_contract = ApplicationSpec(
+        application_id="app_test_h",
+        name="Bad Contract Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+        input_contract=InputContract(
+            fields={"bad_range": (100, 10)},
+        ),
+    )
+
+    with pytest.raises(ApplicationResolutionError) as exc_info:
+        resolver.resolve_inputs(spec_bad_contract, allow_synthetic_inputs=True)
+    assert "failed to generate test inputs from inputcontract" in str(exc_info.value).lower()
+
 
 
 

@@ -83,6 +83,7 @@ class RuntimeConfig(BaseModel):
 
 class DatasetConfig(BaseModel):
     """Configuration for test dataset generation, loading, or sampling."""
+    dataset_id: Optional[str] = None
     generator_type: str = "synthetic"
     sample_count: int = 100
     seed: int = 42

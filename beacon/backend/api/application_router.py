@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from application import (
     ApplicationRegistry,
+    ApplicationResolutionError,
     ApplicationResolver,
     ApplicationSpec,
     application_registry,
@@ -209,6 +210,12 @@ def certify_application(
 
         return response_payload
 
+    except ApplicationResolutionError as exc:
+        logger.warning(f"Application resolution failed for application '{app_id}': {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Application resolution error: {str(exc)}",
+        )
     except Exception as exc:
         logger.error(f"Certification failed for application '{app_id}': {exc}", exc_info=True)
         raise HTTPException(

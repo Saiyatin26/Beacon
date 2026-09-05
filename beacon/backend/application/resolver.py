@@ -176,9 +176,35 @@ class ApplicationResolver:
         self,
         spec: ApplicationSpec,
         custom_inputs: Optional[list[Union[dict[str, Any], CanonicalInput, CertificationTestInput]]] = None,
+        allow_synthetic_inputs: Optional[bool] = None,
     ) -> list[CertificationTestInput]:
-        """Resolves or generates canonical test inputs for an ApplicationSpec."""
-        if custom_inputs:
+        """Resolves or generates canonical test inputs for an ApplicationSpec.
+
+        Input Resolution Architecture:
+        1. Explicit custom_inputs or explicit Dataset configured?
+           -> Load and validate dataset inputs.
+           -> If dataset is missing or invalid, FAIL CLOSED. Never replace invalid dataset with synthetic inputs!
+        2. Explicit InputContract with fields configured?
+           -> Generate/validate inputs from InputContract.
+           -> If generation fails, FAIL CLOSED. Never replace failed contract generation with synthetic inputs!
+        3. No Dataset and No InputContract fields:
+           -> Check if explicit TEST/DEVELOPMENT fallback is enabled (allow_synthetic_inputs=True).
+           -> If NOT enabled (default is False), FAIL CLOSED: raise ApplicationResolutionError.
+           -> If explicitly enabled, generate synthetic inputs with explicit provenance:
+              source="phase2_test_development_fallback",
+              mode="test_development_fallback_only",
+              synthetic=True,
+              explicitly_enabled=True.
+        """
+        import json
+
+        # ----------------------------------------------------------------------
+        # 1. Explicit Dataset Resolution
+        # ----------------------------------------------------------------------
+        # 1A. Custom inputs passed directly
+        if custom_inputs is not None:
+            if not isinstance(custom_inputs, list) or len(custom_inputs) == 0:
+                raise ApplicationResolutionError("Custom inputs list cannot be empty.")
             inputs: list[CertificationTestInput] = []
             for i, item in enumerate(custom_inputs):
                 if isinstance(item, CertificationTestInput):
@@ -200,71 +226,202 @@ class ApplicationResolver:
                             provenance={"source": "custom_inputs"},
                         )
                     )
+                else:
+                    raise ApplicationResolutionError(f"Unsupported custom input element type: {type(item)}")
             return inputs
 
-        # Generate inputs from input contract if available
-        if spec.input_contract and spec.input_contract.fields:
-            import random
-            rng = random.Random(spec.dataset_config.seed if spec.dataset_config else 42)
-            sample_count = spec.dataset_config.sample_count if spec.dataset_config else 50
-            generated: list[CertificationTestInput] = []
-
-            for i in range(sample_count):
-                vals: dict[str, Any] = {}
-                for field_name, field_def in spec.input_contract.fields.items():
-                    if isinstance(field_def, dict):
-                        f_type = field_def.get("type", "float")
-                        f_min = field_def.get("min", 0)
-                        f_max = field_def.get("max", 100)
-                        if f_type in ("int", "integer"):
-                            vals[field_name] = rng.randint(int(f_min), int(f_max))
-                        elif f_type in ("float", "number"):
-                            vals[field_name] = round(rng.uniform(float(f_min), float(f_max)), 2)
-                        elif f_type in ("str", "string"):
-                            options = field_def.get("enum", ["A", "B", "C"])
-                            vals[field_name] = rng.choice(options)
-                        elif f_type in ("bool", "boolean"):
-                            vals[field_name] = rng.choice([True, False])
-                        else:
-                            vals[field_name] = rng.randint(0, 100)
-                    elif isinstance(field_def, tuple) and len(field_def) == 2:
-                        min_v, max_v = field_def
-                        if isinstance(min_v, int) and isinstance(max_v, int):
-                            vals[field_name] = rng.randint(min_v, max_v)
-                        else:
-                            vals[field_name] = round(rng.uniform(float(min_v), float(max_v)), 2)
-                    else:
-                        vals[field_name] = 10.0
-
-                generated.append(
-                    CertificationTestInput(
-                        input_id=f"synth_{i:04d}",
-                        values=vals,
-                        origin="diverse_sampling",
-                        provenance={"generator": "contract_synthesizer"},
-                    )
-                )
-            return generated
-
-        # TEST / DEVELOPMENT ONLY Fallback:
-        # Real-world applications in production must provide an explicit dataset or input contract.
-        logger.warning(
-            f"[INPUT_FALLBACK] ApplicationSpec '{spec.application_id}' has neither a registered dataset_id nor an input_contract. "
-            "Falling back to synthetic test inputs (TEST/DEVELOPMENT ONLY). Real applications must supply explicit datasets."
+        # 1B. Dataset from dataset_path (file on filesystem)
+        dataset_path_str = (
+            (spec.dataset_config.dataset_path if spec.dataset_config else None)
+            or spec.metadata.get("dataset_path")
         )
+        if dataset_path_str:
+            p = Path(dataset_path_str)
+            if not p.exists():
+                raise ApplicationResolutionError(
+                    f"Configured dataset_path does not exist: '{dataset_path_str}'"
+                )
+            try:
+                if p.suffix.lower() == ".json":
+                    with open(p, "r", encoding="utf-8") as f:
+                        records = json.load(f)
+                    if not isinstance(records, list):
+                        raise ValueError("JSON dataset root must be a list of records")
+                elif p.suffix.lower() in (".jsonl", ".ndjson"):
+                    records = []
+                    with open(p, "r", encoding="utf-8") as f:
+                        for line in f:
+                            s = line.strip()
+                            if s:
+                                records.append(json.loads(s))
+                elif p.suffix.lower() == ".csv":
+                    import csv
+                    with open(p, "r", encoding="utf-8") as f:
+                        records = list(csv.DictReader(f))
+                else:
+                    content = p.read_text(encoding="utf-8")
+                    try:
+                        records = json.loads(content)
+                    except Exception:
+                        records = [json.loads(line) for line in content.splitlines() if line.strip()]
+
+                if not records or not isinstance(records, list):
+                    raise ValueError(f"Dataset file '{dataset_path_str}' contains no valid records")
+
+                sample_count = (
+                    spec.dataset_config.sample_count
+                    if spec.dataset_config and spec.dataset_config.sample_count
+                    else len(records)
+                )
+                selected = records[:sample_count]
+                return [
+                    CertificationTestInput(
+                        input_id=f"ds_{i:04d}",
+                        values=rec.get("values", rec) if isinstance(rec, dict) else {"value": rec},
+                        provenance={"source": "explicit_dataset_path", "dataset_path": str(p)},
+                    )
+                    for i, rec in enumerate(selected)
+                ]
+            except Exception as exc:
+                # FAIL CLOSED: Do NOT silently replace failed dataset loading with synthetic inputs!
+                raise ApplicationResolutionError(f"Failed to load dataset from '{dataset_path_str}': {exc}")
+
+        # 1C. Dataset from dataset_id (registered in user_dataset_registry)
+        dataset_id = (
+            (getattr(spec.dataset_config, "dataset_id", None) if spec.dataset_config else None)
+            or spec.metadata.get("dataset_id")
+        )
+        if dataset_id:
+            try:
+                from ingestion.dataset_registry import user_dataset_registry
+                reg_inputs = user_dataset_registry.get_test_inputs(dataset_id)
+                if not reg_inputs:
+                    raise ValueError(f"No test inputs found for dataset_id '{dataset_id}' in registry")
+                sample_count = (
+                    spec.dataset_config.sample_count
+                    if spec.dataset_config and spec.dataset_config.sample_count
+                    else len(reg_inputs)
+                )
+                return reg_inputs[:sample_count]
+            except Exception as exc:
+                # FAIL CLOSED: Do NOT silently replace missing registered dataset with synthetic inputs!
+                raise ApplicationResolutionError(f"Failed to resolve dataset_id '{dataset_id}': {exc}")
+
+        # 1D. Inline dataset records
+        inline_records = (
+            (spec.dataset_config.metadata.get("records") if spec.dataset_config else None)
+            or spec.metadata.get("dataset_records")
+        )
+        if inline_records:
+            if not isinstance(inline_records, list) or len(inline_records) == 0:
+                raise ApplicationResolutionError("Inline dataset records must be a non-empty list.")
+            return [
+                CertificationTestInput(
+                    input_id=f"rec_{i:04d}",
+                    values=rec.get("values", rec) if isinstance(rec, dict) else {"value": rec},
+                    provenance={"source": "explicit_dataset_records"},
+                )
+                for i, rec in enumerate(inline_records)
+            ]
+
+        # ----------------------------------------------------------------------
+        # 2. Explicit InputContract Generation
+        # ----------------------------------------------------------------------
+        if spec.input_contract and spec.input_contract.fields:
+            try:
+                import random
+                rng = random.Random(spec.dataset_config.seed if spec.dataset_config else 42)
+                sample_count = spec.dataset_config.sample_count if spec.dataset_config else 50
+                generated: list[CertificationTestInput] = []
+
+                for i in range(sample_count):
+                    vals: dict[str, Any] = {}
+                    for field_name, field_def in spec.input_contract.fields.items():
+                        if isinstance(field_def, dict):
+                            f_type = field_def.get("type", "float")
+                            f_min = field_def.get("min", 0)
+                            f_max = field_def.get("max", 100)
+                            if f_type in ("int", "integer"):
+                                vals[field_name] = rng.randint(int(f_min), int(f_max))
+                            elif f_type in ("float", "number"):
+                                vals[field_name] = round(rng.uniform(float(f_min), float(f_max)), 2)
+                            elif f_type in ("str", "string"):
+                                options = field_def.get("enum", ["A", "B", "C"])
+                                vals[field_name] = rng.choice(options)
+                            elif f_type in ("bool", "boolean"):
+                                vals[field_name] = rng.choice([True, False])
+                            else:
+                                vals[field_name] = rng.randint(0, 100)
+                        elif isinstance(field_def, tuple) and len(field_def) == 2:
+                            min_v, max_v = field_def
+                            if isinstance(min_v, int) and isinstance(max_v, int):
+                                vals[field_name] = rng.randint(min_v, max_v)
+                            else:
+                                vals[field_name] = round(rng.uniform(float(min_v), float(max_v)), 2)
+                        elif isinstance(field_def, (int, float)):
+                            vals[field_name] = field_def
+                        elif isinstance(field_def, str):
+                            vals[field_name] = field_def
+                        else:
+                            vals[field_name] = 10.0
+
+                    generated.append(
+                        CertificationTestInput(
+                            input_id=f"synth_{i:04d}",
+                            values=vals,
+                            origin="diverse_sampling",
+                            provenance={"generator": "contract_synthesizer", "source": "input_contract"},
+                        )
+                    )
+                return generated
+            except Exception as exc:
+                # FAIL CLOSED: Do NOT silently replace failed contract generation with synthetic fallback!
+                raise ApplicationResolutionError(f"Failed to generate test inputs from InputContract: {exc}")
+
+        # ----------------------------------------------------------------------
+        # 3. No Dataset and No InputContract fields -> Check Explicit Test/Dev Fallback
+        # ----------------------------------------------------------------------
+        effective_allow_synthetic = allow_synthetic_inputs
+        if effective_allow_synthetic is None:
+            if "allow_synthetic_inputs" in spec.metadata:
+                effective_allow_synthetic = bool(spec.metadata["allow_synthetic_inputs"])
+            else:
+                from common.config import settings
+                if callable(getattr(settings, "get_allow_synthetic_inputs", None)):
+                    effective_allow_synthetic = settings.get_allow_synthetic_inputs()
+                else:
+                    effective_allow_synthetic = getattr(settings, "allow_synthetic_inputs", False)
+
+        if not effective_allow_synthetic:
+            raise ApplicationResolutionError(
+                f"ApplicationSpec '{spec.application_id}' has no valid input source: "
+                "no explicit dataset was provided, no explicit InputContract fields were declared, "
+                "and allow_synthetic_inputs is disabled (default). "
+                "Real applications must provide an explicit dataset or InputContract in production."
+            )
+
+        # TEST / DEVELOPMENT ONLY Fallback (explicitly enabled):
+        logger.warning(
+            f"[INPUT_FALLBACK] TEST/DEVELOPMENT ONLY: ApplicationSpec '{spec.application_id}' "
+            "has neither a registered dataset nor input_contract fields. allow_synthetic_inputs=True is explicitly set. "
+            "Generating synthetic fallback test inputs."
+        )
+        sample_count = spec.dataset_config.sample_count if spec.dataset_config else 10
         return [
             CertificationTestInput(
                 input_id=f"default_test_{i:04d}",
                 values={"x": i * 1.5, "flag": True},
                 origin="diverse_sampling",
                 provenance={
-                    "source": "phase1_test_fallback",
+                    "source": "phase2_test_development_fallback",
                     "mode": "test_development_fallback_only",
+                    "synthetic": True,
+                    "explicitly_enabled": True,
                     "generator": "default_fallback",
-                    "warning": "Fabricated test input — not for production certification",
+                    "warning": "TEST/DEVELOPMENT ONLY: Fabricated synthetic inputs because allow_synthetic_inputs=True. Not for production certification.",
                 },
             )
-            for i in range(10)
+            for i in range(sample_count)
         ]
 
     def resolve_oracle_set(self, spec: ApplicationSpec) -> OracleSet:

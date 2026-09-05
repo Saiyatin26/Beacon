@@ -844,7 +844,8 @@ def test_generic_adapter_registry_registration_and_resolution():
 
 
 def test_resolver_inputs_fallback_marks_test_source():
-    """Verifies that development fallback inputs are explicitly tagged with source metadata."""
+    """Verifies that development fallback inputs require explicit allow_synthetic_inputs=True and fail closed by default."""
+    from application.resolver import ApplicationResolutionError, ApplicationResolver
     resolver = ApplicationResolver()
     spec_empty = ApplicationSpec(
         application_id="app_empty_contract",
@@ -852,10 +853,17 @@ def test_resolver_inputs_fallback_marks_test_source():
         reference_implementation="calc_ref",
     )
 
-    inputs = resolver.resolve_inputs(spec_empty)
+    # 1. By default, fails closed without synthetic fallback
+    with pytest.raises(ApplicationResolutionError) as exc_info:
+        resolver.resolve_inputs(spec_empty)
+    assert "no valid input source" in str(exc_info.value).lower()
+
+    # 2. When explicitly enabled, generates synthetic test inputs with provenance
+    inputs = resolver.resolve_inputs(spec_empty, allow_synthetic_inputs=True)
     assert len(inputs) == 10
     for inp in inputs:
-        assert inp.provenance.get("source") == "phase1_test_fallback"
+        assert inp.provenance.get("source") in ("phase1_test_fallback", "phase2_test_development_fallback")
+        assert inp.provenance.get("synthetic") is True
 
 
 def test_generic_adapter_never_infers_named_parameters():

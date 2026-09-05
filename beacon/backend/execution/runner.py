@@ -38,9 +38,15 @@ class ApplicationExecutor:
         spec: ApplicationSpec,
         reference_adapter: Optional[ImplementationAdapter] = None,
         target_adapters: Optional[list[ImplementationAdapter]] = None,
+        allow_synthetic_inputs: Optional[bool] = None,
     ) -> PreFlightResult:
         """Runs pre-flight readiness checks on the application and adapters."""
-        return self.validator.validate(spec, reference_adapter, target_adapters)
+        return self.validator.validate(
+            spec,
+            reference_adapter=reference_adapter,
+            target_adapters=target_adapters,
+            allow_synthetic_inputs=allow_synthetic_inputs,
+        )
 
     def execute_single(
         self,
