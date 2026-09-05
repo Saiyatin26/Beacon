@@ -219,9 +219,22 @@ class ImplementationAdapter(ABC):
         """Lifecycle hook: Captures execution evidence (traces, metadata, state changes)."""
         return observation.provenance
 
+    def start(self, context: Optional[dict[str, Any]] = None) -> Any:
+        """Lifecycle hook: Starts long-running or persistent process/service."""
+        return getattr(self, "_process", None)
+
+    def stop(self, context: Optional[dict[str, Any]] = None) -> None:
+        """Lifecycle hook: Stops persistent process or long-running service."""
+        pass
+
+    def get_process(self) -> Optional[Any]:
+        """Lifecycle hook: Returns running process handle if this is a process-based adapter."""
+        return getattr(self, "_process", None)
+
     def cleanup(self) -> None:
         """Lifecycle hook: Cleans up temporary resources, connections, or state."""
         pass
+
 
 
 # ==============================================================================

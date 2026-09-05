@@ -18,10 +18,12 @@ from common.config import settings
 from .evidence_models import (
     EvidenceBundle,
     EvidenceManifest,
+    EvidencePersistenceStatus,
     EvidenceRecord,
     EvidenceType,
     compute_content_hash,
 )
+
 from .input_set import InputSet
 from .paired_models import PairedExecutionSession, PairedExecutionStatus
 
@@ -97,6 +99,7 @@ class EvidenceStore:
                         content_hash TEXT NOT NULL,
                         size_bytes INTEGER NOT NULL,
                         capture_status TEXT NOT NULL,
+                        persistence_status TEXT NOT NULL DEFAULT 'PERSISTED',
                         record_json TEXT NOT NULL,
                         created_at TEXT NOT NULL
                     )
@@ -112,14 +115,31 @@ class EvidenceStore:
                         application_id TEXT NOT NULL,
                         input_set_id TEXT NOT NULL,
                         bundle_hash TEXT NOT NULL,
+                        persistence_status TEXT NOT NULL DEFAULT 'PERSISTED',
+                        persistence_error TEXT,
                         manifest_json TEXT NOT NULL,
                         bundle_json TEXT NOT NULL,
                         created_at TEXT NOT NULL
                     )
                 """)
+                self._ensure_column(conn, "evidence_records", "persistence_status", "TEXT NOT NULL DEFAULT 'PERSISTED'")
+                self._ensure_column(conn, "evidence_bundles", "persistence_status", "TEXT NOT NULL DEFAULT 'PERSISTED'")
+                self._ensure_column(conn, "evidence_bundles", "persistence_error", "TEXT")
                 conn.commit()
         except Exception as exc:
             logger.warning(f"Could not initialize evidence SQLite schema: {exc}")
+
+    @staticmethod
+    def _ensure_column(conn: sqlite3.Connection, table: str, column: str, col_def: str) -> None:
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"PRAGMA table_info({table});")
+            existing = {row[1] for row in cursor.fetchall()}
+            if column not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_def};")
+        except Exception:
+            pass
+
 
     # ==========================================================================
     # Session Persistence
@@ -283,8 +303,7 @@ class EvidenceStore:
     # ==========================================================================
 
     def save_record(self, record: EvidenceRecord) -> EvidenceRecord:
-        """Persists an atomic EvidenceRecord."""
-        self._memory_records[record.evidence_id] = record
+        """Persists an atomic EvidenceRecord with explicit persistence status."""
         rec_json = record.model_dump_json()
 
         try:
@@ -292,11 +311,12 @@ class EvidenceStore:
                 conn.execute("""
                     INSERT INTO evidence_records (
                         evidence_id, session_id, execution_id, application_id, role, input_id,
-                        evidence_type, content_hash, size_bytes, capture_status, record_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        evidence_type, content_hash, size_bytes, capture_status, persistence_status, record_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(evidence_id) DO UPDATE SET
                         record_json=excluded.record_json,
-                        content_hash=excluded.content_hash
+                        content_hash=excluded.content_hash,
+                        persistence_status=excluded.persistence_status
                 """, (
                     record.evidence_id,
                     record.session_id,
@@ -308,13 +328,17 @@ class EvidenceStore:
                     record.content_hash,
                     record.size_bytes,
                     record.capture_status.value,
+                    EvidencePersistenceStatus.PERSISTED.value,
                     rec_json,
                     record.timestamp,
                 ))
                 conn.commit()
+            record.persistence_status = EvidencePersistenceStatus.PERSISTED
         except Exception as exc:
-            logger.warning(f"Failed to persist evidence record '{record.evidence_id}' to SQLite: {exc}")
+            record.persistence_status = EvidencePersistenceStatus.FAILED
+            logger.error(f"Failed to persist evidence record '{record.evidence_id}' to SQLite: {exc}")
 
+        self._memory_records[record.evidence_id] = record
         return record
 
     def get_record(self, evidence_id: str) -> Optional[EvidenceRecord]:
@@ -374,9 +398,9 @@ class EvidenceStore:
 
     def save_bundle(self, bundle: EvidenceBundle) -> EvidenceBundle:
         """Persists an EvidenceBundle to both SQLite and the filesystem artifact store."""
-        self._memory_bundles[bundle.session_id] = bundle
         bundle_json = bundle.model_dump_json(indent=2)
         manifest_json = bundle.manifest.model_dump_json(indent=2)
+        errors: list[str] = []
 
         # 1. SQLite Persistence
         try:
@@ -384,11 +408,13 @@ class EvidenceStore:
                 conn.execute("""
                     INSERT INTO evidence_bundles (
                         bundle_id, session_id, correlation_id, application_id, input_set_id,
-                        bundle_hash, manifest_json, bundle_json, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        bundle_hash, persistence_status, persistence_error, manifest_json, bundle_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(session_id) DO UPDATE SET
                         bundle_id=excluded.bundle_id,
                         bundle_hash=excluded.bundle_hash,
+                        persistence_status=excluded.persistence_status,
+                        persistence_error=excluded.persistence_error,
                         manifest_json=excluded.manifest_json,
                         bundle_json=excluded.bundle_json
                 """, (
@@ -398,13 +424,17 @@ class EvidenceStore:
                     bundle.application_id,
                     bundle.input_set_id,
                     bundle.bundle_hash,
+                    EvidencePersistenceStatus.PERSISTED.value,
+                    None,
                     manifest_json,
                     bundle_json,
                     bundle.created_at,
                 ))
                 conn.commit()
         except Exception as exc:
-            logger.warning(f"Failed to persist bundle '{bundle.bundle_id}' to SQLite: {exc}")
+            err_msg = f"SQLite save failed: {exc}"
+            errors.append(err_msg)
+            logger.error(f"Failed to persist bundle '{bundle.bundle_id}' to SQLite: {exc}")
 
         # 2. Filesystem Artifact Persistence
         try:
@@ -420,9 +450,23 @@ class EvidenceStore:
             with open(manifest_file, "w", encoding="utf-8") as f:
                 f.write(manifest_json)
         except Exception as exc:
-            logger.warning(f"Failed to write bundle artifact to filesystem: {exc}")
+            err_msg = f"Filesystem save failed: {exc}"
+            errors.append(err_msg)
+            logger.error(f"Failed to write bundle artifact to filesystem: {exc}")
 
+        if not errors:
+            bundle.persistence_status = EvidencePersistenceStatus.PERSISTED
+            bundle.persistence_error = None
+        elif len(errors) == 2:
+            bundle.persistence_status = EvidencePersistenceStatus.FAILED
+            bundle.persistence_error = "; ".join(errors)
+        else:
+            bundle.persistence_status = EvidencePersistenceStatus.PARTIAL
+            bundle.persistence_error = "; ".join(errors)
+
+        self._memory_bundles[bundle.session_id] = bundle
         return bundle
+
 
     def get_bundle(self, session_id: str) -> Optional[EvidenceBundle]:
         """Retrieves an EvidenceBundle by session ID from memory, filesystem, or SQLite."""

@@ -76,12 +76,14 @@ def trigger_paired_execution_endpoint(
         "bundle_hash": bundle.bundle_hash,
         "evidence_count": len(bundle.records),
         "is_partial": bundle.is_partial,
+        "persistence_status": bundle.persistence_status.value,
         "summary": {
             "total_inputs": session.total_inputs,
             "executed_inputs": session.executed_inputs,
             "status": session.status.value,
         },
     }
+
 
 
 @paired_router.get("/sessions")

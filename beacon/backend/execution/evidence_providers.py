@@ -149,23 +149,39 @@ class HttpEvidenceProvider(EvidenceProvider):
         prov = (observation.provenance if observation else {}) or {}
 
         # If this wasn't an HTTP adapter run, record not supported
-        if prov.get("adapter_type") != "http" and ctx.get("adapter_type") != "http":
+        is_http = (
+            prov.get("adapter_type") == "http"
+            or ctx.get("adapter_type") == "http"
+            or "http_status" in prov
+            or "status_code" in prov
+            or getattr(ctx.get("adapter"), "adapter_type", None) == "http"
+        )
+        if not is_http:
             return {
                 "status": EvidenceCaptureStatus.NOT_SUPPORTED.value,
                 "message": "HTTP evidence not supported for non-HTTP adapter.",
             }
 
-        headers = prov.get("headers") or {}
+        headers = prov.get("headers") or prov.get("request_headers") or getattr(ctx.get("adapter"), "headers", None) or {}
         safe_headers = SecretRedactor.redact(headers)
 
+        resp_headers = prov.get("response_headers") or {}
+        safe_resp_headers = SecretRedactor.redact(resp_headers)
+
+        req_body = prov.get("request_body") or (observation.raw_inputs if observation else None)
+        safe_req_body = SecretRedactor.redact(req_body)
+
+        resp_body = prov.get("response_body") or (observation.raw_outputs if observation else None)
+        safe_resp_body = SecretRedactor.redact(resp_body)
+
         http_ev = HttpEvidence(
-            method=prov.get("method") or "POST",
-            url_or_endpoint=prov.get("endpoint") or prov.get("url") or "",
+            method=prov.get("method") or ctx.get("method") or "POST",
+            url_or_endpoint=prov.get("endpoint") or prov.get("url") or ctx.get("endpoint") or "",
             request_headers=safe_headers if isinstance(safe_headers, dict) else {},
-            request_body=observation.raw_inputs if observation else None,
+            request_body=safe_req_body,
             response_status=prov.get("status_code") or prov.get("http_status"),
-            response_headers=prov.get("response_headers", {}),
-            response_body=observation.raw_outputs if observation else None,
+            response_headers=safe_resp_headers if isinstance(safe_resp_headers, dict) else {},
+            response_body=safe_resp_body,
             latency_ms=observation.execution_time_ms if observation else 0.0,
             correlation_id=ctx.get("correlation_id"),
         )
@@ -241,13 +257,46 @@ class FileEvidenceProvider(EvidenceProvider):
 
 
 class DatabaseEvidenceProvider(EvidenceProvider):
-    """Extensible database snapshot provider."""
+    """Generic database state snapshot provider supporting SQLite before/after capture."""
 
     provider_name: str = "database_provider"
     evidence_type: EvidenceType = EvidenceType.DATABASE
 
     def __init__(self, config: Optional[dict[str, Any]] = None):
         self.config = config or {}
+        self._before_snapshot: Optional[dict[str, Any]] = None
+
+    def _get_table_snapshot(self, db_path: str, table_name: str) -> tuple[int, list[dict[str, Any]], str]:
+        import sqlite3
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM {table_name}")
+            count = cursor.fetchone()[0]
+            cursor.execute(f"SELECT * FROM {table_name} LIMIT 100")
+            rows = [dict(r) for r in cursor.fetchall()]
+            canonical = json.dumps(rows, sort_keys=True, separators=(",", ":"), default=str)
+            table_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            return count, rows, table_hash
+
+    def capture_before(self, context: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        if not self.config:
+            return {}
+        db_path = self.config.get("database_path")
+        tables = self.config.get("tables", [])
+        if not db_path or not tables:
+            return {}
+
+        snapshot = {}
+        try:
+            for t in tables:
+                cnt, rows, h = self._get_table_snapshot(db_path, t)
+                snapshot[t] = {"row_count": cnt, "rows": SecretRedactor.redact(rows), "table_hash": h}
+            self._before_snapshot = snapshot
+        except Exception as exc:
+            logger.warning(f"Database capture_before failed: {exc}")
+            self._before_snapshot = {"error": str(exc)}
+        return self._before_snapshot
 
     def capture_after(
         self,
@@ -261,13 +310,62 @@ class DatabaseEvidenceProvider(EvidenceProvider):
                 message="No database state capture configured.",
             ).model_dump()
 
-        return DatabaseEvidence(
-            provider_name=self.config.get("provider", "custom"),
-            status=EvidenceCaptureStatus.CAPTURED,
-            snapshot_before=self.config.get("snapshot_before"),
-            snapshot_after=self.config.get("snapshot_after"),
-            message="Database snapshot recorded.",
-        ).model_dump()
+        db_path = self.config.get("database_path")
+        tables = self.config.get("tables", [])
+        if not db_path or not tables:
+            return DatabaseEvidence(
+                provider_name=self.config.get("provider", "sqlite"),
+                status=EvidenceCaptureStatus.CONFIGURATION_ERROR,
+                message="Invalid database configuration: database_path and tables are required.",
+            ).model_dump()
+
+        if not Path(db_path).exists():
+            return DatabaseEvidence(
+                provider_name=self.config.get("provider", "sqlite"),
+                connection_target=db_path,
+                configured_tables=tables,
+                status=EvidenceCaptureStatus.CONFIGURATION_ERROR,
+                message=f"Configured database file '{db_path}' does not exist.",
+            ).model_dump()
+
+        after_snapshot = {}
+        delta_detected = False
+        counts_before = {}
+        counts_after = {}
+
+        try:
+            for t in tables:
+                cnt, rows, h = self._get_table_snapshot(db_path, t)
+                after_snapshot[t] = {"row_count": cnt, "rows": SecretRedactor.redact(rows), "table_hash": h}
+                counts_after[t] = cnt
+
+                before_t = (self._before_snapshot or {}).get(t, {})
+                counts_before[t] = before_t.get("row_count", 0)
+                if before_t.get("table_hash") != h or before_t.get("row_count") != cnt:
+                    delta_detected = True
+
+            return DatabaseEvidence(
+                provider_name=self.config.get("provider", "sqlite"),
+                connection_target=db_path,
+                configured_tables=tables,
+                table_row_counts_before=counts_before,
+                table_row_counts_after=counts_after,
+                snapshot_before=self._before_snapshot,
+                snapshot_after=after_snapshot,
+                delta_detected=delta_detected,
+                status=EvidenceCaptureStatus.CAPTURED,
+                message="Database snapshot recorded successfully.",
+            ).model_dump()
+        except Exception as exc:
+            logger.error(f"Database capture_after failed: {exc}")
+            return DatabaseEvidence(
+                provider_name=self.config.get("provider", "sqlite"),
+                connection_target=db_path,
+                configured_tables=tables,
+                status=EvidenceCaptureStatus.CAPTURE_ERROR,
+                message=f"Database snapshot capture failed: {exc}",
+            ).model_dump()
+
 
 
 class TraceEvidenceProvider(EvidenceProvider):

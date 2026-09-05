@@ -8,7 +8,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 from typing import Any, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
 
 from common.contracts import CanonicalInput, compute_canonical_input_hash
 
@@ -21,7 +22,9 @@ def compute_payload_hash(payload: dict[str, Any]) -> str:
 
 class CanonicalInputItem(BaseModel):
     """An individual, sequence-indexed canonical input item with cryptographic hash."""
-    input_id: str
+    model_config = ConfigDict(frozen=True)
+
+    input_id: str = ""
     sequence: int = 0
     payload: dict[str, Any] = Field(default_factory=dict)
     input_hash: str = ""
@@ -36,16 +39,17 @@ class CanonicalInputItem(BaseModel):
 
     def to_canonical_input(self) -> CanonicalInput:
         """Returns an independent CanonicalInput copy for execution."""
+        import copy
         return CanonicalInput(
             input_id=self.input_id,
-            payload=dict(self.payload),
-            values=dict(self.payload),
+            payload=copy.deepcopy(self.payload),
+            values=copy.deepcopy(self.payload),
             input_hash=self.input_hash,
-            provenance=dict(self.provenance),
+            provenance=copy.deepcopy(self.provenance),
         )
 
 
-def compute_input_set_hash(inputs: list[CanonicalInputItem], source: str = "", version: str = "v2.0") -> str:
+def compute_input_set_hash(inputs: Union[list[CanonicalInputItem], tuple[CanonicalInputItem, ...]], source: str = "", version: str = "v2.0") -> str:
     """Computes a deterministic SHA-256 content hash across all inputs in sequence."""
     elements = [
         {
@@ -53,7 +57,6 @@ def compute_input_set_hash(inputs: list[CanonicalInputItem], source: str = "", v
             "input_id": item.input_id,
             "input_hash": compute_payload_hash(item.payload) if item.payload else item.input_hash,
         }
-
         for item in sorted(inputs, key=lambda x: x.sequence)
     ]
     manifest = {
@@ -70,18 +73,23 @@ class InputSet(BaseModel):
     """Immutable, content-addressed collection of canonical inputs for paired execution.
     
     Guarantees that both Reference and Target adapters execute against the identical
-    deterministic input domain.
+    deterministic input domain and prevents silent post-creation mutation.
     """
+    model_config = ConfigDict(frozen=True)
+
     input_set_id: str = ""
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     source: str = "explicit_inputs"
     input_count: int = 0
-    inputs: list[CanonicalInputItem] = Field(default_factory=list)
+    inputs: tuple[CanonicalInputItem, ...] = Field(default_factory=tuple)
     canonicalization_version: str = "v2.0"
     content_hash: str = ""
     provenance: dict[str, Any] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
+        if self.inputs and not isinstance(self.inputs, tuple):
+            object.__setattr__(self, "inputs", tuple(self.inputs))
+
         if not self.inputs:
             object.__setattr__(self, "input_count", 0)
         else:
@@ -96,6 +104,7 @@ class InputSet(BaseModel):
         if not self.input_set_id:
             h = self.content_hash[:12] if self.content_hash else "empty"
             object.__setattr__(self, "input_set_id", f"INPSET-{h}")
+
 
     def verify_content_hash(self) -> bool:
         """Verifies that the content hash matches the recomputed hash over all inputs."""

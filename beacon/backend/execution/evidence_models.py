@@ -1,8 +1,8 @@
 """BEACON V2 — Phase 3 Generic Evidence Models, Bundles, Manifests & Integrity Contracts.
 
 Defines canonical evidence structures capturing real application outputs, execution errors,
-runtime context, system logs, lifecycle traces, filesystem deltas, HTTP metrics, and cryptographic
-tamper-evident SHA-256 manifests.
+runtime context, system logs, lifecycle traces, filesystem deltas, database snapshots,
+HTTP metrics, explicit persistence status, and cryptographic tamper-evident SHA-256 manifests.
 """
 
 from datetime import datetime, timezone
@@ -10,7 +10,7 @@ from enum import Enum
 import hashlib
 import json
 from typing import Any, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class EvidenceType(str, Enum):
@@ -33,6 +33,16 @@ class EvidenceCaptureStatus(str, Enum):
     NOT_SUPPORTED = "NOT_SUPPORTED"
     NOT_AVAILABLE = "NOT_AVAILABLE"
     FAILED = "FAILED"
+    CONFIGURATION_ERROR = "CONFIGURATION_ERROR"
+    CAPTURE_ERROR = "CAPTURE_ERROR"
+
+
+class EvidencePersistenceStatus(str, Enum):
+    """Explicit status of evidence storage in SQLite/filesystem."""
+    PERSISTED = "PERSISTED"
+    FAILED = "FAILED"
+    NOT_AVAILABLE = "NOT_AVAILABLE"
+    PARTIAL = "PARTIAL"
 
 
 def compute_content_hash(data: Any) -> str:
@@ -107,7 +117,7 @@ class TraceEvent(BaseModel):
     event_id: str
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     sequence: int = 0
-    event_type: str  # e.g., "START", "READY", "EXECUTE", "COLLECT", "CLEANUP"
+    event_type: str  # e.g., "START", "READY", "EXECUTE", "COLLECT", "STOP", "CLEANUP"
     source: str = "coordinator"
     details: dict[str, Any] = Field(default_factory=dict)
 
@@ -137,10 +147,15 @@ class FileEvidence(BaseModel):
 
 
 class DatabaseEvidence(BaseModel):
-    """Database state snapshot capture."""
+    """Database state snapshot capture before and after execution."""
     provider_name: str = "none"
+    connection_target: Optional[str] = None
+    configured_tables: list[str] = Field(default_factory=list)
+    table_row_counts_before: dict[str, int] = Field(default_factory=dict)
+    table_row_counts_after: dict[str, int] = Field(default_factory=dict)
     snapshot_before: Optional[dict[str, Any]] = None
     snapshot_after: Optional[dict[str, Any]] = None
+    delta_detected: bool = False
     status: EvidenceCaptureStatus = EvidenceCaptureStatus.NOT_SUPPORTED
     message: str = "Database state capture not configured or not supported."
 
@@ -170,7 +185,9 @@ class MetadataEvidence(BaseModel):
 # ==============================================================================
 
 class EvidenceRecord(BaseModel):
-    """Atomic unit of behavioral evidence with deterministic cryptographic hash."""
+    """Atomic unit of behavioral evidence with deterministic cryptographic hash and unique occurrence identity."""
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     evidence_id: str
     session_id: str
     execution_id: str = ""
@@ -185,6 +202,7 @@ class EvidenceRecord(BaseModel):
     content_hash: str = ""
     size_bytes: int = 0
     capture_status: EvidenceCaptureStatus = EvidenceCaptureStatus.CAPTURED
+    persistence_status: EvidencePersistenceStatus = EvidencePersistenceStatus.NOT_AVAILABLE
     provenance: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -209,6 +227,7 @@ class EvidenceManifestItem(BaseModel):
     content_hash: str
     size_bytes: int
     capture_status: EvidenceCaptureStatus
+    persistence_status: EvidencePersistenceStatus = EvidencePersistenceStatus.PERSISTED
 
 
 class EvidenceManifest(BaseModel):
@@ -234,6 +253,7 @@ class EvidenceManifest(BaseModel):
                 "content_hash": item.content_hash,
                 "size_bytes": item.size_bytes,
                 "capture_status": item.capture_status.value,
+                "persistence_status": item.persistence_status.value,
             }
             for item in sorted(self.items, key=lambda x: x.evidence_id)
         ]
@@ -267,6 +287,8 @@ class EvidenceBundle(BaseModel):
     records: list[EvidenceRecord] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     is_partial: bool = False
+    persistence_status: EvidencePersistenceStatus = EvidencePersistenceStatus.NOT_AVAILABLE
+    persistence_error: Optional[str] = None
     error_summary: Optional[str] = None
 
     def model_post_init(self, __context: Any) -> None:

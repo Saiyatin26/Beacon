@@ -1,7 +1,8 @@
 """BEACON V2 — Phase 3 Evidence Normalization & Hashing Layer.
 
 Normalizes raw execution observations and provider telemetry into canonical, secret-redacted,
-content-addressed EvidenceRecord items and compiles tamper-evident EvidenceManifests.
+content-addressed EvidenceRecord items with distinct occurrence identities, and compiles
+tamper-evident EvidenceManifests with aggregate bundle hashes.
 """
 
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from .evidence_models import (
     EvidenceConfiguration,
     EvidenceManifest,
     EvidenceManifestItem,
+    EvidencePersistenceStatus,
     EvidenceRecord,
     EvidenceType,
     compute_content_hash,
@@ -43,10 +45,17 @@ class EvidenceNormalizer:
         sequence: int = 0,
         source: str = "adapter",
         capture_status: EvidenceCaptureStatus = EvidenceCaptureStatus.CAPTURED,
+        persistence_status: EvidencePersistenceStatus = EvidencePersistenceStatus.NOT_AVAILABLE,
         provenance: Optional[dict[str, Any]] = None,
         metadata: Optional[dict[str, Any]] = None,
+        evidence_id: Optional[str] = None,
     ) -> EvidenceRecord:
-        """Sanitizes, hashes, and canonicalizes a single evidence item into an EvidenceRecord."""
+        """Sanitizes, hashes, and canonicalizes a single evidence item into an EvidenceRecord.
+        
+        Guarantees:
+        - Evidence Identity is separated from Content Integrity.
+        - Two distinct evidence occurrences never collide in ID just because payloads match.
+        """
         raw_dict = payload.model_dump() if hasattr(payload, "model_dump") else (
             dict(payload) if isinstance(payload, dict) else {"content": payload}
         )
@@ -56,13 +65,20 @@ class EvidenceNormalizer:
         if not isinstance(safe_payload, dict):
             safe_payload = {"content": safe_payload}
 
-        # 2. Canonical JSON Serialization for deterministic hashing
+        # 2. Canonical JSON Serialization for deterministic content hashing
         canonical_str = json.dumps(safe_payload, sort_keys=True, separators=(",", ":"), default=str)
         content_hash = hashlib.sha256(canonical_str.encode("utf-8")).hexdigest()
         size_bytes = len(canonical_str.encode("utf-8"))
 
-        # 3. Deterministic Evidence ID
-        ev_id = f"EVID-{content_hash[:12]}"
+        # 3. Unique Occurrence Evidence ID (Distinct from Content Hash)
+        if not evidence_id:
+            role_tag = (role or "tgt")[:3].lower()
+            type_tag = evidence_type.value[:3].lower()
+            occurrence_raw = f"{session_id}:{execution_id}:{role}:{input_id or ''}:{evidence_type.value}:{sequence}"
+            occurrence_digest = hashlib.sha256(occurrence_raw.encode("utf-8")).hexdigest()[:12]
+            ev_id = f"EVID-{role_tag}-{type_tag}-{sequence:03d}-{occurrence_digest}"
+        else:
+            ev_id = evidence_id
 
         now_iso = datetime.now(timezone.utc).isoformat()
         prov = SecretRedactor.redact(provenance or {})
@@ -83,6 +99,7 @@ class EvidenceNormalizer:
             content_hash=content_hash,
             size_bytes=size_bytes,
             capture_status=capture_status,
+            persistence_status=persistence_status,
             provenance=prov if isinstance(prov, dict) else {},
             metadata=meta if isinstance(meta, dict) else {},
         )
@@ -109,6 +126,7 @@ class EvidenceNormalizer:
                     content_hash=r.content_hash,
                     size_bytes=r.size_bytes,
                     capture_status=r.capture_status,
+                    persistence_status=r.persistence_status,
                 )
             )
 
@@ -135,6 +153,8 @@ class EvidenceNormalizer:
         reference_execution_ids: Optional[list[str]] = None,
         target_execution_ids: Optional[list[str]] = None,
         is_partial: bool = False,
+        persistence_status: EvidencePersistenceStatus = EvidencePersistenceStatus.NOT_AVAILABLE,
+        persistence_error: Optional[str] = None,
         error_summary: Optional[str] = None,
     ) -> EvidenceBundle:
         """Assembles and signs a complete EvidenceBundle."""
@@ -160,6 +180,8 @@ class EvidenceNormalizer:
             bundle_hash=manifest.bundle_hash,
             records=records,
             is_partial=is_partial,
+            persistence_status=persistence_status,
+            persistence_error=persistence_error,
             error_summary=error_summary,
         )
 

@@ -49,15 +49,18 @@ class HttpAdapter(ImplementationAdapter):
         allow_private_network: bool = True,
         dns_resolver: Optional[Callable[[str], list[str]]] = None,
         metadata: Optional[dict[str, Any]] = None,
+        endpoint: Optional[str] = None,
+        default_headers: Optional[dict[str, str]] = None,
     ):
         self.base_url = base_url.rstrip("/")
-        self.path_template = path_template
+        self.path_template = endpoint if endpoint is not None else path_template
         self.method = method.upper()
-        self.headers = dict(headers or {})
+        self.headers = dict(headers or default_headers or {})
         self.auth_reference = auth_reference
         self.timeout_seconds = timeout_seconds
         self.name = name
         self.version = version
+
         self.role = role
         self.adapter_type = AdapterType.HTTP
         self.input_mapper = input_mapper or InputMapper()
@@ -280,10 +283,14 @@ class HttpAdapter(ImplementationAdapter):
                 "role": str(self.role),
                 "status_code": status_code,
                 "url": safe_url,
+                "method": self.method,
+                "headers": SecretRedactor.redact(dict(headers)),
+                "response_headers": dict(resp.headers),
             }
             if redirect_location:
                 provenance_data["redirect_location"] = SecretRedactor.redact_string(redirect_location)
                 provenance_data["redirect_followed"] = False
+
 
             return Observation(
                 input_id=actual_input_id,

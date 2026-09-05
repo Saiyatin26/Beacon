@@ -50,7 +50,9 @@ from execution import (
     EvidenceManifest,
     EvidenceManifestItem,
     EvidenceNormalizer,
+    EvidencePersistenceStatus,
     EvidenceRecord,
+
     EvidenceStore,
     EvidenceType,
     FileEvidence,
@@ -882,4 +884,375 @@ def test_paired_execution_cleanup_failure_recorded_as_evidence():
     ]
     assert len(clean_errs) == 1
     assert "Simulated cleanup socket close failure" in clean_errs[0].payload["message"]
+
+
+# ==============================================================================
+# 11. Final Remediation Tests (Sections 8, 13, 17, 22, 27, 31, 45)
+# ==============================================================================
+
+class IdenticalOutputAdapter(ImplementationAdapter):
+    """Adapter producing exact fixed output to test evidence ID collision resistance."""
+    def __init__(self, name: str, role: AdapterRole, fixed_output: dict[str, Any]):
+        self.name = name
+        self.version = "1.0.0"
+        self.role = role
+        self.fixed_output = fixed_output
+
+    def execute(self, inputs: Union[dict[str, Any], CanonicalInput], input_id: str = "") -> Observation:
+        return Observation(
+            input_id=input_id or "inp_1",
+            raw_inputs={},
+            normalized_inputs={},
+            raw_outputs=dict(self.fixed_output),
+            normalized_outputs=dict(self.fixed_output),
+            execution_status="SUCCESS",
+            implementation_name=self.name,
+            implementation_version=self.version,
+            execution_time_ms=5.0,
+        )
+
+
+def test_evidence_id_uniqueness_identical_outputs_collision_regression():
+    """Sections 8 & 45: Identical outputs between Reference and Target NEVER collide in evidence_id."""
+    fixed_data = {"value": 100, "status": "APPROVED"}
+    ref_adp = IdenticalOutputAdapter("identical_ref", AdapterRole.REFERENCE, fixed_data)
+    target_adp = IdenticalOutputAdapter("identical_target", AdapterRole.TARGET, fixed_data)
+
+    req = PairedExecutionRequest(
+        application_id="collision_test_app",
+        reference_adapter=ref_adp,
+        target_adapter=target_adp,
+        custom_inputs=[{"input_key": "any"}],
+    )
+
+    session, bundle = paired_execution_coordinator.execute_paired(req)
+
+    ref_outputs = [
+        r for r in bundle.records if r.evidence_type == EvidenceType.OUTPUT and r.role == "reference"
+    ]
+    target_outputs = [
+        r for r in bundle.records if r.evidence_type == EvidenceType.OUTPUT and r.role == "target"
+    ]
+
+    assert len(ref_outputs) == 1
+    assert len(target_outputs) == 1
+
+    ref_ev = ref_outputs[0]
+    target_ev = target_outputs[0]
+
+    # 1. Evidence IDs MUST be distinct
+    assert ref_ev.evidence_id != target_ev.evidence_id, (
+        f"Collision detected! Both records have evidence_id: {ref_ev.evidence_id}"
+    )
+
+    # 2. Content hashes MUST be identical because payload is identical
+    assert ref_ev.content_hash == target_ev.content_hash, (
+        f"Content hashes should match for identical payload: {ref_ev.content_hash} != {target_ev.content_hash}"
+    )
+
+    # 3. Both records exist in EvidenceStore and can be independently retrieved
+    retrieved_ref = evidence_store.get_record(ref_ev.evidence_id)
+    retrieved_target = evidence_store.get_record(target_ev.evidence_id)
+
+    assert retrieved_ref is not None
+    assert retrieved_target is not None
+    assert retrieved_ref.role == "reference"
+    assert retrieved_target.role == "target"
+    assert retrieved_ref.evidence_id != retrieved_target.evidence_id
+
+
+def test_http_evidence_integration_real_paired_execution():
+    """Sections 10-13: HttpEvidenceProvider actively captures request/response telemetry in real paired execution."""
+    import http.server
+    import threading
+
+    class TestHttpHandler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("X-Custom-Header", "test-value")
+            self.end_headers()
+            self.wfile.write(b'{"server_received": true, "code": 200}')
+
+        def log_message(self, format, *args):
+            pass  # Silence stderr logs
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), TestHttpHandler)
+    port = server.server_address[1]
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+
+    try:
+        from execution.http_adapter import HttpAdapter
+
+        ref_http = HttpAdapter(
+            base_url=f"http://127.0.0.1:{port}",
+            endpoint="/process",
+            name="ref_http_service",
+            role=AdapterRole.REFERENCE,
+            default_headers={"Authorization": "Bearer SUPER_SECRET_TOKEN", "User-Agent": "BeaconRef/1.0"},
+        )
+        target_http = HttpAdapter(
+            base_url=f"http://127.0.0.1:{port}",
+            endpoint="/process",
+            name="target_http_service",
+            role=AdapterRole.TARGET,
+            default_headers={"X-API-KEY": "SECRET_KEY_12345", "User-Agent": "BeaconTarget/1.0"},
+        )
+
+        req = PairedExecutionRequest(
+            application_id="http_integration_app",
+            reference_adapter=ref_http,
+            target_adapter=target_http,
+            custom_inputs=[{"tx_id": "TX_999", "amount": 250}],
+            evidence_config=EvidenceConfiguration(capture_http=True),
+        )
+
+        session, bundle = paired_execution_coordinator.execute_paired(req)
+
+        # Verify HTTP evidence in the final bundle
+        http_recs = [r for r in bundle.records if r.evidence_type == EvidenceType.HTTP]
+        assert len(http_recs) == 2, f"Expected 2 HTTP records, found {len(http_recs)}"
+
+        ref_http_ev = next(r for r in http_recs if r.role == "reference")
+        target_http_ev = next(r for r in http_recs if r.role == "target")
+
+        # Verify payload fields and secret redaction
+        assert ref_http_ev.payload["response_status"] == 200
+        assert target_http_ev.payload["response_status"] == 200
+
+        # Verify Authorization and API key are redacted
+        ref_headers = ref_http_ev.payload.get("request_headers", {})
+        target_headers = target_http_ev.payload.get("request_headers", {})
+        assert ref_headers.get("Authorization") == "[REDACTED]"
+        assert target_headers.get("X-API-KEY") == "[REDACTED]"
+
+        # Verify persistence and retrieval
+        retrieved_bundle = evidence_store.get_bundle(session.session_id)
+        assert retrieved_bundle is not None
+        persisted_http = [r for r in retrieved_bundle.records if r.evidence_type == EvidenceType.HTTP]
+        assert len(persisted_http) == 2
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_database_evidence_integration_sqlite_paired_execution(tmp_path):
+    """Sections 14-17: DatabaseEvidenceProvider captures SQLite before/after snapshots and detects deltas."""
+    import sqlite3
+
+    db_file = tmp_path / "test_paired.db"
+    with sqlite3.connect(str(db_file)) as conn:
+        conn.execute("CREATE TABLE accounts (id INTEGER PRIMARY KEY, balance REAL);")
+        conn.execute("INSERT INTO accounts VALUES (1, 1000.0);")
+        conn.commit()
+
+    class DatabaseMutatingAdapter(ImplementationAdapter):
+        def __init__(self, name: str, role: AdapterRole, db_path: str):
+            self.name = name
+            self.role = role
+            self.db_path = db_path
+
+        def execute(self, inputs: Union[dict[str, Any], CanonicalInput], input_id: str = "") -> Observation:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("UPDATE accounts SET balance = balance + 50 WHERE id = 1;")
+                conn.commit()
+            return Observation(
+                input_id=input_id or "inp_db",
+                raw_inputs={},
+                normalized_inputs={},
+                raw_outputs={"updated": True},
+                normalized_outputs={"updated": True},
+                execution_status="SUCCESS",
+                implementation_name=self.name,
+            )
+
+    ref_adp = DatabaseMutatingAdapter("ref_db_adapter", AdapterRole.REFERENCE, str(db_file))
+    target_adp = DatabaseMutatingAdapter("target_db_adapter", AdapterRole.TARGET, str(db_file))
+
+    req = PairedExecutionRequest(
+        application_id="db_integration_app",
+        reference_adapter=ref_adp,
+        target_adapter=target_adp,
+        custom_inputs=[{"action": "deposit"}],
+        evidence_config=EvidenceConfiguration(
+            capture_database=True,
+            database_config={"database_path": str(db_file), "tables": ["accounts"]},
+        ),
+    )
+
+    session, bundle = paired_execution_coordinator.execute_paired(req)
+
+    db_recs = [r for r in bundle.records if r.evidence_type == EvidenceType.DATABASE]
+    assert len(db_recs) == 2, f"Expected 2 Database evidence records, found {len(db_recs)}"
+
+    ref_db_ev = next(r for r in db_recs if r.role == "reference")
+    target_db_ev = next(r for r in db_recs if r.role == "target")
+
+    assert ref_db_ev.payload["status"] == "CAPTURED"
+    assert ref_db_ev.payload["delta_detected"] is True
+    assert target_db_ev.payload["status"] == "CAPTURED"
+    assert target_db_ev.payload["delta_detected"] is True
+    assert "accounts" in ref_db_ev.payload["configured_tables"]
+
+    # Verify unconfigured database provider reports NOT_SUPPORTED
+    unconf_provider = DatabaseEvidenceProvider(config=None)
+    unconf_data = unconf_provider.capture_after(None, None)
+    assert unconf_data["status"] == "NOT_SUPPORTED"
+
+
+def test_input_set_strict_immutability():
+    """Sections 25-27: InputSet and CanonicalInputItem are strictly frozen and cannot be mutated."""
+    from pydantic import ValidationError
+
+    raw_data = [{"k": "v1"}, {"k": "v2"}]
+    input_set = InputSet.from_inputs(raw_data)
+
+    initial_hash = input_set.content_hash
+    assert len(initial_hash) == 64
+
+    # 1. Attempting attribute modification on InputSet raises ValidationError
+    with pytest.raises(ValidationError):
+        input_set.source = "tampered_source"
+
+    with pytest.raises(ValidationError):
+        input_set.content_hash = "tampered_hash"
+
+    with pytest.raises(ValidationError):
+        input_set.inputs = ()
+
+    # 2. Attempting attribute modification on CanonicalInputItem raises ValidationError
+    with pytest.raises(ValidationError):
+        input_set.inputs[0].payload = {"tampered": True}
+
+    # 3. Tuple container prevents append/pop
+    with pytest.raises(AttributeError):
+        input_set.inputs.append(CanonicalInputItem(input_id="injected", sequence=99))
+
+    # Hash remains invariant
+    assert input_set.content_hash == initial_hash
+    assert input_set.verify_content_hash() is True
+
+
+def test_evidence_storage_explicit_failure_handling(monkeypatch):
+    """Sections 28-31: Storage failures are explicitly recorded and never falsely reported as persisted."""
+    ref_adp = GenericMathReferenceAdapter()
+    target_adp = GenericMathTargetAdapter()
+
+    req = PairedExecutionRequest(
+        application_id="storage_fail_app",
+        reference_adapter=ref_adp,
+        target_adapter=target_adp,
+        custom_inputs=[{"x": 10}],
+    )
+
+    # Monkeypatch save_bundle on store to simulate persistence failure
+    def failing_save_bundle(bundle):
+        bundle.persistence_status = EvidencePersistenceStatus.FAILED
+        bundle.persistence_error = "Simulated disk full / database locked error"
+        return bundle
+
+    monkeypatch.setattr(evidence_store, "save_bundle", failing_save_bundle)
+
+    session, bundle = paired_execution_coordinator.execute_paired(req)
+
+    # Verify bundle and session state reflects failure explicitly
+    assert bundle.persistence_status == EvidencePersistenceStatus.FAILED
+    assert "Simulated disk full" in (bundle.persistence_error or "")
+    assert session.status == PairedExecutionStatus.PARTIAL
+    assert "Evidence bundle persistence failed" in (session.error_summary or "")
+
+
+def test_lifecycle_process_alive_readiness_with_real_process_handle():
+    """Sections 18-22: PROCESS_ALIVE readiness requires a genuine running process handle and fails if absent."""
+    import subprocess
+    import sys
+
+    # 1. Successful check with real running process
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2)"])
+    try:
+        cfg = ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=2.0)
+        res = ReadinessChecker.wait_until_ready(cfg, process=proc)
+        assert res.ready is True
+        assert "is alive and running" in res.diagnostics
+    finally:
+        proc.terminate()
+        proc.wait()
+
+    # 2. Missing process handle must FAIL CLOSED
+    cfg = ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=1.0)
+    res_no_proc = ReadinessChecker.wait_until_ready(cfg, process=None, adapter=None)
+    assert res_no_proc.ready is False
+    assert "No process handle available" in res_no_proc.diagnostics
+
+
+def test_paired_execution_full_lifecycle_start_ready_execute_stop_cleanup():
+    """Sections 18-21: Verifies the complete lifecycle: configure -> prepare -> start -> ready -> execute -> stop -> cleanup."""
+    lifecycle_log: list[str] = []
+
+    class LifecycleTrackingAdapter(ImplementationAdapter):
+        def __init__(self, name: str, role: AdapterRole):
+            self.name = name
+            self.role = role
+
+        def configure(self, config: Optional[dict[str, Any]] = None) -> None:
+            lifecycle_log.append(f"{self.name}:configure")
+
+        def prepare(self, context: Optional[dict[str, Any]] = None) -> None:
+            lifecycle_log.append(f"{self.name}:prepare")
+
+        def start(self, context: Optional[dict[str, Any]] = None) -> Any:
+            lifecycle_log.append(f"{self.name}:start")
+            return self
+
+        def execute(self, inputs: Union[dict[str, Any], CanonicalInput], input_id: str = "") -> Observation:
+            lifecycle_log.append(f"{self.name}:execute")
+            return Observation(
+                input_id=input_id or "inp",
+                raw_inputs={},
+                normalized_inputs={},
+                raw_outputs={"done": True},
+                normalized_outputs={"done": True},
+                execution_status="SUCCESS",
+                implementation_name=self.name,
+            )
+
+        def stop(self, context: Optional[dict[str, Any]] = None) -> None:
+            lifecycle_log.append(f"{self.name}:stop")
+
+        def cleanup(self) -> None:
+            lifecycle_log.append(f"{self.name}:cleanup")
+
+    ref = LifecycleTrackingAdapter("ref_lifecycle", AdapterRole.REFERENCE)
+    target = LifecycleTrackingAdapter("target_lifecycle", AdapterRole.TARGET)
+
+    req = PairedExecutionRequest(
+        application_id="lifecycle_full_app",
+        reference_adapter=ref,
+        target_adapter=target,
+        custom_inputs=[{"x": 1}],
+    )
+
+    session, bundle = paired_execution_coordinator.execute_paired(req)
+    assert session.status == PairedExecutionStatus.COMPLETED
+
+    # Verify exact lifecycle execution order
+    expected = [
+        "ref_lifecycle:configure",
+        "ref_lifecycle:prepare",
+        "ref_lifecycle:start",
+        "ref_lifecycle:execute",
+        "ref_lifecycle:stop",
+        "ref_lifecycle:cleanup",
+        "target_lifecycle:configure",
+        "target_lifecycle:prepare",
+        "target_lifecycle:start",
+        "target_lifecycle:execute",
+        "target_lifecycle:stop",
+        "target_lifecycle:cleanup",
+    ]
+    assert lifecycle_log == expected
+
 

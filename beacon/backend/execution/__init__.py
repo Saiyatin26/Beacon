@@ -53,8 +53,10 @@ from .evidence_models import (
     EvidenceConfiguration,
     EvidenceManifest,
     EvidenceManifestItem,
+    EvidencePersistenceStatus,
     EvidenceRecord,
     EvidenceType,
+
     FileEvidence,
     FileStateSnapshot,
     HttpEvidence,
@@ -131,8 +133,10 @@ __all__ = [
     "EvidenceConfiguration",
     "EvidenceManifest",
     "EvidenceManifestItem",
+    "EvidencePersistenceStatus",
     "EvidenceRecord",
     "EvidenceType",
+
     "FileEvidence",
     "FileStateSnapshot",
     "HttpEvidence",

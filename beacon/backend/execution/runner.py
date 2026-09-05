@@ -55,6 +55,7 @@ class ApplicationExecutor:
         input_id: str = "",
         session_id: Optional[str] = None,
         application_id: str = "",
+        manage_lifecycle: bool = True,
     ) -> ExecutionResult:
         """Executes a single input against an ImplementationAdapter with full lifecycle tracking."""
         exec_id = f"EXEC-{hashlib.sha256(f'{adapter.name}_{time.perf_counter()}'.encode()).hexdigest()[:12]}"
@@ -64,8 +65,9 @@ class ApplicationExecutor:
         start_time = time.perf_counter()
 
         try:
-            # 1. Lifecycle Prepare
-            adapter.prepare()
+            # 1. Lifecycle Prepare (if managing individual lifecycle)
+            if manage_lifecycle and hasattr(adapter, "prepare"):
+                adapter.prepare()
 
             # 2. Lifecycle Execute
             obs = adapter.execute(input_data, input_id=actual_input_id)
@@ -160,11 +162,13 @@ class ApplicationExecutor:
             return result
 
         finally:
-            # 5. Lifecycle Cleanup (Guaranteed execution in finally block)
-            try:
-                adapter.cleanup()
-            except Exception as cleanup_exc:
-                logger.warning(f"Adapter '{adapter.name}' cleanup notice: {cleanup_exc}")
+            # 5. Lifecycle Cleanup (if managing individual lifecycle)
+            if manage_lifecycle:
+                try:
+                    if hasattr(adapter, "cleanup"):
+                        adapter.cleanup()
+                except Exception as cleanup_exc:
+                    logger.warning(f"Adapter '{adapter.name}' cleanup notice: {cleanup_exc}")
 
     def execute_batch(
         self,
@@ -184,22 +188,32 @@ class ApplicationExecutor:
         self.repository.save_session(session)
 
         results: list[ExecutionResult] = []
-        for idx, inp in enumerate(inputs):
-            inp_id = inp.input_id if isinstance(inp, CanonicalInput) else f"INP-{idx+1:04d}"
-            res = self.execute_single(
-                adapter=adapter,
-                input_data=inp,
-                input_id=inp_id,
-                session_id=session.session_id,
-                application_id=application_id,
-            )
-            results.append(res)
-            if res.status == ExecutionStatus.SUCCEEDED:
-                session.succeeded_count += 1
-            elif res.status == ExecutionStatus.TIMEOUT:
-                session.timeout_count += 1
-            else:
-                session.failed_count += 1
+        try:
+            if hasattr(adapter, "prepare"):
+                adapter.prepare()
+            for idx, inp in enumerate(inputs):
+                inp_id = inp.input_id if isinstance(inp, CanonicalInput) else f"INP-{idx+1:04d}"
+                res = self.execute_single(
+                    adapter=adapter,
+                    input_data=inp,
+                    input_id=inp_id,
+                    session_id=session.session_id,
+                    application_id=application_id,
+                    manage_lifecycle=False,
+                )
+                results.append(res)
+                if res.status == ExecutionStatus.SUCCEEDED:
+                    session.succeeded_count += 1
+                elif res.status == ExecutionStatus.TIMEOUT:
+                    session.timeout_count += 1
+                else:
+                    session.failed_count += 1
+        finally:
+            try:
+                if hasattr(adapter, "cleanup"):
+                    adapter.cleanup()
+            except Exception as cleanup_exc:
+                logger.warning(f"Batch adapter cleanup notice: {cleanup_exc}")
 
         session.mark_completed()
         self.repository.save_session(session)
@@ -208,6 +222,7 @@ class ApplicationExecutor:
             f"| succeeded={session.succeeded_count} | failed={session.failed_count} | timeout={session.timeout_count}"
         )
         return session, results
+
 
 
 application_executor = ApplicationExecutor()

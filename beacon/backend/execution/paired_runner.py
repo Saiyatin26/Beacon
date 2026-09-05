@@ -32,8 +32,10 @@ from .evidence_models import (
     EvidenceCaptureStatus,
     EvidenceConfiguration,
     EvidenceManifest,
+    EvidencePersistenceStatus,
     EvidenceRecord,
     EvidenceType,
+
     FileEvidence,
     HttpEvidence,
     LogEvidence,
@@ -246,25 +248,33 @@ class PairedExecutionCoordinator:
         trace_provider.record_event("REFERENCE_STARTING", details={"adapter": ref_name})
 
         ref_fatal_error: Optional[str] = None
+        ref_ctx = {"session_id": session.session_id, "correlation_id": session.correlation_id, "role": "reference"}
+        ref_proc = None
 
-        # Reference Prepare
+        # Reference Configure, Prepare, and Start
         try:
+            if hasattr(ref_adp, "configure"):
+                ref_adp.configure(ref_ctx)
             if hasattr(ref_adp, "prepare"):
-                ref_adp.prepare({"session_id": session.session_id, "correlation_id": session.correlation_id})
+                ref_adp.prepare(ref_ctx)
+            if hasattr(ref_adp, "start"):
+                ref_proc = ref_adp.start(ref_ctx)
         except Exception as exc:
-            ref_fatal_error = f"Reference adapter prepare failed: {exc}"
+            ref_fatal_error = f"Reference adapter startup failed: {exc}"
             logger.error(f"[SESSION {session.session_id}][REFERENCE] {ref_fatal_error}")
 
         # Reference Readiness Check
         if not ref_fatal_error and request.readiness_config_ref:
-            readiness_res = ReadinessChecker.wait_until_ready(request.readiness_config_ref, adapter=ref_adp)
+            readiness_res = ReadinessChecker.wait_until_ready(
+                request.readiness_config_ref, adapter=ref_adp, process=ref_proc
+            )
             if not readiness_res.ready:
                 ref_fatal_error = f"Reference readiness failed ({readiness_res.strategy.value}): {readiness_res.diagnostics}"
                 logger.error(f"[SESSION {session.session_id}][REFERENCE] {ref_fatal_error}")
             else:
                 logger.info(f"[SESSION {session.session_id}][REFERENCE] Application READY in {readiness_res.duration_ms}ms")
                 trace_provider.record_event("REFERENCE_READY", details={"duration_ms": readiness_res.duration_ms})
-        else:
+        elif not ref_fatal_error:
             logger.info(f"[SESSION {session.session_id}][REFERENCE] Application READY")
             trace_provider.record_event("REFERENCE_READY")
 
@@ -291,6 +301,8 @@ class PairedExecutionCoordinator:
                 }
                 if ev_cfg.capture_filesystem:
                     file_provider.capture_before(before_ctx)
+                if ev_cfg.capture_database:
+                    db_provider.capture_before(before_ctx)
 
                 # Execute Single
                 res = self.executor.execute_single(
@@ -299,7 +311,9 @@ class PairedExecutionCoordinator:
                     input_id=item.input_id,
                     session_id=session.session_id,
                     application_id=session.application_id,
+                    manage_lifecycle=False,
                 )
+
                 ref_exec_ids.append(res.execution_id)
                 obs = res.to_observation(input_id=item.input_id)
                 ref_observations[item.input_id] = obs
@@ -400,6 +414,41 @@ class PairedExecutionCoordinator:
                     item_ev_ids.append(fs_rec.evidence_id)
                     self.store.save_record(fs_rec)
 
+                # HTTP Evidence
+                if ev_cfg.capture_http:
+                    http_data = http_provider.capture_after(obs, after_ctx)
+                    if http_data.get("status") != EvidenceCaptureStatus.NOT_SUPPORTED.value:
+                        http_rec = self.normalizer.normalize_record(
+                            evidence_type=EvidenceType.HTTP,
+                            payload=http_data,
+                            session_id=session.session_id,
+                            execution_id=res.execution_id,
+                            application_id=session.application_id,
+                            role="reference",
+                            input_id=item.input_id,
+                            source=ref_name,
+                        )
+                        records.append(http_rec)
+                        item_ev_ids.append(http_rec.evidence_id)
+                        self.store.save_record(http_rec)
+
+                # Database Evidence
+                if ev_cfg.capture_database:
+                    db_data = db_provider.capture_after(obs, after_ctx)
+                    db_rec = self.normalizer.normalize_record(
+                        evidence_type=EvidenceType.DATABASE,
+                        payload=db_data,
+                        session_id=session.session_id,
+                        execution_id=res.execution_id,
+                        application_id=session.application_id,
+                        role="reference",
+                        input_id=item.input_id,
+                        source=ref_name,
+                    )
+                    records.append(db_rec)
+                    item_ev_ids.append(db_rec.evidence_id)
+                    self.store.save_record(db_rec)
+
                 # Initialize Paired Item Result
                 item_results.append(
                     PairedExecutionItemResult(
@@ -413,8 +462,14 @@ class PairedExecutionCoordinator:
                     )
                 )
 
-        # Reference Cleanup
+        # Reference Stop & Cleanup
         session.status = PairedExecutionStatus.REFERENCE_CLEANUP
+        try:
+            if hasattr(ref_adp, "stop"):
+                ref_adp.stop(ref_ctx)
+        except Exception as stop_exc:
+            logger.warning(f"[SESSION {session.session_id}][REFERENCE] Stop error: {stop_exc}")
+
         try:
             if hasattr(ref_adp, "cleanup"):
                 ref_adp.cleanup()
@@ -436,6 +491,7 @@ class PairedExecutionCoordinator:
             )
             records.append(clean_rec)
             self.store.save_record(clean_rec)
+
 
         # ======================================================================
         # 7. REFERENCE FAILURE POLICY CHECK
@@ -489,25 +545,33 @@ class PairedExecutionCoordinator:
         trace_provider.record_event("TARGET_STARTING", details={"adapter": target_name})
 
         target_fatal_error: Optional[str] = None
+        target_ctx = {"session_id": session.session_id, "correlation_id": session.correlation_id, "role": "target"}
+        target_proc = None
 
-        # Target Prepare
+        # Target Configure, Prepare, and Start
         try:
+            if hasattr(target_adp, "configure"):
+                target_adp.configure(target_ctx)
             if hasattr(target_adp, "prepare"):
-                target_adp.prepare({"session_id": session.session_id, "correlation_id": session.correlation_id})
+                target_adp.prepare(target_ctx)
+            if hasattr(target_adp, "start"):
+                target_proc = target_adp.start(target_ctx)
         except Exception as exc:
-            target_fatal_error = f"Target adapter prepare failed: {exc}"
+            target_fatal_error = f"Target adapter startup failed: {exc}"
             logger.error(f"[SESSION {session.session_id}][TARGET] {target_fatal_error}")
 
         # Target Readiness Check
         if not target_fatal_error and request.readiness_config_target:
-            readiness_res = ReadinessChecker.wait_until_ready(request.readiness_config_target, adapter=target_adp)
+            readiness_res = ReadinessChecker.wait_until_ready(
+                request.readiness_config_target, adapter=target_adp, process=target_proc
+            )
             if not readiness_res.ready:
                 target_fatal_error = f"Target readiness failed ({readiness_res.strategy.value}): {readiness_res.diagnostics}"
                 logger.error(f"[SESSION {session.session_id}][TARGET] {target_fatal_error}")
             else:
                 logger.info(f"[SESSION {session.session_id}][TARGET] Application READY in {readiness_res.duration_ms}ms")
                 trace_provider.record_event("TARGET_READY", details={"duration_ms": readiness_res.duration_ms})
-        else:
+        elif not target_fatal_error:
             logger.info(f"[SESSION {session.session_id}][TARGET] Application READY")
             trace_provider.record_event("TARGET_READY")
 
@@ -531,6 +595,8 @@ class PairedExecutionCoordinator:
                 }
                 if ev_cfg.capture_filesystem:
                     file_provider.capture_before(before_ctx)
+                if ev_cfg.capture_database:
+                    db_provider.capture_before(before_ctx)
 
                 # Execute Single
                 res = self.executor.execute_single(
@@ -539,7 +605,9 @@ class PairedExecutionCoordinator:
                     input_id=item.input_id,
                     session_id=session.session_id,
                     application_id=session.application_id,
+                    manage_lifecycle=False,
                 )
+
                 target_exec_ids.append(res.execution_id)
                 obs = res.to_observation(input_id=item.input_id)
 
@@ -638,6 +706,41 @@ class PairedExecutionCoordinator:
                     target_ev_ids.append(fs_rec.evidence_id)
                     self.store.save_record(fs_rec)
 
+                # HTTP Evidence
+                if ev_cfg.capture_http:
+                    http_data = http_provider.capture_after(obs, after_ctx)
+                    if http_data.get("status") != EvidenceCaptureStatus.NOT_SUPPORTED.value:
+                        http_rec = self.normalizer.normalize_record(
+                            evidence_type=EvidenceType.HTTP,
+                            payload=http_data,
+                            session_id=session.session_id,
+                            execution_id=res.execution_id,
+                            application_id=session.application_id,
+                            role="target",
+                            input_id=item.input_id,
+                            source=target_name,
+                        )
+                        records.append(http_rec)
+                        target_ev_ids.append(http_rec.evidence_id)
+                        self.store.save_record(http_rec)
+
+                # Database Evidence
+                if ev_cfg.capture_database:
+                    db_data = db_provider.capture_after(obs, after_ctx)
+                    db_rec = self.normalizer.normalize_record(
+                        evidence_type=EvidenceType.DATABASE,
+                        payload=db_data,
+                        session_id=session.session_id,
+                        execution_id=res.execution_id,
+                        application_id=session.application_id,
+                        role="target",
+                        input_id=item.input_id,
+                        source=target_name,
+                    )
+                    records.append(db_rec)
+                    target_ev_ids.append(db_rec.evidence_id)
+                    self.store.save_record(db_rec)
+
                 # Update Paired Item Result
                 if idx < len(item_results):
                     item_results[idx].target_execution_id = res.execution_id
@@ -646,8 +749,14 @@ class PairedExecutionCoordinator:
                     item_results[idx].target_exit_code = res.exit_code
                     item_results[idx].evidence_ids.extend(target_ev_ids)
 
-        # Target Cleanup
+        # Target Stop & Cleanup
         session.status = PairedExecutionStatus.TARGET_CLEANUP
+        try:
+            if hasattr(target_adp, "stop"):
+                target_adp.stop(target_ctx)
+        except Exception as stop_exc:
+            logger.warning(f"[SESSION {session.session_id}][TARGET] Stop error: {stop_exc}")
+
         try:
             if hasattr(target_adp, "cleanup"):
                 target_adp.cleanup()
@@ -669,6 +778,7 @@ class PairedExecutionCoordinator:
             )
             records.append(clean_rec)
             self.store.save_record(clean_rec)
+
 
         # Target Failure Policy: Record error if target fatal failure occurred
         if target_fatal_error:
@@ -763,13 +873,20 @@ class PairedExecutionCoordinator:
 
 
         self.store.save_session(session)
-        self.store.save_bundle(bundle)
+        saved_bundle = self.store.save_bundle(bundle)
+
+        if saved_bundle.persistence_status == EvidencePersistenceStatus.FAILED:
+            session.error_summary = f"Evidence bundle persistence failed: {saved_bundle.persistence_error}"
+            session.mark_completed(PairedExecutionStatus.PARTIAL if item_results else PairedExecutionStatus.FAILED)
+            self.store.save_session(session)
+
 
         logger.info(
             f"[SESSION {session.session_id}] Session complete (status={session.status.value}, "
             f"bundle_hash={bundle.bundle_hash[:12]}, evidence_count={len(records)})"
         )
-        return session, bundle
+        return session, saved_bundle
+
 
     def execute_sweep(
         self,

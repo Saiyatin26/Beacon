@@ -121,8 +121,15 @@ class ReadinessChecker:
             attempts += 1
 
             if cfg.strategy == ReadinessStrategy.PROCESS_ALIVE:
-                if process is not None:
-                    poll_res = process.poll()
+                target_proc = process
+                if target_proc is None and adapter is not None:
+                    if hasattr(adapter, "get_process") and callable(adapter.get_process):
+                        target_proc = adapter.get_process()
+                    elif hasattr(adapter, "_process"):
+                        target_proc = getattr(adapter, "_process")
+
+                if target_proc is not None:
+                    poll_res = target_proc.poll()
                     if poll_res is None:
                         # Process is running
                         elapsed_ms = round((time.perf_counter() - start_time) * 1000, 3)
@@ -130,7 +137,7 @@ class ReadinessChecker:
                             ready=True,
                             strategy=cfg.strategy,
                             duration_ms=elapsed_ms,
-                            diagnostics=f"Process PID {getattr(process, 'pid', 'unknown')} is alive and running.",
+                            diagnostics=f"Process PID {getattr(target_proc, 'pid', 'unknown')} is alive and running.",
                             poll_attempts=attempts,
                         )
                     else:
@@ -144,7 +151,16 @@ class ReadinessChecker:
                             poll_attempts=attempts,
                         )
                 else:
-                    last_diagnostic = "No process handle provided for PROCESS_ALIVE check."
+                    elapsed_ms = round((time.perf_counter() - start_time) * 1000, 3)
+                    return ReadinessResult(
+                        ready=False,
+                        strategy=cfg.strategy,
+                        duration_ms=elapsed_ms,
+                        diagnostics="PROCESS_ALIVE readiness check failed: No process handle available or process failed to start.",
+                        error="No process handle available for PROCESS_ALIVE readiness check",
+                        poll_attempts=attempts,
+                    )
+
 
             elif cfg.strategy == ReadinessStrategy.TCP_PORT:
                 host = "127.0.0.1"

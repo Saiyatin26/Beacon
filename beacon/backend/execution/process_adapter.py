@@ -68,8 +68,10 @@ class ProcessAdapter(ImplementationAdapter):
         self.input_mapper = input_mapper or InputMapper()
         self.output_mapper = output_mapper or OutputMapper()
         self.metadata = metadata or {}
+        self._process: Optional[subprocess.Popen] = None
 
         self.capabilities = AdapterCapabilities(
+
             supports_timeout=True,
             supports_streaming=False,
             supports_files=True,
@@ -324,8 +326,60 @@ class ProcessAdapter(ImplementationAdapter):
         except Exception as exc:
             logger.debug(f"Process termination notice for PID {process.pid}: {exc}")
 
+    def start(self, context: Optional[dict[str, Any]] = None) -> Any:
+        """Lifecycle hook: Starts the process as a persistent service if not already started."""
+        if self._process is not None and self._process.poll() is None:
+            return self._process
+
+        effective_cmd = list(self.command)
+        filtered_env = {k: v for k, v in os.environ.items() if k.upper() in self.allowed_env_vars}
+        cwd = str(self.working_directory) if self.working_directory else None
+
+        creationflags = 0
+        preexec_fn = None
+        if os.name == "nt":
+            creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        else:
+            preexec_fn = getattr(os, "setsid", None)
+
+        try:
+            self._process = subprocess.Popen(
+                effective_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=cwd,
+                env=filtered_env,
+                shell=False,
+                creationflags=creationflags,
+                preexec_fn=preexec_fn,
+            )
+            logger.info(f"Started persistent process '{self.name}' (PID: {self._process.pid})")
+            return self._process
+        except Exception as exc:
+            logger.error(f"Failed to start persistent process for '{self.name}': {exc}")
+            raise
+
+    def stop(self, context: Optional[dict[str, Any]] = None) -> None:
+        """Lifecycle hook: Gracefully terminates the running process."""
+        if self._process is not None:
+            try:
+                if self._process.poll() is None:
+                    self._terminate_process_tree(self._process)
+            finally:
+                self._process = None
+
+    def get_process(self) -> Optional[Any]:
+        """Returns the active subprocess.Popen handle."""
+        return self._process
+
+    def cleanup(self) -> None:
+        """Lifecycle hook: Ensures process termination and resource cleanup."""
+        self.stop()
+
 
 class CliAdapter(ProcessAdapter):
+
     """Convenience alias and specialization for CLI tools and scripts."""
 
     def __init__(self, command: Union[str, list[str]], name: str = "cli_adapter", **kwargs):
