@@ -55,6 +55,41 @@ def consolidate_database_architecture(
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_apps_domain ON applications(domain);")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS execution_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    application_id TEXT NOT NULL,
+                    adapter_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT,
+                    records_count INTEGER NOT NULL DEFAULT 0,
+                    succeeded_count INTEGER NOT NULL DEFAULT 0,
+                    failed_count INTEGER NOT NULL DEFAULT 0,
+                    timeout_count INTEGER NOT NULL DEFAULT 0,
+                    session_json TEXT NOT NULL,
+                    session_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_sess_app ON execution_sessions(application_id);")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS execution_records (
+                    execution_id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    application_id TEXT,
+                    implementation_id TEXT,
+                    role TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    exit_code INTEGER,
+                    duration_ms REAL NOT NULL DEFAULT 0.0,
+                    error_message TEXT,
+                    result_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_exec_rec_sess ON execution_records(session_id);")
             conn.commit()
     except Exception as exc:
         logger.warning(f"Could not enable WAL mode or initialize applications schema on canonical DB: {exc}")

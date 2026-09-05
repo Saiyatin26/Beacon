@@ -252,19 +252,36 @@ class ImplementationAdapter(ABC):
     """Abstract Base Class for implementation target runners (Python, Java, Rust, REST, CLI, etc.).
     
     Defines the full generic adapter lifecycle:
-    prepare() -> validate() -> execute() -> normalize_output() -> capture_evidence() -> cleanup()
+    configure() -> validate() -> prepare() -> execute() -> normalize_output() -> capture_evidence() -> cleanup()
     """
 
     name: str = "base_adapter"
     version: str = "1.0.0"
     role: Union[AdapterRole, str] = AdapterRole.TARGET
     implementation_hash: str = ""
+    adapter_type: str = "custom"
+
+    def configure(self, config: Optional[dict[str, Any]] = None) -> None:
+        """Lifecycle hook: Configures adapter with runtime parameters."""
+        pass
+
+    def health_check(self) -> Any:
+        """Lifecycle hook: Evaluates operational readiness and dependency availability."""
+        from execution.models import AdapterCapabilities, AdapterHealth, AdapterHealthStatus
+        caps = getattr(self, "capabilities", None) or AdapterCapabilities()
+        return AdapterHealth(
+            adapter_id=f"{self.name}:{self.version}",
+            status=AdapterHealthStatus.AVAILABLE,
+            is_ready=True,
+            diagnostics=f"Adapter '{self.name}' is operational.",
+            capabilities=caps,
+        )
 
     def prepare(self, context: Optional[dict[str, Any]] = None) -> None:
         """Lifecycle hook: Prepares the runtime environment, dependencies, or connections."""
         pass
 
-    def validate(self) -> bool:
+    def validate(self, input_data: Any = None) -> bool:
         """Lifecycle hook: Validates that the adapter target is accessible and ready for execution."""
         return True
 
@@ -299,11 +316,29 @@ class FunctionAdapter(ImplementationAdapter):
         role: Union[AdapterRole, str] = AdapterRole.TARGET,
         input_normalizer: Optional[Union[InputNormalizer, Callable[[dict[str, Any]], dict[str, Any]]]] = None,
         output_normalizer: Optional[Union[OutputNormalizer, Callable[[Any], dict[str, Any]]]] = None,
+        input_mapper: Optional[Any] = None,
+        output_mapper: Optional[Any] = None,
     ):
         self.target_fn = target_fn
         self.name = name
         self.version = version
         self.role = role
+        self.adapter_type = "function"
+        self.input_mapper = input_mapper
+        self.output_mapper = output_mapper
+
+        from execution.models import AdapterCapabilities
+        self.capabilities = AdapterCapabilities(
+            supports_timeout=False,
+            supports_streaming=False,
+            supports_files=False,
+            supports_binary=False,
+            supports_traces=False,
+            supports_cleanup=True,
+            supports_state_capture=False,
+            supports_custom_environment=False,
+            supports_sandboxing=False,
+        )
 
         # Wrap normalizers
         if isinstance(input_normalizer, InputNormalizer):
@@ -318,9 +353,29 @@ class FunctionAdapter(ImplementationAdapter):
 
         self.implementation_hash = compute_implementation_hash(target_fn)
 
-    def validate(self, input_data: Any) -> bool:
+    def health_check(self) -> Any:
+        from execution.models import AdapterHealth, AdapterHealthStatus
+        if not callable(self.target_fn):
+            return AdapterHealth(
+                adapter_id=f"{self.name}:{self.version}",
+                status=AdapterHealthStatus.MISCONFIGURED,
+                is_ready=False,
+                diagnostics=f"Target entrypoint for '{self.name}' is not a callable.",
+                capabilities=self.capabilities,
+            )
+        return AdapterHealth(
+            adapter_id=f"{self.name}:{self.version}",
+            status=AdapterHealthStatus.AVAILABLE,
+            is_ready=True,
+            diagnostics=f"Callable '{self.name}' is available.",
+            capabilities=self.capabilities,
+        )
+
+    def validate(self, input_data: Any = None) -> bool:
         """Validates that input data satisfies callable parameters without guessing values."""
         if not callable(self.target_fn):
+            return True
+        if input_data is None:
             return True
         import inspect
         try:

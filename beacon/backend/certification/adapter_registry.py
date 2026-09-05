@@ -7,7 +7,7 @@ application-specific logic into certification endpoints.
 
 from enum import Enum
 import logging
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from .adapters import (
@@ -29,7 +29,7 @@ class AdapterRegistration(BaseModel):
     role: str = "target"
     version: str = "1.0.0"
     implementation_type: str = "python_callable"
-    capabilities: list[str] = Field(default_factory=list)
+    capabilities: Union[list[str], dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -56,13 +56,23 @@ class AdapterRegistry:
         if registration:
             self._registrations[key] = registration
         else:
+            raw_caps = getattr(adapter, "capabilities", [])
+            if hasattr(raw_caps, "model_dump"):
+                caps_val = [k for k, v in raw_caps.model_dump().items() if v is True]
+            elif isinstance(raw_caps, dict):
+                caps_val = [k for k, v in raw_caps.items() if v is True]
+            elif isinstance(raw_caps, (list, set)):
+                caps_val = [str(c) for c in raw_caps]
+            else:
+                caps_val = []
+
             self._registrations[key] = AdapterRegistration(
                 adapter_id=f"{adapter.name}:{adapter.version}",
                 name=adapter.name,
                 role=str(getattr(adapter, "role", "target")),
                 version=adapter.version,
                 implementation_type=type(adapter).__name__,
-                capabilities=getattr(adapter, "capabilities", []),
+                capabilities=caps_val,
                 metadata=getattr(adapter, "metadata", {}),
             )
 
@@ -95,18 +105,22 @@ class AdapterRegistry:
 
     def list_adapters(self) -> list[dict[str, Any]]:
         """Lists all registered adapters and their metadata."""
-        return [
-            {
+        items = []
+        for a in self._adapters.values():
+            caps = getattr(a, "capabilities", None)
+            caps_dict = caps.model_dump() if hasattr(caps, "model_dump") else (caps if isinstance(caps, dict) else {})
+            items.append({
                 "name": a.name,
                 "version": a.version,
                 "role": str(getattr(a, "role", "target")),
+                "adapter_type": getattr(a, "adapter_type", type(a).__name__),
                 "type": type(a).__name__,
                 "implementation_hash": getattr(a, "implementation_hash", ""),
+                "capabilities": caps_dict,
                 "input_schema": getattr(a, "input_schema", {}),
                 "output_schema": getattr(a, "output_schema", {}),
-            }
-            for a in self._adapters.values()
-        ]
+            })
+        return items
 
     def clear(self, reinit_benchmarks: bool = True):
         """Clears all registered adapters (for test isolation)."""

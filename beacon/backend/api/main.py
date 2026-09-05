@@ -202,6 +202,10 @@ app.include_router(auth_router)
 # Phase 1 (V2) Generic Domain-Agnostic Applications Routes
 app.include_router(application_router)
 
+# Phase 2 (V2) Generic Adapter & Execution Routes
+from api.adapter_router import adapter_router
+app.include_router(adapter_router)
+
 
 
 class DemoRunRequest(BaseModel):
