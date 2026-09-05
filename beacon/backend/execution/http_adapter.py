@@ -2,8 +2,8 @@
 
 Executes remote or local HTTP/REST endpoints with:
 1. Method, path interpolation, headers, query parameters, and JSON/text payload mapping.
-2. SSRF validation preventing cloud metadata access.
-3. Secret redaction on auth tokens and request bodies in logs and observation outputs.
+2. SSRF validation preventing cloud metadata and unauthorized network access with hostname resolution.
+3. Secret redaction on auth tokens, headers, response bodies, and error messages in logs and observations.
 4. Non-2xx response error mapping and timeout enforcement.
 """
 
@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import time
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 import httpx
 
 from certification.adapters import AdapterRole, ImplementationAdapter
@@ -40,6 +40,7 @@ class HttpAdapter(ImplementationAdapter):
         input_mapper: Optional[InputMapper] = None,
         output_mapper: Optional[OutputMapper] = None,
         allow_private_network: bool = True,
+        dns_resolver: Optional[Callable[[str], list[str]]] = None,
         metadata: Optional[dict[str, Any]] = None,
     ):
         self.base_url = base_url.rstrip("/")
@@ -55,6 +56,7 @@ class HttpAdapter(ImplementationAdapter):
         self.input_mapper = input_mapper or InputMapper()
         self.output_mapper = output_mapper or OutputMapper()
         self.allow_private_network = allow_private_network
+        self.dns_resolver = dns_resolver
         self.metadata = metadata or {}
 
         self.capabilities = AdapterCapabilities(
@@ -86,7 +88,11 @@ class HttpAdapter(ImplementationAdapter):
         """Validates endpoint URL format and SSRF constraints."""
         try:
             full_url = f"{self.base_url}/{self.path_template.lstrip('/')}".rstrip("/")
-            SSRFValidator.validate_url(full_url, allow_private=self.allow_private_network)
+            SSRFValidator.validate_url(
+                full_url,
+                allow_private=self.allow_private_network,
+                dns_resolver=self.dns_resolver,
+            )
             return AdapterHealth(
                 adapter_id=f"{self.name}:{self.version}",
                 status=AdapterHealthStatus.AVAILABLE,
@@ -99,7 +105,7 @@ class HttpAdapter(ImplementationAdapter):
                 adapter_id=f"{self.name}:{self.version}",
                 status=AdapterHealthStatus.MISCONFIGURED,
                 is_ready=False,
-                diagnostics=f"HTTP Adapter URL validation error: {exc}",
+                diagnostics=f"HTTP Adapter URL validation error: {SecretRedactor.redact_string(str(exc))}",
                 capabilities=self.capabilities,
             )
 
@@ -134,13 +140,17 @@ class HttpAdapter(ImplementationAdapter):
         except KeyError:
             pass
 
-        # Validate URL for SSRF
-        SSRFValidator.validate_url(full_url, allow_private=self.allow_private_network)
+        # Validate URL for SSRF with hostname resolution
+        SSRFValidator.validate_url(
+            full_url,
+            allow_private=self.allow_private_network,
+            dns_resolver=self.dns_resolver,
+        )
 
         headers = self._prepare_headers()
-        safe_headers = SecretRedactor.redact(headers)
-        safe_body = SecretRedactor.redact(mapped_kwargs)
-        logger.info(f"Executing HTTP request [{self.method}] {full_url} on input #{actual_input_id}")
+        safe_url = SecretRedactor.redact_string(full_url)
+        safe_inputs = SecretRedactor.redact(raw_inputs)
+        logger.info(f"Executing HTTP request [{self.method}] {safe_url} on input #{actual_input_id}")
 
         start_time = time.perf_counter()
         try:
@@ -173,19 +183,21 @@ class HttpAdapter(ImplementationAdapter):
                 error_msg = None
             else:
                 execution_status = "EXCEPTION"
-                error_msg = f"HTTP request returned status {status_code}: {resp_text[:500]}"
+                error_msg = SecretRedactor.redact_string(f"HTTP request returned status {status_code}: {resp_text[:500]}")
 
+            # Map and redact outputs to ensure no secrets leaked in persisted observations
             mapped_outputs = self.output_mapper.map_output(
                 raw_output=raw_out,
                 status_code=status_code,
             )
-            norm_outputs = self.normalize_output(mapped_outputs)
+            safe_outputs = SecretRedactor.redact(mapped_outputs)
+            norm_outputs = self.normalize_output(safe_outputs)
 
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
-                raw_outputs=mapped_outputs,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
+                raw_outputs=safe_outputs,
                 normalized_outputs=norm_outputs,
                 execution_status=execution_status,
                 implementation_name=self.name,
@@ -196,17 +208,17 @@ class HttpAdapter(ImplementationAdapter):
                     "adapter_type": AdapterType.HTTP.value,
                     "role": str(self.role),
                     "status_code": status_code,
-                    "url": full_url,
+                    "url": safe_url,
                 },
             )
 
-        except httpx.TimeoutException as te:
+        except httpx.TimeoutException:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
             logger.warning(f"HTTP adapter '{self.name}' timed out after {self.timeout_seconds}s on input #{actual_input_id}")
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
                 raw_outputs={"error": f"HTTP request timed out after {self.timeout_seconds} seconds"},
                 normalized_outputs={"error": f"HTTP request timed out after {self.timeout_seconds} seconds"},
                 execution_status="TIMEOUT",
@@ -223,18 +235,19 @@ class HttpAdapter(ImplementationAdapter):
 
         except Exception as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
-            logger.error(f"HTTP adapter '{self.name}' execution failure: {exc}")
+            safe_exc_str = SecretRedactor.redact_string(str(exc))
+            logger.error(f"HTTP adapter '{self.name}' execution failure: {safe_exc_str}")
             return Observation(
                 input_id=actual_input_id,
-                raw_inputs=raw_inputs,
-                normalized_inputs=raw_inputs,
-                raw_outputs={"error": str(exc)},
-                normalized_outputs={"error": str(exc)},
+                raw_inputs=safe_inputs,
+                normalized_inputs=safe_inputs,
+                raw_outputs={"error": safe_exc_str},
+                normalized_outputs={"error": safe_exc_str},
                 execution_status="EXCEPTION",
                 implementation_name=self.name,
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
-                error_message=str(exc),
+                error_message=safe_exc_str,
                 provenance={
                     "adapter_type": AdapterType.HTTP.value,
                     "role": str(self.role),

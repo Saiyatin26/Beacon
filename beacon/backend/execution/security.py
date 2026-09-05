@@ -2,8 +2,8 @@
 
 Guarantees safe untrusted application invocation by enforcing:
 1. Secret and credential masking in logs, commands, traces, and observations.
-2. Sandboxed working directory and file path validation (path traversal defense).
-3. SSRF validation blocking cloud metadata, link-local, and unauthorized private network endpoints.
+2. Sandboxed working directory and file path validation (path traversal defense via pathlib containment).
+3. SSRF validation resolving hostnames and blocking cloud metadata, link-local, and unauthorized private network endpoints.
 """
 
 import ipaddress
@@ -11,7 +11,8 @@ import logging
 import os
 from pathlib import Path
 import re
-from typing import Any, Optional, Union
+import socket
+from typing import Any, Callable, Optional, Union
 from urllib.parse import urlparse
 
 logger = logging.getLogger("beacon.execution.security")
@@ -21,11 +22,13 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     r"(?i)(auth|token|secret|password|api_?key|key|cookie|credential|bearer|session|private)"
 )
 
-# Blocked SSRF metadata addresses
-_BLOCKED_METADATA_IPS = {
+# Blocked SSRF metadata hostnames and IPs
+_BLOCKED_METADATA_HOSTS = {
     "169.254.169.254",  # AWS/GCP/Azure instance metadata
     "169.254.170.2",    # AWS container task metadata
     "metadata.google.internal",
+    "metadata.internal",
+    "instance-data",
 }
 
 
@@ -50,8 +53,23 @@ class SecretRedactor:
             # Mask Bearer tokens or sensitive headers formatted as "Bearer ..."
             if data.lower().startswith("bearer "):
                 return "Bearer [REDACTED]"
-            return data
+            return cls.redact_string(data)
         return data
+
+    @classmethod
+    def redact_string(cls, text: str) -> str:
+        """Redacts embedded sensitive tokens and credentials from unstructured strings."""
+        if not text:
+            return text
+        # Redact Bearer tokens
+        text = re.sub(r"(?i)bearer\s+[A-Za-z0-9\-_.]+", "Bearer [REDACTED]", text)
+        # Redact key=value pairs with sensitive names
+        text = re.sub(
+            r"(?i)(password|secret|token|api_?key|auth)\s*[:=]\s*['\"]?[^'\"\s,;&]+['\"]?",
+            r"\1=[REDACTED]",
+            text,
+        )
+        return text
 
     @classmethod
     def redact_command(cls, command_args: list[str]) -> list[str]:
@@ -70,13 +88,27 @@ class SecretRedactor:
             elif arg.lower() in ["--token", "--secret", "--password", "--key", "--auth", "-p"]:
                 redacted.append(arg)
                 mask_next = True
+            elif "=" in arg and any(arg.lower().startswith(f"{prefix}=") for prefix in ["token", "secret", "password", "key", "auth"]):
+                flag, _ = arg.split("=", 1)
+                redacted.append(f"{flag}={cls.REDACTED_TEXT}")
             else:
                 redacted.append(arg)
         return redacted
 
 
 class SandboxedPathValidator:
-    """Validates that filesystem paths reside within permitted workspaces without path traversal."""
+    """Validates that filesystem paths reside strictly within permitted boundaries without path traversal."""
+
+    @staticmethod
+    def is_subpath(target: Path, root: Path) -> bool:
+        """Robust pathlib-based containment check preventing prefix collision on sibling paths."""
+        try:
+            resolved_target = target.resolve()
+            resolved_root = root.resolve()
+            resolved_target.relative_to(resolved_root)
+            return True
+        except (ValueError, RuntimeError):
+            return False
 
     @classmethod
     def validate_working_directory(
@@ -93,9 +125,7 @@ class SandboxedPathValidator:
 
         if allowed_roots:
             resolved_roots = [Path(r).resolve() for r in allowed_roots]
-            is_permitted = any(
-                str(resolved).startswith(str(r)) for r in resolved_roots
-            )
+            is_permitted = any(cls.is_subpath(resolved, r) for r in resolved_roots)
             if not is_permitted:
                 raise PermissionError(
                     f"Working directory '{resolved}' is outside allowed root boundaries: {[str(r) for r in resolved_roots]}"
@@ -113,7 +143,7 @@ class SandboxedPathValidator:
         resolved = Path(file_path).resolve()
         if base_dir:
             resolved_base = Path(base_dir).resolve()
-            if not str(resolved).startswith(str(resolved_base)):
+            if not cls.is_subpath(resolved, resolved_base):
                 raise PermissionError(
                     f"File path '{resolved}' escapes base directory '{resolved_base}' (path traversal detected)."
                 )
@@ -121,12 +151,40 @@ class SandboxedPathValidator:
 
 
 class SSRFValidator:
-    """Validates HTTP endpoints to prevent Server-Side Request Forgery against cloud metadata."""
+    """Validates HTTP endpoints to prevent Server-Side Request Forgery against cloud metadata and private networks."""
 
     @classmethod
-    def validate_url(cls, url: str, allow_private: bool = True) -> str:
-        """Validates URL scheme, host, and blocks cloud metadata endpoints.
-        allow_private allows local loopback (localhost/127.0.0.1) for testing target services.
+    def _inspect_ip(cls, ip: Union[ipaddress.IPv4Address, ipaddress.IPv6Address], allow_private: bool) -> None:
+        """Validates a single IP against SSRF rules."""
+        # 1. Block Cloud Metadata IPs
+        str_ip = str(ip)
+        if str_ip in _BLOCKED_METADATA_HOSTS or str_ip == "169.254.169.254" or str_ip == "169.254.170.2":
+            raise PermissionError(f"SSRF Protection: Access to cloud metadata IP '{ip}' is prohibited.")
+
+        # 2. Block Link-Local (169.254.0.0/16, fe80::/10)
+        if ip.is_link_local:
+            raise PermissionError(f"SSRF Protection: Access to link-local IP '{ip}' is prohibited.")
+
+        # 3. Block Multicast, Reserved, and Unspecified (0.0.0.0, ::)
+        if ip.is_multicast or ip.is_reserved or ip.is_unspecified:
+            raise PermissionError(f"SSRF Protection: Access to special/reserved IP '{ip}' is prohibited.")
+
+        # 4. Check Private / Loopback when private network access is disabled
+        if not allow_private:
+            if ip.is_private or ip.is_loopback:
+                raise PermissionError(f"SSRF Protection: Access to private network IP '{ip}' is not permitted.")
+
+    @classmethod
+    def validate_url(
+        cls,
+        url: str,
+        allow_private: bool = True,
+        dns_resolver: Optional[Callable[[str], list[str]]] = None,
+    ) -> str:
+        """Validates URL scheme, hostname, resolves DNS to IP addresses, and checks against SSRF rules.
+        
+        allow_private allows local loopback (localhost/127.0.0.1) and RFC1918 private IPs for local testing.
+        dns_resolver allows injecting a mock resolver for deterministic testing.
         """
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -136,17 +194,35 @@ class SSRFValidator:
         if not host:
             raise ValueError(f"Invalid URL without hostname: '{url}'")
 
-        if host.lower() in _BLOCKED_METADATA_IPS:
+        if host.lower() in _BLOCKED_METADATA_HOSTS:
             raise PermissionError(f"SSRF Protection: Access to cloud metadata endpoint '{host}' is prohibited.")
 
+        # Try parsing directly as IP address
         try:
             ip = ipaddress.ip_address(host)
-            if ip.is_link_local:
-                raise PermissionError(f"SSRF Protection: Access to link-local IP '{ip}' is prohibited.")
-            if not allow_private and (ip.is_private or ip.is_loopback):
-                raise PermissionError(f"SSRF Protection: Access to private network IP '{ip}' is not permitted.")
+            cls._inspect_ip(ip, allow_private=allow_private)
+            return url
         except ValueError:
-            # Hostname is a domain name, not a raw IP
             pass
+
+        # Hostname is a domain name: resolve to IP addresses
+        resolved_ips: list[str] = []
+        if dns_resolver is not None:
+            resolved_ips = dns_resolver(host)
+        else:
+            # Standard socket resolution
+            try:
+                addr_info = socket.getaddrinfo(host, None)
+                resolved_ips = list({info[4][0] for info in addr_info if info[4]})
+            except socket.gaierror as exc:
+                logger.debug(f"DNS resolution warning for host '{host}': {exc}")
+
+        # Inspect ALL resolved IPs
+        for ip_str in resolved_ips:
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+                cls._inspect_ip(ip_obj, allow_private=allow_private)
+            except ValueError:
+                continue
 
         return url

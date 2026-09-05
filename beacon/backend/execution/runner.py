@@ -88,6 +88,8 @@ class ApplicationExecutor:
                 role=adapter.role,
                 status=status,
                 observation=obs,
+                stdout=obs.provenance.get("stdout"),
+                stderr=obs.provenance.get("stderr"),
                 exit_code=obs.provenance.get("exit_code"),
                 duration_ms=duration_ms,
                 error_type=obs.provenance.get("error_type"),

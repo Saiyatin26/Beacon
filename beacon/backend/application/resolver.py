@@ -242,13 +242,23 @@ class ApplicationResolver:
                 )
             return generated
 
-        # Phase 1 test/development fallback sample inputs (clearly distinguished from real application inputs)
+        # TEST / DEVELOPMENT ONLY Fallback:
+        # Real-world applications in production must provide an explicit dataset or input contract.
+        logger.warning(
+            f"[INPUT_FALLBACK] ApplicationSpec '{spec.application_id}' has neither a registered dataset_id nor an input_contract. "
+            "Falling back to synthetic test inputs (TEST/DEVELOPMENT ONLY). Real applications must supply explicit datasets."
+        )
         return [
             CertificationTestInput(
-                input_id=f"default_{i:04d}",
+                input_id=f"default_test_{i:04d}",
                 values={"x": i * 1.5, "flag": True},
                 origin="diverse_sampling",
-                provenance={"source": "phase1_test_fallback", "generator": "default_fallback"},
+                provenance={
+                    "source": "phase1_test_fallback",
+                    "mode": "test_development_fallback_only",
+                    "generator": "default_fallback",
+                    "warning": "Fabricated test input — not for production certification",
+                },
             )
             for i in range(10)
         ]

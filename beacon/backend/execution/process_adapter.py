@@ -240,6 +240,8 @@ class ProcessAdapter(ImplementationAdapter):
                     "adapter_type": AdapterType.PROCESS.value,
                     "role": str(self.role),
                     "exit_code": exit_code,
+                    "stdout": stdout_text,
+                    "stderr": stderr_text,
                     "stdout_truncated": stdout_truncated,
                     "stderr_truncated": stderr_truncated,
                 },

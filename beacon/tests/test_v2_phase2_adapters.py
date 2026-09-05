@@ -195,18 +195,85 @@ def test_sandboxed_path_validator_path_traversal():
         SandboxedPathValidator.validate_working_directory(ROOT / "non_existent_dir_9999")
 
 
-def test_ssrf_validator_blocks_metadata():
-    """SSRFValidator blocks AWS/GCP/Azure instance metadata endpoints."""
+def test_sandboxed_path_validator_sibling_prefix_collision(tmp_path):
+    """SandboxedPathValidator strictly rejects sibling directories with common prefix names."""
+    work_dir = tmp_path / "work"
+    app_dir = work_dir / "app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+
+    sibling_evil_dir = work_dir / "app_evil"
+    sibling_evil_dir.mkdir(parents=True, exist_ok=True)
+
+    # Allowed root is strictly app_dir
+    allowed_roots = [app_dir]
+
+    # Valid descendant inside app_dir
+    sub_dir = app_dir / "subdir"
+    sub_dir.mkdir(parents=True, exist_ok=True)
+    assert SandboxedPathValidator.validate_working_directory(sub_dir, allowed_roots=allowed_roots) == sub_dir.resolve()
+
+    # Sibling directory starting with same prefix must be REJECTED
     with pytest.raises(PermissionError) as exc:
-        SSRFValidator.validate_url("http://169.254.169.254/latest/meta-data/")
+        SandboxedPathValidator.validate_working_directory(sibling_evil_dir, allowed_roots=allowed_roots)
+    assert "outside allowed root boundaries" in str(exc.value)
+
+    # File path validation in sibling must also be REJECTED
+    evil_file = sibling_evil_dir / "evil.txt"
+    evil_file.write_text("evil payload")
+    with pytest.raises(PermissionError) as exc_file:
+        SandboxedPathValidator.validate_file_path(evil_file, base_dir=app_dir)
+    assert "escapes base directory" in str(exc_file.value)
+
+
+def test_ssrf_validator_comprehensive_matrix_and_dns_resolution():
+    """SSRFValidator verifies IP classes, metadata endpoints, and DNS hostname resolution."""
+    # 1. Cloud metadata IP blocked always
+    with pytest.raises(PermissionError) as exc:
+        SSRFValidator.validate_url("http://169.254.169.254/latest/meta-data/", allow_private=True)
     assert "SSRF" in str(exc.value)
 
-    with pytest.raises(ValueError):
-        SSRFValidator.validate_url("ftp://example.com/data")
+    # 2. Literal RFC1918 Private IP blocked when allow_private=False
+    with pytest.raises(PermissionError) as exc_priv:
+        SSRFValidator.validate_url("http://10.0.0.1:8080/api", allow_private=False)
+    assert "private network IP" in str(exc_priv.value)
 
-    # Local development loopback allowed by default
+    # 3. Literal Loopback blocked when allow_private=False
+    with pytest.raises(PermissionError) as exc_loop:
+        SSRFValidator.validate_url("http://127.0.0.1:8000/api", allow_private=False)
+    assert "private network IP" in str(exc_loop.value)
+
+    # 4. Localhost allowed when allow_private=True
     valid_local = SSRFValidator.validate_url("http://127.0.0.1:8000/api/status", allow_private=True)
     assert valid_local == "http://127.0.0.1:8000/api/status"
+
+    # 5. Domain resolving to Private IP blocked when allow_private=False
+    mock_private_dns = lambda host: ["10.1.2.3"]
+    with pytest.raises(PermissionError) as exc_dns_priv:
+        SSRFValidator.validate_url(
+            "http://internal-service.local/api",
+            allow_private=False,
+            dns_resolver=mock_private_dns,
+        )
+    assert "private network IP" in str(exc_dns_priv.value)
+
+    # 6. Domain resolving to Cloud Metadata IP blocked even when allow_private=True
+    mock_metadata_dns = lambda host: ["169.254.169.254"]
+    with pytest.raises(PermissionError) as exc_dns_meta:
+        SSRFValidator.validate_url(
+            "http://evil-spoof.internal/api",
+            allow_private=True,
+            dns_resolver=mock_metadata_dns,
+        )
+    assert "metadata IP" in str(exc_dns_meta.value)
+
+    # 7. Domain resolving to Public IP allowed with allow_private=False
+    mock_public_dns = lambda host: ["93.184.216.34"]
+    valid_public = SSRFValidator.validate_url(
+        "https://example.com/api",
+        allow_private=False,
+        dns_resolver=mock_public_dns,
+    )
+    assert valid_public == "https://example.com/api"
 
 
 # ==============================================================================
@@ -500,3 +567,97 @@ def test_end_to_end_real_process_vs_function_execution():
     for r_ref, r_tgt in zip(res_ref, res_target):
         assert r_ref.observation.raw_outputs["result"] == r_tgt.observation.raw_outputs["result"]
         assert r_tgt.observation.provenance["exit_code"] == 0
+
+
+# ==============================================================================
+# 9. Additional Security & Execution Remediation Tests
+# ==============================================================================
+
+def test_http_adapter_secret_redaction():
+    """HttpAdapter redacts secret tokens in URLs, headers, and observation outputs."""
+    adapter = HttpAdapter(
+        base_url="http://127.0.0.1:8000",
+        path_template="/api?token=secret12345",
+        headers={"Authorization": "Bearer super_secret_token_abc"},
+        name="test_secret_redaction_adp",
+    )
+
+    # Health check diagnostics should never leak secret
+    health = adapter.health_check()
+    assert "super_secret_token_abc" not in health.diagnostics
+
+    # Validate execution observation with simulated error
+    obs = adapter.execute(CanonicalInput(input_id="INP-S1", payload={"secret_key": "private_val"}))
+    assert "super_secret_token_abc" not in str(obs.raw_outputs)
+    assert "super_secret_token_abc" not in str(obs.provenance)
+
+
+def test_container_adapter_resource_limits_and_secret_references():
+    """ContainerAdapter parses supported resource limits and maps secret references."""
+    os.environ["BEACON_TEST_SECRET_VAR"] = "production_super_secret"
+
+    adapter = ContainerAdapter(
+        image="alpine:3.18",
+        command=["echo", "hello"],
+        environment_variables={"ENV_MODE": "test"},
+        secret_references={"SECRET_KEY": "BEACON_TEST_SECRET_VAR"},
+        resource_limits={"cpus": "1.5", "memory": "512m", "pids_limit": 100, "unsupported_limit": "xyz"},
+        name="test_resource_container",
+    )
+
+    assert "unsupported_limit" in adapter.unsupported_limits
+
+    run_cmd, safe_cmd = adapter._build_container_command()
+    cmd_str = " ".join(run_cmd)
+    safe_str = " ".join(safe_cmd)
+
+    # Verify resource flags injected
+    assert "--cpus=1.5" in cmd_str
+    assert "--memory=512m" in cmd_str
+    assert "--pids-limit=100" in cmd_str
+
+    # Verify secret is resolved in real command but masked in logged command
+    assert "SECRET_KEY=production_super_secret" in cmd_str
+    assert "SECRET_KEY=[REDACTED]" in safe_str
+    assert "production_super_secret" not in safe_str
+
+
+def test_execution_result_captures_stdout_stderr_exit_code():
+    """ApplicationExecutor populates stdout, stderr, and exit_code on ExecutionResult."""
+    adapter = ProcessAdapter(
+        command=[sys.executable, str(CLI_FIXTURE_SCRIPT)],
+        name="test_exec_result_fields",
+        input_mapper=InputMapper(InputMapperConfig(
+            field_mappings={"x": "payload.x", "y": "payload.y", "operation": "payload.op"}
+        )),
+    )
+
+    inp = CanonicalInput(input_id="INP-RES-1", payload={"x": 4.0, "y": 5.0, "op": "multiply"})
+    result = application_executor.execute_single(adapter, inp, input_id="INP-RES-1")
+
+    assert result.status == ExecutionStatus.SUCCEEDED
+    assert result.exit_code == 0
+    assert result.stdout is not None and len(result.stdout) > 0
+    assert result.stderr is not None
+    assert result.duration_ms > 0
+
+
+def test_application_resolver_input_fallback_marks_warning_and_test_only():
+    """ApplicationResolver clearly identifies synthetic input fallback as TEST/DEVELOPMENT ONLY."""
+    from application.resolver import ApplicationResolver
+    resolver = ApplicationResolver()
+
+    # Spec without dataset or contract
+    spec = ApplicationSpec(
+        application_id="app_no_dataset",
+        name="No Dataset Spec",
+        reference_implementation="tests.fixtures.generic_calc_cli:cli_entrypoint",
+        target_implementations=["tests.fixtures.generic_calc_cli:cli_entrypoint"],
+    )
+
+    inputs = resolver.resolve_inputs(spec)
+    assert len(inputs) == 10
+    assert inputs[0].provenance.get("mode") == "test_development_fallback_only"
+    assert inputs[0].provenance.get("source") == "phase1_test_fallback"
+    assert "warning" in inputs[0].provenance
+
