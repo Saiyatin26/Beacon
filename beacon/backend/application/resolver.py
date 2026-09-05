@@ -9,19 +9,22 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Optional, Union
 
-from certification.adapters import (
+from common.contracts import (
     AdapterRole,
+    CanonicalInput,
+    ImplementationAdapter,
+    adapter_registry,
+)
+from certification.adapters import (
     ConfiguredOutputNormalizer,
     DefaultOutputNormalizer,
     FunctionAdapter,
-    ImplementationAdapter,
     PreserveCaseNormalizer,
     ReferenceAdapter,
     StripWhitespaceNormalizer,
     TargetAdapter,
 )
-from certification.adapter_registry import adapter_registry
-from certification.models import CanonicalInput, CertificationTestInput
+from certification.models import CertificationTestInput
 from oracle.models import OracleDefinition, OracleRule, OracleSet, OracleSourceMode, RuleSeverity
 from oracle.registry import registry as oracle_registry
 from .models import ApplicationSpec, ImplementationTarget
@@ -108,7 +111,8 @@ class ApplicationResolver:
                     output_normalizer=output_norm,
                 )
             elif isinstance(target_obj.entrypoint, str):
-                if target_obj.entrypoint in [a["name"] for a in adapter_registry.list_adapters()]:
+                registered_names = [a.name if hasattr(a, "name") else a["name"] for a in adapter_registry.list_adapters()]
+                if target_obj.entrypoint in registered_names:
                     reg_adapter = adapter_registry.get_adapter(target_obj.entrypoint, version=target_obj.version)
                     if reg_adapter:
                         return reg_adapter

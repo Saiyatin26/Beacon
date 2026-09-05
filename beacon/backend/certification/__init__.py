@@ -53,6 +53,7 @@ from .report_generator import generate_html_report, generate_markdown_report
 from .runner import certify
 from .scorer import domain_scores, equivalence_score
 
+
 __all__ = [
     "Observation",
     "CertificationTestInput",
@@ -92,3 +93,4 @@ __all__ = [
     "equivalence_score",
     "domain_scores",
 ]
+

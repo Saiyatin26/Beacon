@@ -6,25 +6,23 @@ and configurable, auditable normalization.
 """
 
 from abc import ABC, abstractmethod
-from enum import Enum
 import hashlib
 import logging
 from pathlib import Path
 import time
 from typing import Any, Callable, Optional, Union
 
-from .models import CanonicalInput, Observation
+from common.contracts import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterHealthStatus,
+    AdapterRole,
+    CanonicalInput,
+    ImplementationAdapter,
+    Observation,
+)
 
 logger = logging.getLogger("beacon.certification.adapters")
-
-
-class AdapterRole(str, Enum):
-    """Generic role of an implementation under behavioral equivalence evaluation."""
-    REFERENCE = "reference"
-    TARGET = "target"
-    # Backward compatibility aliases
-    LEGACY = "legacy"
-    MODERNIZED = "modernized"
 
 
 # ==============================================================================
@@ -244,65 +242,6 @@ def compute_implementation_hash(target: Any) -> str:
     raise ValueError(f"Unsupported implementation target type: {type(target)}. Must be a file path, directory path, or anchored callable.")
 
 
-# ==============================================================================
-# Implementation Adapter Base Class & Lifecycle Contract
-# ==============================================================================
-
-class ImplementationAdapter(ABC):
-    """Abstract Base Class for implementation target runners (Python, Java, Rust, REST, CLI, etc.).
-    
-    Defines the full generic adapter lifecycle:
-    configure() -> validate() -> prepare() -> execute() -> normalize_output() -> capture_evidence() -> cleanup()
-    """
-
-    name: str = "base_adapter"
-    version: str = "1.0.0"
-    role: Union[AdapterRole, str] = AdapterRole.TARGET
-    implementation_hash: str = ""
-    adapter_type: str = "custom"
-
-    def configure(self, config: Optional[dict[str, Any]] = None) -> None:
-        """Lifecycle hook: Configures adapter with runtime parameters."""
-        pass
-
-    def health_check(self) -> Any:
-        """Lifecycle hook: Evaluates operational readiness and dependency availability."""
-        from execution.models import AdapterCapabilities, AdapterHealth, AdapterHealthStatus
-        caps = getattr(self, "capabilities", None) or AdapterCapabilities()
-        return AdapterHealth(
-            adapter_id=f"{self.name}:{self.version}",
-            status=AdapterHealthStatus.AVAILABLE,
-            is_ready=True,
-            diagnostics=f"Adapter '{self.name}' is operational.",
-            capabilities=caps,
-        )
-
-    def prepare(self, context: Optional[dict[str, Any]] = None) -> None:
-        """Lifecycle hook: Prepares the runtime environment, dependencies, or connections."""
-        pass
-
-    def validate(self, input_data: Any = None) -> bool:
-        """Lifecycle hook: Validates that the adapter target is accessible and ready for execution."""
-        return True
-
-    @abstractmethod
-    def execute(self, inputs: Union[dict[str, Any], CanonicalInput], input_id: str = "") -> Observation:
-        """Lifecycle hook: Executes the implementation on the provided input and returns an Observation."""
-        pass
-
-    def normalize_output(self, raw_output: Any) -> dict[str, Any]:
-        """Lifecycle hook: Normalizes raw outputs using the configured output normalizer."""
-        return default_output_normalizer(raw_output)
-
-    def capture_evidence(self, observation: Observation) -> Optional[dict[str, Any]]:
-        """Lifecycle hook: Captures execution evidence (traces, metadata, state changes)."""
-        return observation.provenance
-
-    def cleanup(self) -> None:
-        """Lifecycle hook: Cleans up temporary resources, connections, or state."""
-        pass
-
-
 class FunctionAdapter(ImplementationAdapter):
     """Executes a Python callable function with latency tracking, exception isolation,
     and configurable input/output normalization.
@@ -327,7 +266,6 @@ class FunctionAdapter(ImplementationAdapter):
         self.input_mapper = input_mapper
         self.output_mapper = output_mapper
 
-        from execution.models import AdapterCapabilities
         self.capabilities = AdapterCapabilities(
             supports_timeout=False,
             supports_streaming=False,
@@ -353,8 +291,7 @@ class FunctionAdapter(ImplementationAdapter):
 
         self.implementation_hash = compute_implementation_hash(target_fn)
 
-    def health_check(self) -> Any:
-        from execution.models import AdapterHealth, AdapterHealthStatus
+    def health_check(self) -> AdapterHealth:
         if not callable(self.target_fn):
             return AdapterHealth(
                 adapter_id=f"{self.name}:{self.version}",

@@ -68,7 +68,7 @@ class OllamaProvider(LLMProvider):
                     resp_bytes = resp.read()
                     return json.loads(resp_bytes.decode("utf-8"))
 
-            from backend.operations.resilience import execute_with_retry
+            from operations.resilience import execute_with_retry
             resp_json = execute_with_retry(
                 _fetch,
                 max_attempts=getattr(settings, "max_retry_attempts", 3),

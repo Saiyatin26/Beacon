@@ -13,9 +13,13 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel, Field
 
 from application.models import ApplicationRole, ApplicationSpec, ImplementationTarget
-from certification.adapter_registry import AdapterRegistry, adapter_registry
-from certification.adapters import ImplementationAdapter
-from .models import AdapterHealth, AdapterHealthStatus
+from common.contracts import (
+    AdapterHealth,
+    AdapterHealthStatus,
+    AdapterRegistry,
+    adapter_registry,
+    ImplementationAdapter,
+)
 
 logger = logging.getLogger("beacon.execution.preflight")
 

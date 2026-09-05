@@ -17,11 +17,19 @@ import subprocess
 import sys
 import time
 from typing import Any, Callable, Optional, Union
-
-from certification.adapters import AdapterRole, ImplementationAdapter
-from certification.models import CanonicalInput, Observation
+from common.contracts import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterHealthStatus,
+    AdapterRole,
+    AdapterType,
+    CanonicalInput,
+    ExecutionStatus,
+    ImplementationAdapter,
+    Observation,
+)
 from .mapping import InputMapper, InputMapperConfig, OutputMapper, OutputMapperConfig
-from .models import AdapterCapabilities, AdapterHealth, AdapterHealthStatus, AdapterType, ExecutionResult, ExecutionStatus
+from .models import ExecutionResult
 from .security import SandboxedPathValidator, SecretRedactor
 
 logger = logging.getLogger("beacon.execution.process")

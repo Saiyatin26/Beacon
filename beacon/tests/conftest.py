@@ -14,12 +14,18 @@ os.environ["BEACON_ENV"] = "test"
 os.environ["ENVIRONMENT"] = "test"
 os.environ["BEACON_REQUIRE_AUTH"] = "true"
 os.environ["JWT_SECRET_KEY"] = "beacon_pytest_secure_test_signing_secret_key_2026"
+os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
 
 import sys
 from pathlib import Path
 
 # Ensure backend directory is in sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+
+from common.config import settings
+settings.openrouter_api_key = ""
+settings.anthropic_api_key = ""
 
 from api.main import app
 from auth import (

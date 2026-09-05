@@ -77,6 +77,8 @@ def clean_state():
     registry.clear()
     certification_repository.clear()
     adapter_registry.clear()
+    from benchmarks.registry import benchmark_registry
+    benchmark_registry.refresh()
 
 
 # ==============================================================================

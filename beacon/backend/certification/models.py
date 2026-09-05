@@ -23,52 +23,11 @@ class CertificationStatus(str, Enum):
     ORACLE_SET_INVALID = "ORACLE_SET_INVALID"
 
 
-class Observation(BaseModel):
-    """Execution observation of a target implementation on a single input."""
-    input_id: str
-    raw_inputs: dict[str, Any] = Field(default_factory=dict)
-    normalized_inputs: dict[str, Any] = Field(default_factory=dict)
-    raw_outputs: dict[str, Any] = Field(default_factory=dict)
-    normalized_outputs: dict[str, Any] = Field(default_factory=dict)
-    execution_status: Literal["SUCCESS", "EXCEPTION", "TIMEOUT"] = "SUCCESS"
-    implementation_name: str = "implementation"
-    implementation_version: str = "1.0.0"
-    execution_time_ms: float = 0.0
-    error_message: Optional[str] = None
-    state_changes: Optional[dict[str, Any]] = None
-    side_effects: list[dict[str, Any]] = Field(default_factory=list)
-    trace_reference: Optional[str] = None
-    provenance: dict[str, Any] = Field(default_factory=dict)
-
-
-def compute_canonical_input_hash(values: dict[str, Any]) -> str:
-    """Computes a full 64-character SHA-256 digest of canonical input values with stable key ordering."""
-    canonical = json.dumps(values, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-class CanonicalInput(BaseModel):
-    """Generic canonical input contract for arbitrary domain payloads."""
-    input_id: str
-    payload: dict[str, Any] = Field(default_factory=dict)
-    values: dict[str, Any] = Field(default_factory=dict)
-    input_hash: str = ""
-    metadata: dict[str, Any] = Field(default_factory=dict)
-    provenance: dict[str, Any] = Field(default_factory=dict)
-    expected_context: Optional[dict[str, Any]] = None
-    tags: list[str] = Field(default_factory=list)
-
-    def model_post_init(self, __context: Any) -> None:
-        target_dict = self.payload or self.values
-        if not self.payload and self.values:
-            object.__setattr__(self, "payload", self.values)
-        if not self.values and self.payload:
-            object.__setattr__(self, "values", self.payload)
-        if not self.input_hash and target_dict:
-            object.__setattr__(self, "input_hash", compute_canonical_input_hash(target_dict))
-
-    def get_data(self) -> dict[str, Any]:
-        return self.payload or self.values
+from common.contracts import (
+    CanonicalInput,
+    Observation,
+    compute_canonical_input_hash,
+)
 
 
 class CertificationTestInput(BaseModel):

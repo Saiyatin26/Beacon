@@ -1,9 +1,3 @@
-"""BEACON V2 — Application Layer Package.
-
-Provides generic, domain-agnostic application models, specifications,
-persistence, registry, and resolution capabilities.
-"""
-
 from .models import (
     ApplicationRole,
     ApplicationSpec,
@@ -20,7 +14,14 @@ from .models import (
 )
 from .registry import ApplicationRegistry, application_registry
 from .repository import ApplicationRepository, application_repository
-from .resolver import ApplicationResolutionError, ApplicationResolver
+
+
+def __getattr__(name: str):
+    if name in ("ApplicationResolver", "ApplicationResolutionError"):
+        from .resolver import ApplicationResolutionError, ApplicationResolver
+        return ApplicationResolutionError if name == "ApplicationResolutionError" else ApplicationResolver
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+
 
 __all__ = [
     "ApplicationRole",
@@ -42,3 +43,4 @@ __all__ = [
     "ApplicationResolutionError",
     "ApplicationResolver",
 ]
+

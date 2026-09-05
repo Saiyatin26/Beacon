@@ -1902,6 +1902,14 @@ def validate_custom_certification(
     # 2. Allowlisted Adapter Resolution
     leg_adp = adapter_registry.get_adapter(req.legacy_adapter_id)
     mod_adp = adapter_registry.get_adapter(req.modernized_adapter_id)
+    if not leg_adp or not mod_adp:
+        try:
+            from benchmarks.registry import benchmark_registry
+            benchmark_registry.refresh()
+            leg_adp = adapter_registry.get_adapter(req.legacy_adapter_id)
+            mod_adp = adapter_registry.get_adapter(req.modernized_adapter_id)
+        except Exception:
+            pass
 
     leg_status = "READY" if leg_adp else "NOT_FOUND"
     mod_status = "READY" if mod_adp else "NOT_FOUND"
@@ -2086,6 +2094,14 @@ def run_custom_certification(
 
     leg_adp = adapter_registry.get_adapter(req.legacy_adapter_id)
     mod_adp = adapter_registry.get_adapter(req.modernized_adapter_id)
+    if not leg_adp or not mod_adp:
+        try:
+            from benchmarks.registry import benchmark_registry
+            benchmark_registry.refresh()
+            leg_adp = adapter_registry.get_adapter(req.legacy_adapter_id)
+            mod_adp = adapter_registry.get_adapter(req.modernized_adapter_id)
+        except Exception:
+            pass
     if not leg_adp:
         raise HTTPException(status_code=400, detail=f"Unsupported legacy implementation adapter '{req.legacy_adapter_id}'.")
     if not mod_adp:

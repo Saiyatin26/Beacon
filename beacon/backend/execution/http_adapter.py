@@ -14,10 +14,17 @@ import time
 from typing import Any, Callable, Optional, Union
 import httpx
 
-from certification.adapters import AdapterRole, ImplementationAdapter
-from certification.models import CanonicalInput, Observation
+from common.contracts import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterHealthStatus,
+    AdapterRole,
+    AdapterType,
+    CanonicalInput,
+    ImplementationAdapter,
+    Observation,
+)
 from .mapping import InputMapper, OutputMapper
-from .models import AdapterCapabilities, AdapterHealth, AdapterHealthStatus, AdapterType
 from .security import SSRFValidator, SecretRedactor
 
 logger = logging.getLogger("beacon.execution.http")

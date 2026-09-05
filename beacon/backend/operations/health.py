@@ -16,10 +16,8 @@ from pydantic import BaseModel, Field
 
 from common.config import settings
 from certification.repository import certification_repository
-from benchmarks import benchmark_registry
 from oracle.registry import registry as oracle_registry
 from ingestion.dataset_registry import user_dataset_registry
-from llm.manager import get_provider_manager
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +143,7 @@ def check_readiness() -> ReadinessResponse:
     # 2. Benchmark Registry Check — READ ONLY
     bench_ok = False
     try:
+        from benchmarks import benchmark_registry
         benchmarks = benchmark_registry.list_benchmarks()
         bench_ok = len(benchmarks) > 0
         if not bench_ok:
@@ -206,6 +205,7 @@ def check_dependency_health() -> HealthDetailsResponse:
     # 2. Benchmark Registry
     bench_count = 0
     try:
+        from benchmarks import benchmark_registry
         bench_count = len(benchmark_registry.list_benchmarks()) if hasattr(benchmark_registry, "list_benchmarks") else 0
     except Exception:
         pass
@@ -246,6 +246,7 @@ def check_dependency_health() -> HealthDetailsResponse:
 
     # 6. LLM Multi-Provider Hierarchy (Sanitized — zero secrets, zero paths)
     try:
+        from llm.manager import get_provider_manager
         pm = get_provider_manager()
         llm_status = pm.get_status()
         providers_dict = llm_status.get("providers", {})

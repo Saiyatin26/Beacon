@@ -25,10 +25,20 @@ class OpenRouterProvider(LLMProvider):
         base_url: Optional[str] = None,
         timeout: float = 30.0,
     ):
-        self.api_key = (api_key if api_key is not None else (settings.openrouter_api_key or "")).strip()
+        self._explicit_api_key = api_key
         self.model = model or settings.openrouter_model or "anthropic/claude-3.5-sonnet"
         self.base_url = (base_url or settings.openrouter_base_url or "https://openrouter.ai/api/v1").rstrip("/")
         self.timeout = timeout
+
+    @property
+    def api_key(self) -> str:
+        if self._explicit_api_key is not None:
+            return self._explicit_api_key.strip()
+        return (settings.openrouter_api_key or "").strip()
+
+    @api_key.setter
+    def api_key(self, val: Optional[str]) -> None:
+        self._explicit_api_key = val
 
     def is_available(self) -> bool:
         """Returns whether this provider can be attempted by the fallback chain."""
@@ -101,7 +111,7 @@ class OpenRouterProvider(LLMProvider):
                     resp_bytes = resp.read()
                     return json.loads(resp_bytes.decode("utf-8"))
 
-            from backend.operations.resilience import execute_with_retry
+            from operations.resilience import execute_with_retry
             resp_json = execute_with_retry(
                 _fetch,
                 max_attempts=getattr(settings, "max_retry_attempts", 3),

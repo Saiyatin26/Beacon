@@ -12,9 +12,16 @@ import os
 import shutil
 from typing import Any, Optional, Union
 
-from certification.adapters import AdapterRole, ImplementationAdapter
-from certification.models import CanonicalInput, Observation
-from .models import AdapterCapabilities, AdapterHealth, AdapterHealthStatus, AdapterType
+from common.contracts import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterHealthStatus,
+    AdapterRole,
+    AdapterType,
+    CanonicalInput,
+    ImplementationAdapter,
+    Observation,
+)
 from .security import SecretRedactor
 
 logger = logging.getLogger("beacon.execution.container")

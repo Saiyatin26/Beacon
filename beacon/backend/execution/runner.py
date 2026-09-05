@@ -12,8 +12,7 @@ import time
 from typing import Any, Optional, Union
 
 from application.models import ApplicationRole, ApplicationSpec
-from certification.adapters import ImplementationAdapter
-from certification.models import CanonicalInput, Observation
+from common.contracts import CanonicalInput, ImplementationAdapter, Observation
 from .mapping import InputMapper, OutputMapper
 from .models import ExecutionRequest, ExecutionResult, ExecutionSession, ExecutionStatus
 from .preflight import PreFlightResult, PreFlightValidator, preflight_validator

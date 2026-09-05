@@ -8,8 +8,7 @@ CLI flags, and stdout/stderr).
 import json
 from typing import Any, Callable, Optional, Union
 from pydantic import BaseModel, Field
-
-from certification.models import CanonicalInput, Observation
+from common.contracts import CanonicalInput, Observation
 
 
 class InputMapperConfig(BaseModel):

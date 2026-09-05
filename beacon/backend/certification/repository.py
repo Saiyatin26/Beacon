@@ -404,7 +404,7 @@ class CertificationRepository:
             )
 
         cursor.execute("""
-            INSERT INTO input_sets (
+            INSERT OR REPLACE INTO input_sets (
                 input_set_id, version, generator_type, input_count, seed, canonical_hash, payload_json, created_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
@@ -456,7 +456,7 @@ class CertificationRepository:
                 )
 
             cursor.execute("""
-                INSERT INTO certification_cases (
+                INSERT OR REPLACE INTO certification_cases (
                     case_id, run_id, input_set_id, case_index, input_hash, classification, severity, payload_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """, (

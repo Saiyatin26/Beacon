@@ -4,7 +4,14 @@ import logging
 import time
 from typing import Any, Optional
 
-from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+try:
+    from anthropic import Anthropic, APIConnectionError, APIStatusError, RateLimitError
+    _ANTHROPIC_INSTALLED = True
+except ImportError:
+    Anthropic = None  # type: ignore
+    APIConnectionError = APIStatusError = RateLimitError = Exception  # type: ignore
+    _ANTHROPIC_INSTALLED = False
+
 from common.config import settings
 from .base import LLMProvider, LLMResponse, extract_json_payload
 
@@ -21,18 +28,31 @@ class AnthropicProvider(LLMProvider):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
     ):
-        self.api_key = (api_key if api_key is not None else (settings.anthropic_api_key or "")).strip()
+        self._explicit_api_key = api_key
         self.model = model or settings.anthropic_model or "claude-sonnet-4-6"
-        self._client: Optional[Anthropic] = None
+        self._client: Optional[Any] = None
 
-    def _get_client(self) -> Anthropic:
+    @property
+    def api_key(self) -> str:
+        if self._explicit_api_key is not None:
+            return self._explicit_api_key.strip()
+        return (settings.anthropic_api_key or "").strip()
+
+    @api_key.setter
+    def api_key(self, val: Optional[str]) -> None:
+        self._explicit_api_key = val
+        self._client = None
+
+    def _get_client(self) -> Any:
+        if not _ANTHROPIC_INSTALLED or Anthropic is None:
+            raise RuntimeError("The 'anthropic' package is not installed. Please install it to use AnthropicProvider.")
         if self._client is None:
             self._client = Anthropic(api_key=self.api_key or "unconfigured")
         return self._client
 
     def is_available(self) -> bool:
-        """Returns True if the Anthropic API key is configured."""
-        return bool(self.api_key)
+        """Returns True if the Anthropic API key is configured and library is installed."""
+        return _ANTHROPIC_INSTALLED and bool(self.api_key)
 
     def generate(
         self,
@@ -60,7 +80,7 @@ class AnthropicProvider(LLMProvider):
             if system:
                 kwargs["system"] = system
 
-            from backend.operations.resilience import execute_with_retry
+            from operations.resilience import execute_with_retry
             response = execute_with_retry(
                 lambda: client.messages.create(**kwargs),
                 max_attempts=getattr(settings, "max_retry_attempts", 3),

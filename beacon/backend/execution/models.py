@@ -12,65 +12,16 @@ import json
 from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
-from certification.adapters import AdapterRole
-from certification.models import CanonicalInput, Observation
-
-
-class ExecutionStatus(str, Enum):
-    """Deterministic status lifecycle for an application execution attempt."""
-    CREATED = "CREATED"
-    PREPARING = "PREPARING"
-    RUNNING = "RUNNING"
-    SUCCEEDED = "SUCCEEDED"
-    FAILED = "FAILED"
-    APP_EXECUTION_ERROR = "APP_EXECUTION_ERROR"
-    TIMEOUT = "TIMEOUT"
-    CANCELLED = "CANCELLED"
-    VALIDATION_ERROR = "VALIDATION_ERROR"
-    ADAPTER_ERROR = "ADAPTER_ERROR"
-    UNAVAILABLE = "UNAVAILABLE"
-
-
-class AdapterType(str, Enum):
-    """Runtime execution modality supported by the adapter framework."""
-    FUNCTION = "function"
-    PROCESS = "process"
-    CLI = "cli"
-    HTTP = "http"
-    CONTAINER = "container"
-    CUSTOM = "custom"
-
-
-class AdapterHealthStatus(str, Enum):
-    """Operational readiness status for an adapter."""
-    AVAILABLE = "AVAILABLE"
-    UNAVAILABLE = "UNAVAILABLE"
-    MISCONFIGURED = "MISCONFIGURED"
-
-
-class AdapterCapabilities(BaseModel):
-    """Declared capabilities supported by a specific adapter instance."""
-    supports_timeout: bool = True
-    supports_streaming: bool = False
-    supports_files: bool = False
-    supports_binary: bool = False
-    supports_traces: bool = False
-    supports_cleanup: bool = True
-    supports_state_capture: bool = False
-    supports_custom_environment: bool = True
-    supports_sandboxing: bool = True
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class AdapterHealth(BaseModel):
-    """Diagnostic health assessment of an adapter and its runtime dependencies."""
-    adapter_id: str
-    status: AdapterHealthStatus = AdapterHealthStatus.AVAILABLE
-    is_ready: bool = True
-    diagnostics: str = "Adapter is operational and ready for execution."
-    capabilities: AdapterCapabilities = Field(default_factory=AdapterCapabilities)
-    checked_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
-    details: dict[str, Any] = Field(default_factory=dict)
+from common.contracts import (
+    AdapterCapabilities,
+    AdapterHealth,
+    AdapterHealthStatus,
+    AdapterRole,
+    AdapterType,
+    CanonicalInput,
+    ExecutionStatus,
+    Observation,
+)
 
 
 class ExecutionRequest(BaseModel):

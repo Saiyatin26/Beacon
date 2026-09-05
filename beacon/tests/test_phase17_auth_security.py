@@ -19,11 +19,16 @@ Exhaustively verifies:
 
 from datetime import timedelta
 import json
+from pathlib import Path
+import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.api.main import app
-from backend.auth import (
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.append(str(ROOT / "backend"))
+
+from api.main import app
+from auth import (
     UserRole,
     Permission,
     ROLE_PERMISSIONS,
@@ -37,9 +42,9 @@ from backend.auth import (
     User,
     ProjectMembership,
 )
-from backend.certification.repository import certification_repository
-from backend.common.config import settings
-from backend.ingestion.audit import audit_logger, AuditAction
+from certification.repository import certification_repository
+from common.config import settings
+from ingestion.audit import audit_logger, AuditAction
 
 
 client = TestClient(app)

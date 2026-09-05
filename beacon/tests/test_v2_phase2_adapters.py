@@ -818,3 +818,147 @@ def test_application_executor_sanitizes_exception_secrets():
     assert "password=[REDACTED]" in res.error_message
 
 
+# ==============================================================================
+# SUBPROCESS IMPORT ISOLATION & OPTIONAL DEPENDENCY TESTS
+# ==============================================================================
+
+def test_subprocess_import_isolation_execution_models():
+    """Verify execution.models can be imported in a clean Python subprocess without certification or LLM."""
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, 'backend')\n"
+        "import execution.models\n"
+        "cert_modules = [m for m in sys.modules if 'certification' in m or 'llm' in m]\n"
+        "assert len(cert_modules) == 0, f'Unexpected modules loaded: {cert_modules}'\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, f"Subprocess import failed: {res.stderr}"
+
+
+def test_subprocess_import_isolation_execution_security():
+    """Verify execution.security can be imported in a clean Python subprocess without certification or LLM."""
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, 'backend')\n"
+        "import execution.security\n"
+        "cert_modules = [m for m in sys.modules if 'certification' in m or 'llm' in m]\n"
+        "assert len(cert_modules) == 0, f'Unexpected modules loaded: {cert_modules}'\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, f"Subprocess import failed: {res.stderr}"
+
+
+def test_subprocess_import_isolation_execution_mapping():
+    """Verify execution.mapping can be imported in a clean Python subprocess without certification or LLM."""
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, 'backend')\n"
+        "import execution.mapping\n"
+        "cert_modules = [m for m in sys.modules if 'certification' in m or 'llm' in m]\n"
+        "assert len(cert_modules) == 0, f'Unexpected modules loaded: {cert_modules}'\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, f"Subprocess import failed: {res.stderr}"
+
+
+def test_subprocess_import_isolation_execution_adapters():
+    """Verify all execution adapters can be imported in a clean Python subprocess without certification or LLM."""
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, 'backend')\n"
+        "import execution.process_adapter\n"
+        "import execution.http_adapter\n"
+        "import execution.container_adapter\n"
+        "cert_modules = [m for m in sys.modules if 'certification' in m or 'llm' in m]\n"
+        "assert len(cert_modules) == 0, f'Unexpected modules loaded: {cert_modules}'\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, f"Subprocess import failed: {res.stderr}"
+
+
+def test_optional_anthropic_missing_isolation():
+    """Verify execution and LLM subsystems operate without errors when anthropic is absent."""
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, 'backend')\n"
+        "sys.modules['anthropic'] = None\n"
+        "import execution.models\n"
+        "import execution.security\n"
+        "import execution.mapping\n"
+        "import execution.process_adapter\n"
+        "import execution.http_adapter\n"
+        "import execution.container_adapter\n"
+        "import llm.manager\n"
+        "mgr = llm.manager.get_provider_manager()\n"
+        "status = mgr.get_status()\n"
+        "assert status['providers']['anthropic']['available'] is False\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, f"Optional dependency isolation failed: {res.stderr}"
+
+
+# ==============================================================================
+# LIFECYCLE & CLEANUP GUARANTEE TESTS
+# ==============================================================================
+
+def test_adapter_cleanup_always_executed_on_success():
+    """Verify cleanup() is called on successful execution."""
+    cleaned_up = []
+
+    class MockLifecycleAdapter(ImplementationAdapter):
+        name = "mock_lifecycle"
+        def execute(self, inputs, input_id=""):
+            return Observation(input_id=input_id, execution_status="SUCCESS", raw_output={"val": 1})
+        def cleanup(self):
+            cleaned_up.append(True)
+
+    adapter = MockLifecycleAdapter()
+    res = application_executor.execute_single(adapter, CanonicalInput(input_id="INP-CLN-1", payload={}))
+    assert res.status == ExecutionStatus.SUCCEEDED
+    assert len(cleaned_up) == 1
+
+
+def test_adapter_cleanup_always_executed_on_exception():
+    """Verify cleanup() is called even when execute() raises an uncaught exception."""
+    cleaned_up = []
+
+    class FailingLifecycleAdapter(ImplementationAdapter):
+        name = "mock_failing_lifecycle"
+        def execute(self, inputs, input_id=""):
+            raise RuntimeError("Fatal execution crash")
+        def cleanup(self):
+            cleaned_up.append(True)
+
+    adapter = FailingLifecycleAdapter()
+    res = application_executor.execute_single(adapter, CanonicalInput(input_id="INP-CLN-2", payload={}))
+    assert res.status == ExecutionStatus.ADAPTER_ERROR
+    assert len(cleaned_up) == 1
+
+
+# ==============================================================================
+# COMPREHENSIVE SECRET REDACTION & PRESERVATION OF USEFUL OUTPUT
+# ==============================================================================
+
+def test_selective_secret_redaction_preserves_useful_behavior():
+    """Verify selective redaction preserves non-sensitive behavioral output."""
+    test_secret = "BEACON_PHASE2_SECRET_9f8a7c6b"
+    raw_output = (
+        f"price=120\n"
+        f"discount=15\n"
+        f"status=approved\n"
+        f"Authorization: Bearer {test_secret}\n"
+        f"token={test_secret}\n"
+    )
+
+    redacted = SecretRedactor.redact_string(raw_output)
+
+    assert test_secret not in redacted
+    assert "price=120" in redacted
+    assert "discount=15" in redacted
+    assert "status=approved" in redacted
+    assert "Authorization:" in redacted
+    assert "[REDACTED]" in redacted
+    assert "token=[REDACTED]" in redacted
+
+
+
