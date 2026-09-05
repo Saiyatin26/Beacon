@@ -18,7 +18,9 @@ Comprehensive validation covering:
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
+
 import sys
 import tempfile
 import time
@@ -70,7 +72,11 @@ from execution import (
     PairedExecutionRequest,
     PairedExecutionSession,
     PairedExecutionStatus,
+    ProcessAdapter,
+    ProcessExecutionMode,
+    ProcessLifecycleState,
     ReadinessChecker,
+
     ReadinessConfig,
     ReadinessResult,
     ReadinessStrategy,
@@ -1254,5 +1260,272 @@ def test_paired_execution_full_lifecycle_start_ready_execute_stop_cleanup():
         "target_lifecycle:cleanup",
     ]
     assert lifecycle_log == expected
+
+
+# ==============================================================================
+# 14. Real Persistent ProcessAdapter Lifecycle & Process Identity Tests
+# ==============================================================================
+
+def test_real_process_adapter_persistent_identity_and_readiness():
+    """TEST 1: Real ProcessAdapter persistent: start() -> PID X -> readiness(PID X) -> execute() -> PID X."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_persistent_identity",
+        role=AdapterRole.REFERENCE,
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    # 1. Start process
+    proc = adapter.start()
+    assert proc is not None
+    started_pid = proc.pid
+    assert started_pid > 0
+    assert adapter.get_process() is proc
+    assert adapter.lifecycle_state == ProcessLifecycleState.RUNNING
+
+    # 2. Readiness on that exact process
+    readiness = ReadinessChecker.wait_until_ready(
+        ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=5.0),
+        adapter=adapter,
+        process=proc,
+    )
+    assert readiness.ready is True
+    assert f"PID {started_pid}" in readiness.diagnostics
+
+    # 3. Execute input against that exact process
+    obs = adapter.execute({"query": "calculate_val", "n": 42}, input_id="INP-001")
+    assert obs.execution_status == "SUCCESS"
+    assert obs.provenance["execution_mode"] == "persistent"
+    assert obs.provenance["pid"] == started_pid
+    assert obs.provenance["process_id"] == started_pid
+    assert obs.raw_outputs["pid"] == started_pid
+    assert obs.raw_outputs["count"] == 1
+
+    # 4. Stop terminates that exact process
+    adapter.stop()
+    assert proc.poll() is not None
+    assert adapter.get_process() is None
+    assert adapter.lifecycle_state == ProcessLifecycleState.STOPPED
+
+
+def test_real_process_adapter_multi_input_reuse():
+    """TEST 2: Multi-input reuse: start() -> input1 -> input2 -> input3 -> stop(). All use PID X."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_multi_input_reuse",
+        role=AdapterRole.TARGET,
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    started_pid = proc.pid
+
+    # Execute 3 inputs sequentially
+    inputs = [{"item": "first"}, {"item": "second"}, {"item": "third"}]
+    for idx, inp in enumerate(inputs, 1):
+        obs = adapter.execute(inp, input_id=f"INP-{idx:03d}")
+        assert obs.execution_status == "SUCCESS"
+        assert obs.provenance["pid"] == started_pid
+        assert obs.raw_outputs["pid"] == started_pid
+        assert obs.raw_outputs["count"] == idx
+
+    adapter.stop()
+    assert proc.poll() is not None
+
+
+def test_real_process_adapter_no_second_popen(monkeypatch):
+    """TEST 3: Count process launches: persistent start = 1 Popen, execute x N = 0 additional Popen."""
+    import subprocess
+    real_popen = subprocess.Popen
+    popen_calls = []
+
+    def tracking_popen(*args, **kwargs):
+        p = real_popen(*args, **kwargs)
+        popen_calls.append(p)
+        return p
+
+    monkeypatch.setattr(subprocess, "Popen", tracking_popen)
+
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_popen_count",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    # Launch once
+    adapter.start()
+    assert len(popen_calls) == 1
+
+    # Execute 4 times
+    for i in range(4):
+        obs = adapter.execute({"step": i})
+        assert obs.execution_status == "SUCCESS"
+
+    # Verify zero additional Popen calls
+    assert len(popen_calls) == 1
+
+    adapter.stop()
+
+
+def test_real_process_adapter_stop_terminates_same_process():
+    """TEST 4: stop() terminates the exact process created by start()."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_stop_termination",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    pid = proc.pid
+    assert proc.poll() is None
+
+    obs = adapter.execute({"test": "alive"})
+    assert obs.execution_status == "SUCCESS"
+
+    adapter.stop()
+    assert proc.poll() is not None
+    assert adapter.get_process() is None
+
+
+def test_real_process_adapter_readiness_fails_closed_when_not_started():
+    """TEST 5: PROCESS_ALIVE readiness fails closed when no actual process exists."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_readiness_fail_closed",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+    )
+
+    # Process has NOT been started
+    assert adapter.get_process() is None
+
+    res = ReadinessChecker.wait_until_ready(
+        ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=0.2, poll_interval_seconds=0.05),
+        adapter=adapter,
+    )
+    assert res.ready is False
+    assert "No process handle available" in res.diagnostics
+
+
+def test_real_process_adapter_process_exit_before_execution():
+    """TEST 6: Start process, force it to exit, then call execute() -> explicit failure, NOT new process."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_exited_no_respawn",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    pid = proc.pid
+
+    # Force the process to exit
+    proc.kill()
+    proc.wait(timeout=2.0)
+    assert proc.poll() is not None
+
+    # Call execute - must fail closed with PROCESS_NOT_RUNNING and NOT spawn a new process
+    obs = adapter.execute({"data": "should_fail"})
+    assert obs.execution_status == "PROCESS_NOT_RUNNING"
+    assert obs.provenance.get("error_type") == "ProcessNotRunningError"
+    assert obs.provenance.get("pid") == pid
+    assert adapter.get_process().poll() is not None
+
+
+def test_real_process_adapter_one_shot_regression():
+    """TEST 7: Verify normal CLI one-shot execution still works with execute() spawning per input."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+
+    adapter = ProcessAdapter(
+        command=[python_bin, "-c", "import sys; print('ONE_SHOT_OUTPUT_OK')"],
+        name="test_oneshot_cli",
+        execution_mode=ProcessExecutionMode.ONE_SHOT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    # In one-shot mode, start() does not spawn a persistent process
+    proc = adapter.start()
+    assert proc is None
+    assert adapter.get_process() is None
+
+    # Each execute spawns a process, communicates, and terminates
+    obs1 = adapter.execute({})
+    assert obs1.execution_status == "SUCCESS"
+    assert "ONE_SHOT_OUTPUT_OK" in obs1.provenance.get("stdout", "")
+    assert obs1.provenance["execution_mode"] == "one_shot"
+    pid1 = obs1.provenance["pid"]
+
+    obs2 = adapter.execute({})
+    assert obs2.execution_status == "SUCCESS"
+    pid2 = obs2.provenance["pid"]
+
+    # In one-shot mode, separate invocations have different PIDs
+    assert pid1 != pid2
+
+
+def test_paired_execution_with_real_persistent_process_adapters():
+    """Integration: Full paired execution with real persistent ProcessAdapters for Reference and Target."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    ref_adp = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="ref_persistent_app",
+        role=AdapterRole.REFERENCE,
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+    target_adp = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="target_persistent_app",
+        role=AdapterRole.TARGET,
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    req = PairedExecutionRequest(
+        application_id="real_persistent_paired_app",
+        reference_adapter=ref_adp,
+        target_adapter=target_adp,
+        readiness_config_ref=ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=5.0),
+        readiness_config_target=ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=5.0),
+        custom_inputs=[{"x": 10}, {"x": 20}, {"x": 30}],
+    )
+
+    session, bundle = paired_execution_coordinator.execute_paired(req)
+    assert session.status == PairedExecutionStatus.COMPLETED
+
+    # Verify both Reference and Target executed all 3 inputs
+    assert len(session.paired_results) == 3
+    for r in session.paired_results:
+        assert r.reference_execution_id is not None
+        assert r.target_execution_id is not None
+
+
+    # Verify both processes are terminated after paired execution completes
+    assert ref_adp.get_process() is None
+    assert target_adp.get_process() is None
+
 
 

@@ -22,7 +22,13 @@ from .security import (
     SecretRedactor,
     SSRFValidator,
 )
-from .process_adapter import CliAdapter, ProcessAdapter
+from .process_adapter import (
+    CliAdapter,
+    ProcessAdapter,
+    ProcessExecutionMode,
+    ProcessLifecycleState,
+)
+
 from .http_adapter import HttpAdapter
 from .container_adapter import ContainerAdapter
 from .preflight import (
@@ -107,7 +113,10 @@ __all__ = [
     "SSRFValidator",
     "ProcessAdapter",
     "CliAdapter",
+    "ProcessExecutionMode",
+    "ProcessLifecycleState",
     "HttpAdapter",
+
     "ContainerAdapter",
     "PreFlightCheck",
     "PreFlightResult",

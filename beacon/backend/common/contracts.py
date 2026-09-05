@@ -43,6 +43,8 @@ class ExecutionStatus(str, Enum):
     VALIDATION_ERROR = "VALIDATION_ERROR"
     ADAPTER_ERROR = "ADAPTER_ERROR"
     UNAVAILABLE = "UNAVAILABLE"
+    PROCESS_NOT_RUNNING = "PROCESS_NOT_RUNNING"
+
 
 
 class AdapterType(str, Enum):
@@ -150,8 +152,9 @@ class Observation(BaseModel):
     normalized_inputs: dict[str, Any] = Field(default_factory=dict)
     raw_outputs: dict[str, Any] = Field(default_factory=dict)
     normalized_outputs: dict[str, Any] = Field(default_factory=dict)
-    execution_status: Literal["SUCCESS", "EXCEPTION", "TIMEOUT"] = "SUCCESS"
+    execution_status: Literal["SUCCESS", "EXCEPTION", "TIMEOUT", "PROCESS_NOT_RUNNING"] = "SUCCESS"
     implementation_name: str = "implementation"
+
     implementation_version: str = "1.0.0"
     execution_time_ms: float = 0.0
     error_message: Optional[str] = None

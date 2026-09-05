@@ -82,7 +82,10 @@ class ApplicationExecutor:
                 status = ExecutionStatus.SUCCEEDED
             elif obs.execution_status == "TIMEOUT":
                 status = ExecutionStatus.TIMEOUT
+            elif obs.execution_status == "PROCESS_NOT_RUNNING" or obs.provenance.get("error_type") == "ProcessNotRunningError":
+                status = ExecutionStatus.PROCESS_NOT_RUNNING
             elif obs.provenance.get("exit_code") is not None and obs.provenance.get("exit_code") != 0:
+
                 # Process launched and ran, but application returned non-zero exit code
                 status = ExecutionStatus.APP_EXECUTION_ERROR
             elif obs.provenance.get("error_type") in ("ValidationError", "PydanticValidationError"):
