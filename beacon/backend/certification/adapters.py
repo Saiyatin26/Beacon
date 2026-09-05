@@ -318,6 +318,22 @@ class FunctionAdapter(ImplementationAdapter):
 
         self.implementation_hash = compute_implementation_hash(target_fn)
 
+    def validate(self, input_data: Any) -> bool:
+        """Validates that input data satisfies callable parameters without guessing values."""
+        if not callable(self.target_fn):
+            return True
+        import inspect
+        try:
+            sig = inspect.signature(self.target_fn)
+            data_dict = input_data.get_data() if isinstance(input_data, CanonicalInput) else dict(input_data)
+            for p_name, param in sig.parameters.items():
+                if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                    if param.default == inspect.Parameter.empty and p_name not in data_dict:
+                        return False
+            return True
+        except Exception:
+            return True
+
     def normalize_output(self, raw_output: Any) -> dict[str, Any]:
         return self._output_normalizer(raw_output)
 
@@ -341,11 +357,19 @@ class FunctionAdapter(ImplementationAdapter):
                 if has_varkw:
                     call_kwargs = dict(norm_inputs)
                 else:
+                    missing_required = [
+                        p_name for p_name, param in sig.parameters.items()
+                        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+                        and param.default == inspect.Parameter.empty
+                        and p_name not in norm_inputs
+                    ]
+                    if missing_required:
+                        raise ValueError(
+                            f"Input validation error: missing required parameter(s) {missing_required} for target function '{self.name}'"
+                        )
                     call_kwargs = {k: v for k, v in norm_inputs.items() if k in sig.parameters}
-                    for p_name, param in sig.parameters.items():
-                        if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
-                            if p_name not in call_kwargs and param.default == inspect.Parameter.empty:
-                                call_kwargs[p_name] = 50000.0 if "income" in p_name.lower() or "salary" in p_name.lower() else (0.5 if "ratio" in p_name.lower() else 0.0)
+            except ValueError:
+                raise
             except Exception:
                 call_kwargs = norm_inputs
 
@@ -376,14 +400,14 @@ class FunctionAdapter(ImplementationAdapter):
                 input_id=actual_input_id,
                 raw_inputs=raw_inputs,
                 normalized_inputs=norm_inputs,
-                raw_outputs={},
-                normalized_outputs={},
+                raw_outputs={"error": str(exc)},
+                normalized_outputs={"error": str(exc)},
                 execution_status="EXCEPTION",
                 implementation_name=self.name,
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
                 error_message=str(exc),
-                provenance={"role": str(self.role)},
+                provenance={"role": str(self.role), "error_type": type(exc).__name__},
             )
 
 

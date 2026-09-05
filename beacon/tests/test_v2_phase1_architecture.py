@@ -858,3 +858,57 @@ def test_resolver_inputs_fallback_marks_test_source():
         assert inp.provenance.get("source") == "phase1_test_fallback"
 
 
+def test_generic_adapter_never_infers_named_parameters():
+    """Regression test proving that FunctionAdapter NEVER fabricates values for
+    parameters named 'income', 'salary', 'ratio', or any business terms, and produces
+    explicit input validation errors when required parameters are missing.
+    """
+    def check_income_fn(income: float) -> dict:
+        return {"result": income * 2.0}
+
+    def check_salary_fn(salary: float) -> dict:
+        return {"result": salary + 1000.0}
+
+    def check_ratio_fn(ratio: float) -> dict:
+        return {"result": ratio * 100.0}
+
+    adp_income = FunctionAdapter(target_fn=check_income_fn, name="test_income_adp")
+    adp_salary = FunctionAdapter(target_fn=check_salary_fn, name="test_salary_adp")
+    adp_ratio = FunctionAdapter(target_fn=check_ratio_fn, name="test_ratio_adp")
+
+    # 1. Missing parameter 'income' must fail explicitly without guessing 50000
+    assert adp_income.validate({"other_field": 123.0}) is False
+    obs_income_missing = adp_income.execute({"other_field": 123.0}, input_id="INP-001")
+    assert obs_income_missing.execution_status == "EXCEPTION"
+    assert "missing required parameter" in obs_income_missing.raw_outputs.get("error", "").lower()
+    assert "income" in obs_income_missing.raw_outputs.get("error", "").lower()
+
+    # 2. Missing parameter 'salary' must fail explicitly without guessing 50000
+    assert adp_salary.validate({"other_field": 123.0}) is False
+    obs_salary_missing = adp_salary.execute({"other_field": 123.0}, input_id="INP-002")
+    assert obs_salary_missing.execution_status == "EXCEPTION"
+    assert "missing required parameter" in obs_salary_missing.raw_outputs.get("error", "").lower()
+    assert "salary" in obs_salary_missing.raw_outputs.get("error", "").lower()
+
+    # 3. Missing parameter 'ratio' must fail explicitly without guessing 0.5
+    assert adp_ratio.validate({"other_field": 123.0}) is False
+    obs_ratio_missing = adp_ratio.execute({"other_field": 123.0}, input_id="INP-003")
+    assert obs_ratio_missing.execution_status == "EXCEPTION"
+    assert "missing required parameter" in obs_ratio_missing.raw_outputs.get("error", "").lower()
+    assert "ratio" in obs_ratio_missing.raw_outputs.get("error", "").lower()
+
+    # 4. Explicitly provided parameters succeed normally with exact values
+    obs_income_valid = adp_income.execute({"income": 35000.0}, input_id="INP-004")
+    assert obs_income_valid.execution_status == "SUCCESS"
+    assert obs_income_valid.raw_outputs["result"] == 70000.0
+
+    obs_salary_valid = adp_salary.execute({"salary": 45000.0}, input_id="INP-005")
+    assert obs_salary_valid.execution_status == "SUCCESS"
+    assert obs_salary_valid.raw_outputs["result"] == 46000.0
+
+    obs_ratio_valid = adp_ratio.execute({"ratio": 0.25}, input_id="INP-006")
+    assert obs_ratio_valid.execution_status == "SUCCESS"
+    assert obs_ratio_valid.raw_outputs["result"] == 25.0
+
+
+
