@@ -185,11 +185,17 @@ class SandboxedPathValidator:
         if allowed_roots is None:
             try:
                 from common.config import settings
-                allowed_roots = [settings.get_sandbox_root()]
-            except Exception:
-                allowed_roots = [Path.cwd().resolve()]
+                sandbox_root = settings.get_sandbox_root()
+                if not sandbox_root or not Path(sandbox_root).exists():
+                    raise PermissionError(f"Authoritative sandbox root is invalid or inaccessible: '{sandbox_root}'")
+                allowed_roots = [sandbox_root]
+            except Exception as exc:
+                raise PermissionError(f"Failed to load authoritative sandbox root configuration: {exc}") from exc
 
-        resolved_roots = [Path(r).resolve() for r in allowed_roots]
+        resolved_roots = [Path(r).resolve() for r in allowed_roots if r]
+        if not resolved_roots:
+            raise PermissionError("No valid allowed roots provided for sandbox containment check.")
+
         is_permitted = any(cls.is_subpath(resolved, r) for r in resolved_roots)
         if not is_permitted:
             raise PermissionError(

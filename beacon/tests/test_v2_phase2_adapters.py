@@ -1189,5 +1189,296 @@ def test_security_manual_verification_secret_injection():
     assert "[REDACTED]" in result.error_message
 
 
+# ==============================================================================
+# REMEDIATION PASS REGRESSION TESTS
+# ==============================================================================
+
+def test_http_adapter_redirect_ssrf_bypass_prevention(monkeypatch):
+    """Verifies that HTTP redirects are never automatically followed (follow_redirects=False),
+    preventing 3xx responses from bypassing SSRF validation to loopback, link-local metadata,
+    or internal private IP addresses.
+    """
+    import httpx
+
+    # Scenario 1: Server returns 302 redirecting to AWS metadata endpoint 169.254.169.254
+    requested_urls = []
+
+    def mock_send(self, request, *args, **kwargs):
+        requested_urls.append(str(request.url))
+        if "meta-data" in str(request.url):
+            pytest.fail("HTTP client followed redirect to AWS metadata endpoint 169.254.169.254!")
+        return httpx.Response(
+            status_code=302,
+            headers={"Location": "http://169.254.169.254/latest/meta-data"},
+            text="Redirecting to metadata...",
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx.Client, "send", mock_send)
+
+    adapter = HttpAdapter(
+        base_url="http://127.0.0.1:8000",
+        path_template="/api/forward",
+        allow_private_network=True,  # initial request to test server allowed
+        name="test_redirect_ssrf",
+    )
+
+    obs = adapter.execute({"target": "data"}, input_id="INP-REDIR-1")
+
+    # 1. Observation status is SUCCESS (controlled 3xx response)
+    assert obs.execution_status == "SUCCESS"
+    assert obs.provenance["status_code"] == 302
+    assert obs.provenance["redirect_location"] == "http://169.254.169.254/latest/meta-data"
+    assert obs.provenance["redirect_followed"] is False
+    assert obs.raw_outputs["status_code"] == 302
+    assert obs.raw_outputs["location"] == "http://169.254.169.254/latest/meta-data"
+
+    # 2. Only the original request was sent; metadata URL was NEVER requested
+    assert len(requested_urls) == 1
+    assert "169.254.169.254" not in requested_urls[0]
+
+    # Scenario 2: Server returns 301 redirecting to loopback 127.0.0.1/admin
+    requested_urls.clear()
+
+    def mock_send_loopback(self, request, *args, **kwargs):
+        requested_urls.append(str(request.url))
+        if "/admin" in str(request.url):
+            pytest.fail("HTTP client followed redirect to loopback admin endpoint!")
+        return httpx.Response(
+            status_code=301,
+            headers={"Location": "http://127.0.0.1/admin"},
+            text="Redirecting to internal admin...",
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx.Client, "send", mock_send_loopback)
+    obs_loopback = adapter.execute({"target": "admin"}, input_id="INP-REDIR-2")
+    assert obs_loopback.execution_status == "SUCCESS"
+    assert obs_loopback.provenance["status_code"] == 301
+    assert obs_loopback.provenance["redirect_location"] == "http://127.0.0.1/admin"
+    assert obs_loopback.provenance["redirect_followed"] is False
+    assert len(requested_urls) == 1
+
+    # Scenario 3: Server returns 307 redirecting to private hostname
+    requested_urls.clear()
+
+    def mock_send_private_host(self, request, *args, **kwargs):
+        requested_urls.append(str(request.url))
+        return httpx.Response(
+            status_code=307,
+            headers={"Location": "http://internal-vault.corp.internal/v1/keys"},
+            text="Temporary redirect",
+            request=request,
+        )
+
+    monkeypatch.setattr(httpx.Client, "send", mock_send_private_host)
+    obs_priv = adapter.execute({}, input_id="INP-REDIR-3")
+    assert obs_priv.execution_status == "SUCCESS"
+    assert obs_priv.provenance["status_code"] == 307
+    assert obs_priv.provenance["redirect_location"] == "http://internal-vault.corp.internal/v1/keys"
+    assert obs_priv.provenance["redirect_followed"] is False
+    assert len(requested_urls) == 1
+
+
+def test_sandboxed_path_validator_fails_closed_no_cwd_fallback(tmp_path, monkeypatch):
+    """SandboxedPathValidator must strictly fail closed if sandbox root configuration is missing,
+    invalid, or raises an exception, and NEVER silently fall back to Path.cwd().
+    """
+    from common.config import settings
+
+    # 1. When sandbox configuration raises an exception, validation fails closed
+    def mock_failing_sandbox_root():
+        raise RuntimeError("Authoritative sandbox configuration failed to load!")
+
+    monkeypatch.setattr(settings, "get_sandbox_root", mock_failing_sandbox_root)
+
+    with pytest.raises(PermissionError) as exc_info:
+        SandboxedPathValidator.validate_working_directory(Path.cwd(), allowed_roots=None)
+    assert "Failed to load authoritative sandbox root configuration" in str(exc_info.value)
+
+    # 2. When sandbox root points to a non-existent path, validation fails closed
+    monkeypatch.setattr(settings, "get_sandbox_root", lambda: str(tmp_path / "non_existent_root_dir_12345"))
+    with pytest.raises(PermissionError) as exc_info_nonexistent:
+        SandboxedPathValidator.validate_working_directory(Path.cwd(), allowed_roots=None)
+    assert "invalid or inaccessible" in str(exc_info_nonexistent.value)
+
+    # 3. Prove Path.cwd() is NEVER silently permitted when it is outside the sandbox root
+    real_sandbox = tmp_path / "authoritative_sandbox"
+    real_sandbox.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(settings, "get_sandbox_root", lambda: str(real_sandbox))
+
+    # CWD is outside the isolated tmp_path/authoritative_sandbox
+    with pytest.raises(PermissionError) as exc_cwd:
+        SandboxedPathValidator.validate_working_directory(Path.cwd(), allowed_roots=None)
+    assert "outside allowed root boundaries" in str(exc_cwd.value)
+
+    # 4. Sibling prefix collision: /sandbox/app2 when allowed root is /sandbox/app
+    app_root = tmp_path / "sandbox" / "app"
+    app_sibling = tmp_path / "sandbox" / "app2"
+    app_root.mkdir(parents=True, exist_ok=True)
+    app_sibling.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(PermissionError) as exc_sibling:
+        SandboxedPathValidator.validate_working_directory(app_sibling, allowed_roots=[app_root])
+    assert "outside allowed root boundaries" in str(exc_sibling.value)
+
+    # 5. Traversal escape: /sandbox/app/../app2
+    traversal_path = app_root / ".." / "app2"
+    with pytest.raises(PermissionError) as exc_trav:
+        SandboxedPathValidator.validate_working_directory(traversal_path, allowed_roots=[app_root])
+    assert "outside allowed root boundaries" in str(exc_trav.value)
+
+    # 6. ProcessAdapter must never reach subprocess.Popen when sandbox validation fails closed
+    adapter = ProcessAdapter(
+        command=[sys.executable, str(CLI_FIXTURE_SCRIPT)],
+        working_directory=app_sibling,
+        allowed_sandbox_root=app_root,
+        name="test_fail_closed_popen",
+    )
+    popen_called = []
+    real_popen = subprocess.Popen
+    def mock_popen(*args, **kwargs):
+        popen_called.append(True)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    obs = adapter.execute(CanonicalInput(input_id="INP-SB-FAIL", payload={}))
+    assert obs.execution_status == "EXCEPTION"
+    assert "outside allowed root boundaries" in obs.error_message
+    assert len(popen_called) == 0, "subprocess.Popen was called despite sandbox validation failure!"
+
+
+def test_execution_status_model_consistency_mapping():
+    """ApplicationExecutor deterministically translates adapter observations into canonical ExecutionStatus
+    (SUCCEEDED, APP_EXECUTION_ERROR, TIMEOUT, UNAVAILABLE, ADAPTER_ERROR, VALIDATION_ERROR, FAILED)
+    while preserving stdout, stderr, and exit_code.
+    """
+    executor = ApplicationExecutor()
+
+    # 1. Normal Success -> SUCCEEDED
+    class SuccessAdapter(ImplementationAdapter):
+        name = "success_adapter"
+        def execute(self, inputs, input_id=""):
+            return Observation(
+                input_id=input_id,
+                execution_status="SUCCESS",
+                raw_outputs={"result": 42},
+                normalized_outputs={"result": 42},
+                provenance={"adapter_type": "process", "exit_code": 0, "stdout": "Result: 42"},
+            )
+
+    res_success = executor.execute_single(SuccessAdapter(), CanonicalInput(input_id="INP-S-1", payload={}))
+    assert res_success.status == ExecutionStatus.SUCCEEDED
+    assert res_success.exit_code == 0
+    assert res_success.stdout == "Result: 42"
+
+    # 2. Application Non-Zero Exit -> APP_EXECUTION_ERROR (NOT adapter infrastructure error)
+    class AppErrorAdapter(ImplementationAdapter):
+        name = "app_error_adapter"
+        def execute(self, inputs, input_id=""):
+            return Observation(
+                input_id=input_id,
+                execution_status="EXCEPTION",
+                raw_outputs={"error": "Division by zero in user script"},
+                normalized_outputs={"error": "Division by zero in user script"},
+                error_message="Process exited with non-zero status code 1",
+                provenance={
+                    "adapter_type": "process",
+                    "exit_code": 1,
+                    "stdout": "",
+                    "stderr": "ZeroDivisionError: division by zero",
+                },
+            )
+
+    res_app_err = executor.execute_single(AppErrorAdapter(), CanonicalInput(input_id="INP-S-2", payload={}))
+    assert res_app_err.status == ExecutionStatus.APP_EXECUTION_ERROR
+    assert res_app_err.exit_code == 1
+    assert res_app_err.stderr == "ZeroDivisionError: division by zero"
+    assert "Process exited with non-zero" in res_app_err.error_message
+
+    # 3. Process Timeout -> TIMEOUT
+    class TimeoutAdapter(ImplementationAdapter):
+        name = "timeout_adapter"
+        def execute(self, inputs, input_id=""):
+            return Observation(
+                input_id=input_id,
+                execution_status="TIMEOUT",
+                error_message="Execution timed out after 5.0 seconds",
+                provenance={"adapter_type": "process", "exit_code": -1},
+            )
+
+    res_timeout = executor.execute_single(TimeoutAdapter(), CanonicalInput(input_id="INP-S-3", payload={}))
+    assert res_timeout.status == ExecutionStatus.TIMEOUT
+    assert res_timeout.exit_code == -1
+    assert "timed out" in res_timeout.error_message
+
+    # 4. Missing Executable / Runtime Unavailable -> UNAVAILABLE
+    class MissingExecutableAdapter(ImplementationAdapter):
+        name = "missing_exec_adapter"
+        def execute(self, inputs, input_id=""):
+            return Observation(
+                input_id=input_id,
+                execution_status="EXCEPTION",
+                error_message="Executable 'unknown_binary_xyz' was not found",
+                provenance={"adapter_type": "process", "error_type": "FileNotFoundError", "health_status": "UNAVAILABLE"},
+            )
+
+    res_unavail = executor.execute_single(MissingExecutableAdapter(), CanonicalInput(input_id="INP-S-4", payload={}))
+    assert res_unavail.status == ExecutionStatus.UNAVAILABLE
+
+    # 5. Adapter Infrastructure / SSRF / Auth Config Error -> ADAPTER_ERROR
+    class ConfigErrorAdapter(ImplementationAdapter):
+        name = "config_err_adapter"
+        def execute(self, inputs, input_id=""):
+            return Observation(
+                input_id=input_id,
+                execution_status="EXCEPTION",
+                error_message="Access to private network IP is blocked by SSRF policy",
+                provenance={"adapter_type": "http", "error_type": "SSRFError", "adapter_error": True},
+            )
+
+    res_ad_err = executor.execute_single(ConfigErrorAdapter(), CanonicalInput(input_id="INP-S-5", payload={}))
+    assert res_ad_err.status == ExecutionStatus.ADAPTER_ERROR
+
+    # 6. Input Validation Error -> VALIDATION_ERROR
+    class ValidationFailAdapter(ImplementationAdapter):
+        name = "val_fail_adapter"
+        def execute(self, inputs, input_id=""):
+            return Observation(
+                input_id=input_id,
+                execution_status="EXCEPTION",
+                error_message="Missing required input field 'user_id'",
+                provenance={"adapter_type": "function", "error_type": "ValidationError"},
+            )
+
+    res_val_err = executor.execute_single(ValidationFailAdapter(), CanonicalInput(input_id="INP-S-6", payload={}))
+    assert res_val_err.status == ExecutionStatus.VALIDATION_ERROR
+
+    # 7. Unexpected internal runner crash -> ADAPTER_ERROR / FAILED
+    class UnexpectedCrashAdapter(ImplementationAdapter):
+        name = "crash_adapter"
+        def execute(self, inputs, input_id=""):
+            raise SystemError("Low-level OS socket corruption")
+
+    res_crash = executor.execute_single(UnexpectedCrashAdapter(), CanonicalInput(input_id="INP-S-7", payload={}))
+    assert res_crash.status == ExecutionStatus.ADAPTER_ERROR
+    assert "Low-level OS socket corruption" in res_crash.error_message
+
+
+def test_synthetic_fallback_behavior_production_safety():
+    """Verify that synthetic input fallback is strictly marked for TEST/DEV only and does not silently
+    activate in production/default execution paths without explicit opt-in.
+    """
+    req = ExecutionRequest(
+        application_id="prod_app",
+        input_data={"amount": 100.0},
+    )
+    can = req.get_canonical_input()
+    # The payload must match the exact provided data, never fabricated synthetic defaults
+    assert can.payload == {"amount": 100.0}
+    assert can.metadata.get("synthetic") is not True
+
+
+
 
 

@@ -68,15 +68,30 @@ class ApplicationExecutor:
             # 3. Lifecycle Evidence Capture
             adapter.capture_evidence(obs)
 
-            # 4. Map Status
+            # 4. Map Status from adapter Observation contract (SUCCESS, EXCEPTION, TIMEOUT)
+            # to canonical ExecutionStatus deterministically
             if obs.execution_status == "SUCCESS":
                 status = ExecutionStatus.SUCCEEDED
             elif obs.execution_status == "TIMEOUT":
                 status = ExecutionStatus.TIMEOUT
-            elif obs.execution_status == "APP_EXECUTION_ERROR":
+            elif obs.provenance.get("exit_code") is not None and obs.provenance.get("exit_code") != 0:
+                # Process launched and ran, but application returned non-zero exit code
                 status = ExecutionStatus.APP_EXECUTION_ERROR
-            elif obs.execution_status == "VALIDATION_ERROR":
+            elif obs.provenance.get("error_type") in ("ValidationError", "PydanticValidationError"):
                 status = ExecutionStatus.VALIDATION_ERROR
+            elif (
+                obs.provenance.get("error_type") in ("ExecutableNotFound", "RuntimeUnavailable", "DockerUnavailable", "FileNotFoundError", "NotADirectoryError")
+                or obs.provenance.get("health_status") == "UNAVAILABLE"
+            ):
+                status = ExecutionStatus.UNAVAILABLE
+            elif (
+                obs.provenance.get("error_type") in ("AuthReferenceError", "SSRFError", "PermissionError", "AdapterConfigError", "TransportError")
+                or obs.provenance.get("adapter_error")
+                or obs.provenance.get("health_status") == "MISCONFIGURED"
+            ):
+                status = ExecutionStatus.ADAPTER_ERROR
+            elif obs.execution_status == "EXCEPTION":
+                status = ExecutionStatus.APP_EXECUTION_ERROR
             else:
                 status = ExecutionStatus.FAILED
 

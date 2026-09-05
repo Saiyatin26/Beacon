@@ -227,7 +227,7 @@ class HttpAdapter(ImplementationAdapter):
 
         start_time = time.perf_counter()
         try:
-            with httpx.Client(timeout=self.timeout_seconds) as client:
+            with httpx.Client(timeout=self.timeout_seconds, follow_redirects=False) as client:
                 if self.method == "GET":
                     resp = client.get(target_url, headers=headers, params=mapped_kwargs)
                 elif self.method == "POST":
@@ -244,14 +244,23 @@ class HttpAdapter(ImplementationAdapter):
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
 
             resp_text = resp.text
+            status_code = resp.status_code
+            redirect_location = resp.headers.get("Location")
+
             try:
                 parsed_json = resp.json()
                 raw_out = parsed_json if isinstance(parsed_json, dict) else {"output": parsed_json}
             except Exception:
-                raw_out = {"body": resp_text}
+                if 300 <= status_code < 400 and redirect_location:
+                    raw_out = {
+                        "status_code": status_code,
+                        "location": SecretRedactor.redact_string(redirect_location),
+                        "body": resp_text,
+                    }
+                else:
+                    raw_out = {"body": resp_text}
 
-            status_code = resp.status_code
-            if 200 <= status_code < 300:
+            if 200 <= status_code < 400:
                 execution_status = "SUCCESS"
                 error_msg = None
             else:
@@ -266,6 +275,16 @@ class HttpAdapter(ImplementationAdapter):
             safe_outputs = SecretRedactor.redact(mapped_outputs)
             norm_outputs = self.normalize_output(safe_outputs)
 
+            provenance_data = {
+                "adapter_type": AdapterType.HTTP.value,
+                "role": str(self.role),
+                "status_code": status_code,
+                "url": safe_url,
+            }
+            if redirect_location:
+                provenance_data["redirect_location"] = SecretRedactor.redact_string(redirect_location)
+                provenance_data["redirect_followed"] = False
+
             return Observation(
                 input_id=actual_input_id,
                 raw_inputs=safe_inputs,
@@ -277,12 +296,7 @@ class HttpAdapter(ImplementationAdapter):
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
                 error_message=error_msg,
-                provenance={
-                    "adapter_type": AdapterType.HTTP.value,
-                    "role": str(self.role),
-                    "status_code": status_code,
-                    "url": safe_url,
-                },
+                provenance=provenance_data,
             )
 
         except httpx.TimeoutException:
