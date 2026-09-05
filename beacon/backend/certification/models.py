@@ -26,15 +26,18 @@ class CertificationStatus(str, Enum):
 class Observation(BaseModel):
     """Execution observation of a target implementation on a single input."""
     input_id: str
-    raw_inputs: dict[str, Any]
-    normalized_inputs: dict[str, Any]
-    raw_outputs: dict[str, Any]
-    normalized_outputs: dict[str, Any]
+    raw_inputs: dict[str, Any] = Field(default_factory=dict)
+    normalized_inputs: dict[str, Any] = Field(default_factory=dict)
+    raw_outputs: dict[str, Any] = Field(default_factory=dict)
+    normalized_outputs: dict[str, Any] = Field(default_factory=dict)
     execution_status: Literal["SUCCESS", "EXCEPTION", "TIMEOUT"] = "SUCCESS"
-    implementation_name: str
+    implementation_name: str = "implementation"
     implementation_version: str = "1.0.0"
     execution_time_ms: float = 0.0
     error_message: Optional[str] = None
+    state_changes: Optional[dict[str, Any]] = None
+    side_effects: list[dict[str, Any]] = Field(default_factory=list)
+    trace_reference: Optional[str] = None
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -44,10 +47,34 @@ def compute_canonical_input_hash(values: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+class CanonicalInput(BaseModel):
+    """Generic canonical input contract for arbitrary domain payloads."""
+    input_id: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    values: dict[str, Any] = Field(default_factory=dict)
+    input_hash: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    expected_context: Optional[dict[str, Any]] = None
+    tags: list[str] = Field(default_factory=list)
+
+    def model_post_init(self, __context: Any) -> None:
+        target_dict = self.payload or self.values
+        if not self.payload and self.values:
+            object.__setattr__(self, "payload", self.values)
+        if not self.values and self.payload:
+            object.__setattr__(self, "values", self.payload)
+        if not self.input_hash and target_dict:
+            object.__setattr__(self, "input_hash", compute_canonical_input_hash(target_dict))
+
+    def get_data(self) -> dict[str, Any]:
+        return self.payload or self.values
+
+
 class CertificationTestInput(BaseModel):
     """Shared test input with provenance and origin metadata."""
     input_id: str
-    values: dict[str, Any]
+    values: dict[str, Any] = Field(default_factory=dict)
     input_hash: str = ""
     origin: Literal[
         "boundary_probe",
@@ -436,6 +463,22 @@ class CertificationArtifact(BaseModel):
         "This certificate represents quantified behavioral equivalence relative to the frozen validated oracle set "
         "and tested input domain under the declared certification policy. It does not constitute a formal mathematical proof of arbitrary program equivalence."
     )
+
+    @property
+    def certification_status(self) -> CertificationStatus:
+        return self.status
+
+    @property
+    def equivalence_score(self) -> float:
+        return self.score
+
+    @property
+    def artifact_id(self) -> str:
+        return self.certification_id
+
+    @property
+    def artifact_hash(self) -> str:
+        return self.content_hash
 
 
 def compute_certification_request_identity(

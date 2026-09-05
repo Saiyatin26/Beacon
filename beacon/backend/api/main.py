@@ -88,6 +88,7 @@ from auth import (
     User,
     auth_repository,
 )
+from api.application_router import application_router
 
 import legacy_loan_approval
 import modern_loan_approval
@@ -209,6 +210,9 @@ register_error_handlers(app)
 
 # Phase 17 Authentication & RBAC Routes
 app.include_router(auth_router)
+
+# Phase 1 (V2) Generic Domain-Agnostic Applications Routes
+app.include_router(application_router)
 
 
 

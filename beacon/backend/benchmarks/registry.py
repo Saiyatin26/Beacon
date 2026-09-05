@@ -1148,11 +1148,11 @@ class BenchmarkRegistry:
         mod_hash = getattr(artifact, "modernized_implementation_hash", "") or (artifact.context.modernized_implementation_hash if getattr(artifact, "context", None) else "")
         prov_src = getattr(artifact, "oracle_source_type", "") or (artifact.context.oracle_source_type if getattr(artifact, "context", None) else ("FULL_BEACON_DISCOVERED" if discovery_mode == DiscoveryMode.FULL_BEACON else "CONTROLLED_ORACLE_SET"))
 
-        ctx = getattr(artifact, "context", None) if artifact and not isinstance(artifact, dict) else None
-        d_id = getattr(ctx, "dataset_id", f"DATASET-{benchmark_id}") if ctx else f"DATASET-{benchmark_id}"
-        prov = getattr(ctx, "provider", model_provider.split("/")[0]) if ctx else model_provider.split("/")[0]
-        mod = getattr(ctx, "model", model_provider.split("/")[1] if "/" in model_provider else "default") if ctx else "default"
-        gen_m = getattr(ctx, "generation_method", "offline") if ctx else "offline"
+        ctx = getattr(artifact, "context", None) if artifact and not isinstance(artifact, dict) else (artifact.get("context", None) if isinstance(artifact, dict) else None)
+        d_id = (getattr(ctx, "dataset_id", None) if not isinstance(ctx, dict) else ctx.get("dataset_id")) or f"DATASET-{benchmark_id}"
+        prov = (getattr(ctx, "provider", None) if not isinstance(ctx, dict) else ctx.get("provider")) or model_provider.split("/")[0]
+        mod = (getattr(ctx, "model", None) if not isinstance(ctx, dict) else ctx.get("model")) or (model_provider.split("/")[1] if "/" in model_provider else ("deterministic" if prov == "offline" else "default"))
+        gen_m = (getattr(ctx, "generation_method", None) if not isinstance(ctx, dict) else ctx.get("generation_method")) or "offline"
 
         cert_status = "NOT_CERTIFIED"
         art_hash = ""

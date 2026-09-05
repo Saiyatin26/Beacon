@@ -36,14 +36,28 @@ def consolidate_database_architecture(
         "archived_sources": [],
     }
 
-    # 1. Enable WAL mode on canonical database
+    # 1. Enable WAL mode on canonical database and initialize base schema
     try:
         with sqlite3.connect(str(canonical_path)) as conn:
             conn.execute("PRAGMA journal_mode=WAL;")
             conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS applications (
+                    application_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    domain TEXT,
+                    version TEXT NOT NULL DEFAULT '1.0.0',
+                    spec_json TEXT NOT NULL,
+                    spec_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_apps_domain ON applications(domain);")
             conn.commit()
     except Exception as exc:
-        logger.warning(f"Could not enable WAL mode on canonical DB: {exc}")
+        logger.warning(f"Could not enable WAL mode or initialize applications schema on canonical DB: {exc}")
 
     # 2. Determine secondary database files to consolidate
     candidate_secondary_paths: list[Path] = []

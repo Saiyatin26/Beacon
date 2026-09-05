@@ -145,24 +145,46 @@ class OracleDefinition(BaseModel):
     confidence: float = 0.0
 
 
-# Backward compatibility alias
+class RuleSeverity(str, Enum):
+    """Severity levels for behavioral rules and oracles."""
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    INFO = "info"
+
+
+# Backward compatibility aliases
 Oracle = OracleDefinition
+OracleRule = OracleDefinition
 
 
 # ==============================================================================
-# 4. Frozen Oracle Set
+# 4. Frozen Oracle Set & Source Modes
 # ==============================================================================
+
+class OracleSourceMode(str, Enum):
+    """Origin source of rules within an OracleSet."""
+    CONTROLLED = "CONTROLLED"
+    USER_PROVIDED = "USER_PROVIDED"
+    FULL_BEACON_DISCOVERED = "FULL_BEACON_DISCOVERED"
+    RECONCILED = "RECONCILED"
+
 
 class OracleSet(BaseModel):
     """Frozen, immutable collection of executable oracles for certification runs."""
     model_config = {"frozen": True, "protected_namespaces": ()}
 
     oracle_set_id: str
-    name: str
+    name: str = "oracle_set"
     version: int = 1
     domain: str = "default"
+    source_mode: Union[OracleSourceMode, str] = OracleSourceMode.CONTROLLED
+    benchmark_id: Optional[str] = None
     oracle_ids: list[str] = Field(default_factory=list)
     oracles: list[OracleDefinition] = Field(default_factory=list)
+    rules: list[Any] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
     oracle_set_hash: str = ""  # SHA-256 over sorted oracle content hashes
     created_at: str = ""
 

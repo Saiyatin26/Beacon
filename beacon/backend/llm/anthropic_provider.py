@@ -21,7 +21,7 @@ class AnthropicProvider(LLMProvider):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
     ):
-        self.api_key = (api_key or settings.anthropic_api_key or "").strip()
+        self.api_key = (api_key if api_key is not None else (settings.anthropic_api_key or "")).strip()
         self.model = model or settings.anthropic_model or "claude-sonnet-4-6"
         self._client: Optional[Anthropic] = None
 

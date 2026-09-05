@@ -49,10 +49,10 @@ class CertificationEngine:
 
     def certify(
         self,
-        project_id: str,
-        legacy_adapter: ImplementationAdapter,
-        modern_adapter: ImplementationAdapter,
-        oracle_set: OracleSet,
+        project_id: str = "default",
+        legacy_adapter: Optional[ImplementationAdapter] = None,
+        modern_adapter: Optional[ImplementationAdapter] = None,
+        oracle_set: Optional[OracleSet] = None,
         policy: Optional[CertificationPolicy] = None,
         test_inputs: Optional[list[CertificationTestInput]] = None,
         field_bounds: Optional[dict[str, tuple[float, float]]] = None,

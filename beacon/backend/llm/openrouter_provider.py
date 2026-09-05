@@ -25,7 +25,7 @@ class OpenRouterProvider(LLMProvider):
         base_url: Optional[str] = None,
         timeout: float = 30.0,
     ):
-        self.api_key = (api_key or settings.openrouter_api_key or "").strip()
+        self.api_key = (api_key if api_key is not None else (settings.openrouter_api_key or "")).strip()
         self.model = model or settings.openrouter_model or "anthropic/claude-3.5-sonnet"
         self.base_url = (base_url or settings.openrouter_base_url or "https://openrouter.ai/api/v1").rstrip("/")
         self.timeout = timeout
