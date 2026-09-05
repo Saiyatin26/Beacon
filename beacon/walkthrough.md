@@ -1,145 +1,197 @@
-# BEACON V2 — Phase 2 Final Remediation & Release Gate Walkthrough
+# BEACON V2 — Phase 3 Real Application Execution & Evidence Capture Walkthrough
 
-## Summary of Phase 2 Remediation & Final Master Fix
+## Summary of Phase 3 Implementation
 
-This final remediation pass completes the stabilization and hardening of **BEACON V2 Phase 2 (Generic Real-World Application & Adapter Framework)**. It resolves all remaining defects, implements strict fail-closed input resolution with explicit synthetic fallback control, aligns preflight validation with runtime resolution, standardizes execution status translation, validates output/exit-code propagation and cleanup, and verifies that all 482 tests pass across the entire test suite.
+Phase 3 transforms the Phase 2 generic execution framework into an auditable, deterministic **paired-application execution and evidence-capture system**. It establishes the complete measurement foundation required by Phase 4 without implementing any behavioral evaluation or equivalence scoring.
 
 ---
 
-## 1. Primary Defect Fixed: Synthetic Input Fallback & Fail-Closed Input Contract
+## 1. Architectural Overview & Component Structure
 
-### Root Cause
-Previously, `ApplicationResolver.resolve_inputs()` contained an automatic fallback:
 ```
-"No explicit InputContract fields declared; fallback input synthesis will be used."
-```
-When an application had no dataset and no input contract, it silently synthesized fabricated test inputs during normal execution flow. Merely tagging the inputs with `mode="test_development_fallback_only"` was insufficient; the fallback could still execute silently in default/production mode.
-
-### Remediation & Architectural Flow
-Implemented the authoritative 3-tier input resolution flow:
-```
-                  APPLICATION INPUT
-                         │
-                         ▼
-                ┌─────────────────┐
-                │ Explicit Dataset│
-                │    provided?    │
-                └────────┬────────┘
-                         │
-                  YES ───┴─── NO
-                   │            │
-                   ▼            ▼
-             Use Dataset   Explicit Input
-                           Contract available?
-                                │
-                         YES ───┴─── NO
-                          │            │
-                          ▼            ▼
-                    Generate/Use    Is explicit
-                    valid inputs    TEST/DEV
-                                    fallback
-                                    enabled?
-                                      │
-                                ┌─────┴─────┐
-                                │           │
-                               YES          NO
-                                │           │
-                                ▼           ▼
-                         Synthetic input   STOP
-                         TEST/DEV ONLY     VALIDATION/
-                         with provenance  MISCONFIGURED
-                                │
-                                ▼
-                           EXECUTE APP
+                  CANONICAL INPUT SOURCE
+                            │
+                            ▼
+                   CANONICALIZE ONCE
+                            │
+                            ▼
+                   IMMUTABLE INPUT SET
+                  (hash + provenance)
+                            │
+              ┌─────────────┴─────────────┐
+              ▼                           ▼
+      REFERENCE APPLICATION       TARGET APPLICATION
+              │                           │
+          lifecycle                   lifecycle
+              │                           │
+          readiness                   readiness
+              │                           │
+          execution                   execution
+              │                           │
+          observation                 observation
+              │                           │
+          evidence                    evidence
+              │                           │
+              └─────────────┬─────────────┘
+                            ▼
+                   EVIDENCE NORMALIZER
+                  (redaction + SHA-256)
+                            │
+                            ▼
+                     EVIDENCE STORE
+                (SQLite + file artifact)
+                            │
+                            ▼
+                    EVIDENCE MANIFEST
+                   (bundle hash: SHA-256)
+                            │
+                            ▼
+                     PHASE 4 INPUT
 ```
 
-1. **Explicit Dataset (Primary)**:
-   - Evaluated via `custom_inputs`, `dataset_path`, registered `dataset_id`, or inline `metadata.records`.
-   - **Fail-Closed Guarantee**: If a configured dataset is missing, corrupted, or invalid, BEACON raises `ApplicationResolutionError` immediately. It will **never** silently replace an invalid dataset with synthetic inputs.
-2. **Explicit Input Contract Fields**:
-   - Evaluated when `spec.input_contract.fields` are declared. Inputs are generated deterministically based on field types and bounds.
-   - **Fail-Closed Guarantee**: If contract generation fails, BEACON raises `ApplicationResolutionError` immediately. It will **never** silently fall back to synthetic inputs.
-3. **Explicit Synthetic Fallback Control (`allow_synthetic_inputs`)**:
-   - **Default**: `False` (`settings.get_allow_synthetic_inputs()` or `BEACON_ALLOW_SYNTHETIC_INPUTS=false`).
-   - If neither a dataset nor input contract fields exist and `allow_synthetic_inputs=False`, BEACON halts execution with a structured `ApplicationResolutionError` (`VALIDATION_ERROR`).
-   - Only when explicitly enabled (`allow_synthetic_inputs=True` via parameter or environment variable) will synthetic inputs be generated.
-   - Generated synthetic inputs include full cryptographic and provenance tags:
-     - `source`: `"phase2_test_development_fallback"`
-     - `mode`: `"test_development_fallback_only"`
-     - `synthetic`: `True`
-     - `explicitly_enabled`: `True`
+---
+
+## 2. Core Models & Contracts Implemented
+
+### A. Immutable InputSet & Same-Input Guarantee (`backend/execution/input_set.py`)
+- [`CanonicalInputItem`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/input_set.py#L20-L45): Sequenced input element with payload and canonical SHA-256 hash.
+- [`InputSet`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/input_set.py#L61-L185): Immutable, content-addressed collection of inputs.
+- **Same-Input Guarantee**: Reference and Target both receive independent deep copies from [`InputSet.to_canonical_inputs()`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/input_set.py#L100-L105), preventing in-place mutation.
+- **Tamper-Evident Hashing**: [`compute_input_set_hash()`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/input_set.py#L48-L60) cryptographically verifies inputs across sequence and content.
+
+### B. Readiness Detection Engine (`backend/execution/readiness.py`)
+- [`ReadinessStrategy`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/readiness.py#L20-L26): Generic strategies (`IMMEDIATE`, `PROCESS_ALIVE`, `TCP_PORT`, `HTTP_ENDPOINT`, `ADAPTER_DEFINED`).
+- [`ReadinessChecker`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/readiness.py#L48-L240): Deterministic polling loop tracking poll attempts, latency, diagnostics, and failing closed upon timeout.
+
+### C. Generic Evidence Models (`backend/execution/evidence_models.py`)
+- [`EvidenceType`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_models.py#L15-L25): `OUTPUT`, `ERROR`, `RUNTIME`, `LOG`, `TRACE`, `FILESYSTEM`, `DATABASE`, `HTTP`, `METADATA`.
+- [`EvidenceRecord`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_models.py#L145-L175): Atomic evidence record with unique `evidence_id`, `session_id`, `execution_id`, `role`, `input_id`, canonical `payload`, and SHA-256 `content_hash`.
+- [`EvidenceManifest`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_models.py#L190-L225): Deterministic catalog of all evidence records with aggregate `bundle_hash`.
+- [`EvidenceBundle`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_models.py#L230-L250): Complete packaged bundle with execution references and partial-failure flags.
+
+### D. Extensible Evidence Providers (`backend/execution/evidence_providers.py`)
+- Pluggable collectors:
+  - [`OutputEvidenceProvider`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_providers.py#L65-L100): Outputs, exit codes, stdout/stderr, durations.
+  - [`LogEvidenceProvider`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_providers.py#L105-L135): Capability-driven log capture (`CAPTURED` or `NOT_AVAILABLE`).
+  - [`HttpEvidenceProvider`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_providers.py#L140-L175): Request/response telemetry with redacted headers.
+  - [`FileEvidenceProvider`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_providers.py#L180-L245): Pre- and post-execution SHA-256 snapshots on configured paths with delta detection.
+  - [`DatabaseEvidenceProvider`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_providers.py#L250-L275): Extensible DB provider returning `NOT_SUPPORTED` safely when unconfigured.
+  - [`TraceEvidenceProvider`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_providers.py#L280-L315): In-memory lifecycle timeline event tracker.
+  - [`RuntimeEvidenceProvider`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_providers.py#L320-L355): System architecture, OS, Python version, adapter info.
+
+### E. Evidence Normalizer & Hasher (`backend/execution/evidence_normalizer.py`)
+- Applies [`SecretRedactor.redact()`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/security.py#L85-L120) across all evidence payloads.
+- Canonicalizes JSON keys (`sort_keys=True`, `separators=(',', ':')`).
+- Computes deterministic SHA-256 digests on each record.
+- Compiles [`EvidenceManifest`](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/backend/execution/evidence_models.py#L190-L225) and calculates `bundle_hash`.
+
+### F. Dual Evidence Persistence (`backend/execution/evidence_store.py`)
+- **SQLite Database**: Authoritative query tables for `paired_execution_sessions`, `paired_input_sets`, `evidence_records`, and `evidence_bundles`.
+- **Filesystem Artifacts**: Structured JSON files saved to `data/evidence/<session_id>/bundle.json` and `manifest.json`.
+- **Tamper-Detection Verification**:
+  - `verify_evidence_integrity(evidence_id)`: Recomputes record payload SHA-256 and detects any modification.
+  - `verify_bundle_integrity(session_id)`: Recomputes bundle manifest SHA-256 and detects manifest tampering.
+
+### G. Paired Execution Coordinator (`backend/execution/paired_runner.py`)
+- Coordinates multi-stage sequential execution:
+  `SESSION CREATED` $\rightarrow$ `PREFLIGHT` $\rightarrow$ `INPUT RESOLUTION` $\rightarrow$ `REFERENCE LIFECYCLE` $\rightarrow$ `TARGET LIFECYCLE` $\rightarrow$ `FINALIZE BUNDLE`.
+- **Reference Failure Policy**: Critical reference failures halt before target runs, preventing invalid comparisons while retaining partial reference evidence.
+- **Target Failure Policy**: Target failures preserve complete reference evidence alongside target error evidence, marking the session `PARTIAL`.
+- **Batch & Sweeps**: Supports batch multi-input runs and repeated sweeps with unique session IDs.
+
+### H. REST API Router (`backend/api/paired_router.py`)
+- Registered under `/api/v3/paired`:
+  - `POST /api/v3/paired/sessions`: Trigger paired execution.
+  - `GET /api/v3/paired/sessions`: List sessions.
+  - `GET /api/v3/paired/sessions/{session_id}`: Retrieve session details.
+  - `GET /api/v3/paired/sessions/{session_id}/bundle`: Retrieve complete bundle and manifest.
+  - `GET /api/v3/paired/sessions/{session_id}/inputs/{input_id}`: Retrieve segregated reference and target evidence for a specific input.
+  - `GET /api/v3/paired/evidence/{evidence_id}`: Retrieve single evidence record.
+  - `GET /api/v3/paired/evidence/{evidence_id}/verify`: Verify record payload hash integrity.
+  - `GET /api/v3/paired/bundles/{session_id}/verify`: Verify bundle manifest hash integrity.
 
 ---
 
-## 2. Preflight & Runtime Alignment
+## 3. Verification & Test Results
 
-`PreFlightValidator.validate()` in `backend/execution/preflight.py` was synchronized to match `ApplicationResolver.resolve_inputs()` 1:1:
-- Validates dataset paths and registry IDs; records error and marks check as failed if missing.
-- Validates explicit `InputContract.fields`.
-- If neither source is available, checks `effective_allow_synthetic`. If disabled (`False`), preflight fails closed with:
-  ```
-  "No valid input source configured."
-  ```
-- If enabled (`True`), preflight flags a clear `TEST/DEVELOPMENT ONLY` warning while allowing test progression.
+1. **Full Pytest Suite**:
+   ```
+   505 passed, 2 warnings in 258.41s (0:04:18)
+   ```
+   100% pass rate across all 505 tests in the repository (Phase 1 + Phase 2 + Phase 3).
+
+2. **Targeted Phase 3 Tests (`tests/test_v2_phase3_execution.py`)**:
+   - 23/23 tests passing:
+     - InputSet creation, content hashing, sequence indexing.
+     - Same-input guarantee and deep-copy immutability.
+     - Content hash tamper-detection.
+     - Readiness strategies (immediate, custom probe, timeout fail-closed).
+     - Paired execution happy path with Reference and Target function adapters.
+     - Reference failure halting before target.
+     - Target failure preserving reference evidence.
+     - Evidence record cryptographic integrity verification and tamper detection.
+     - Evidence bundle manifest verification and tamper detection.
+     - Filesystem provider before/after delta detection.
+     - Database provider reporting `NOT_SUPPORTED` when unconfigured.
+     - Secret redaction across output and headers in evidence.
+     - Repeated sweeps producing unique session and execution IDs.
+     - Full REST API endpoints lifecycle.
+     - Strict Phase 3 boundary verification (0 Phase 4 fields leaked).
+     - Batch execution over 3 inputs with correlated execution IDs.
+     - Real CLI ProcessAdapter target execution vs FunctionAdapter reference.
+     - ContainerAdapter capability detection and graceful `UNAVAILABLE`.
+     - Application timeout generating partial evidence bundles.
+     - Target readiness timeout failure handling.
+     - Cleanup errors recorded in evidence without discarding execution records.
+
+3. **Subprocess Module Import Isolation**:
+   - Verified that `execution.models`, `execution.security`, `execution.mapping`, and `execution.process_adapter` load independently in clean Python subprocesses without importing certification or LLM modules.
+
+4. **Domain Independence Audit**:
+   - Verified zero hardcoded business or domain keywords (`banking`, `loan`, `insurance`, `mortgage`, `health`, `ofbiz`, `carddemo`) in `backend/execution/`.
+
+5. **Frontend Build & Backend Startup**:
+   - `frontend`: Built in 3.61s with 0 errors.
+   - `backend`: Uvicorn smoke test verified with `/health` returning `200 OK`, JWT auth, and `/api/v3/paired/sessions` active.
+
+6. **Release Archive**:
+   - Packaged [beacon_v2_phase3.zip](file:///c:/Users/Navaneeth%20Motamarry/Beacon/Beacon/beacon/beacon_v2_phase3.zip) (951 KB) containing all production source files, configuration, tests, and documentation.
 
 ---
 
-## 3. Process Execution Status Mapping & Output Propagation
-
-Verified that `ApplicationExecutor.execute_single()` and `ProcessAdapter.execute()` handle process failures with precision:
-- **Application Failure (`exit_code != 0`)**: Process launched and ran, but returned a non-zero exit code. Correctly classified as `ExecutionStatus.APP_EXECUTION_ERROR` (not an adapter infrastructure failure). `stdout`, `stderr`, and `exit_code` are fully preserved on `ExecutionResult`.
-- **Infrastructure Failure (Unlaunchable Binary / Missing Executable)**: Subprocess cannot be spawned or health check reports missing executable. Correctly classified as `ExecutionStatus.UNAVAILABLE` or `ExecutionStatus.ADAPTER_ERROR`.
-- **Lifecycle Cleanup**: Guaranteed via `finally:` blocks in `ApplicationExecutor` and adapter-level `cleanup()` methods across success, error, timeout, and exception scenarios.
-
----
-
-## 4. Full Verification & Regression Test Suite
-
-All 8 required synthetic fallback test scenarios (Tests A through H) and process execution tests were added to `tests/test_v2_phase2_adapters.py`:
-
-| Test Identifier | Scenario | Result |
-| :--- | :--- | :--- |
-| **Test A** | No dataset + No InputContract + default config -> fails closed, 0 synthetic inputs | **PASS** |
-| **Test B** | No dataset + No InputContract + `allow_synthetic_inputs=False` -> fails closed | **PASS** |
-| **Test C** | No dataset + No InputContract + `allow_synthetic_inputs=True` -> synthetic inputs with provenance | **PASS** |
-| **Test D** | Default configuration never silently enables synthetic fallback | **PASS** |
-| **Test E** | Explicit dataset path exists -> dataset used, synthetic fallback not used | **PASS** |
-| **Test F** | Explicit InputContract exists -> contract used, synthetic fallback not used | **PASS** |
-| **Test G** | Dataset exists but file is missing -> fails closed, never replaces with synthetic inputs | **PASS** |
-| **Test H** | InputContract invalid -> fails closed, never replaces with synthetic fallback | **PASS** |
-| **Non-Zero Exit** | External process exits code 2 -> mapped to `APP_EXECUTION_ERROR`, stderr preserved | **PASS** |
-| **Unlaunchable** | Non-existent binary -> mapped to `UNAVAILABLE` or `ADAPTER_ERROR` | **PASS** |
-
----
-
-## 5. Phase 2 Final Release Gate Verification Table
+## 4. Final Phase 3 Release Checklist (Section 76)
 
 | CHECK | STATUS | DETAILS |
 | :--- | :---: | :--- |
-| **ApplicationSpec** | **PASS** | Clean spec resolution with explicit dataset config, input/output contracts, and target roles |
-| **Reference/Target roles** | **PASS** | `ReferenceAdapter` and `TargetAdapter` role-aware execution across any runtime |
-| **Generic adapter architecture** | **PASS** | `FunctionAdapter`, `ProcessAdapter`, `CliAdapter`, `HttpAdapter`, `ContainerAdapter` |
-| **Input resolution** | **PASS** | Strict fail-closed resolution; requires explicit dataset or input contract |
-| **Synthetic fallback control** | **PASS** | Default `False`; strictly gated behind explicit test/dev opt-in with provenance |
-| **Preflight consistency** | **PASS** | `PreFlightValidator` matches `ApplicationResolver` logic 1:1 |
-| **Process execution** | **PASS** | Subprocess execution with process groups, output caps, timeout enforcement, `shell=False` |
-| **HTTP execution** | **PASS** | Non-redirecting (`follow_redirects=False`), DNS SSRF validated, header sanitized |
-| **Container execution** | **PASS** | Capability detection, memory/CPU resource caps, fail-closed secret references |
-| **Execution status mapping** | **PASS** | Deterministic translation from `Observation` to canonical `ExecutionStatus` |
-| **stdout/stderr propagation** | **PASS** | Preserved on `ExecutionResult` and sanitized via `SecretRedactor` |
-| **exit-code propagation** | **PASS** | Non-zero exit codes captured and mapped to `APP_EXECUTION_ERROR` |
-| **cleanup** | **PASS** | Guaranteed cleanup in `finally:` blocks across all adapter executions |
-| **domain independence** | **PASS** | 0 domain-specific terms or hardcoded business rules in execution layer |
-| **regression tests** | **PASS** | 62 adapter regression tests passing (100%) in `tests/test_v2_phase2_adapters.py` |
-| **full pytest** | **PASS** | **482 passed**, 0 failed, 2 warnings in 312.59s |
-| **backend startup** | **PASS** | Uvicorn startup clean, `/health` 200 OK, auth and `/api/v2/adapters` functional |
-| **frontend build** | **PASS** | `npm run build` completed with 0 errors in 4.54s |
-| **compileall** | **PASS** | `python -m compileall -q backend tests` exited with code 0 |
-| **module imports** | **PASS** | All 10 execution and application modules load independently without circular imports |
-| **Phase boundary** | **PASS** | Zero Phase 3 features (RAG, behavioral scoring, agents, rule extraction) introduced |
-
----
-
-## 6. Release Archive
-
-The release archive `beacon_v2_phase2.zip` (1.62 MB) has been updated and packaged with all production source files, configuration, tests, and documentation, ready for independent verification.
+| **ExecutionSession** | **PASS** | `PairedExecutionSession` with multi-stage lifecycle, correlations, metadata |
+| **PairedExecutionRequest** | **PASS** | High-level paired run contract with reference/target specs and configs |
+| **InputSet** | **PASS** | Sequenced `CanonicalInputItem` list with deterministic SHA-256 content hash |
+| **Same-input guarantee** | **PASS** | Independent deep copies delivered to reference and target; verified tamper-evident |
+| **Correlation IDs** | **PASS** | `session_id`, `correlation_id`, `reference_execution_id`, `target_execution_id`, `input_id` |
+| **Reference lifecycle** | **PASS** | Prepare $\rightarrow$ Readiness $\rightarrow$ Execute $\rightarrow$ Capture $\rightarrow$ Cleanup |
+| **Target lifecycle** | **PASS** | Prepare $\rightarrow$ Readiness $\rightarrow$ Execute $\rightarrow$ Capture $\rightarrow$ Cleanup |
+| **Readiness** | **PASS** | Generic readiness engine with polling, timeouts, and failure evidence |
+| **Output evidence** | **PASS** | Canonical outputs, raw outputs, stdout, stderr, exit code, duration |
+| **Error evidence** | **PASS** | Categorized failure facts, phase tags, exception types, and provenance |
+| **Runtime evidence** | **PASS** | OS, architecture, Python version, adapter metadata |
+| **Log evidence** | **PASS** | Capability-driven stdout/stderr and adapter log capture |
+| **HTTP evidence** | **PASS** | HTTP telemetry with secret-redacted headers and latency metrics |
+| **Filesystem evidence architecture** | **PASS** | Configured path snapshots before/after execution with delta detection |
+| **Database evidence architecture** | **PASS** | Extensible provider interface; returns `NOT_SUPPORTED` safely |
+| **Evidence normalization** | **PASS** | Deterministic JSON canonicalization, secret redaction, and record hashing |
+| **Evidence hashing** | **PASS** | SHA-256 cryptographic digests computed on all records and payloads |
+| **Evidence manifest** | **PASS** | Tamper-evident catalog with aggregate manifest `bundle_hash` |
+| **Evidence storage** | **PASS** | Dual persistence: SQLite query tables + local filesystem `bundle.json` |
+| **Evidence retrieval** | **PASS** | Query by session, execution, input ID, or single evidence record |
+| **Partial evidence** | **PASS** | Timeouts and execution failures retain partial evidence bundles |
+| **Failure persistence** | **PASS** | Critical failures recorded in structured `ErrorEvidence` and persisted |
+| **Cleanup** | **PASS** | Guaranteed cleanup in `finally:` blocks; cleanup failures captured as evidence |
+| **Batch execution** | **PASS** | Batch multi-input runs with correlated execution records per input |
+| **Reproducibility metadata** | **PASS** | Host OS, Python version, timestamps, timeout settings stored in session |
+| **Phase 2 regression** | **PASS** | All Phase 1 and Phase 2 tests continue to pass 100% |
+| **Phase 3 tests** | **PASS** | 23 new Phase 3 tests passing in `tests/test_v2_phase3_execution.py` |
+| **Full test suite** | **PASS** | **505 passed**, 0 failed, 2 warnings in 258.41s |
+| **Backend startup** | **PASS** | Uvicorn `/health` 200 OK, JWT login functional, `/api/v3/paired/sessions` active |
+| **Frontend build** | **PASS** | Vite production build completed in 3.61s with 0 errors |
+| **Compile check** | **PASS** | `python -m compileall -q backend tests` exited with code 0 |
+| **Phase boundary** | **PASS** | Zero Phase 4 logic (behavioral equivalence scoring, rules, RAG) implemented |

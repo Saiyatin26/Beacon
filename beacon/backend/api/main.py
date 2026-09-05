@@ -206,6 +206,11 @@ app.include_router(application_router)
 from api.adapter_router import adapter_router
 app.include_router(adapter_router)
 
+# Phase 3 (V2) Paired Application Execution & Evidence Capture Routes
+from api.paired_router import paired_router
+app.include_router(paired_router)
+
+
 
 
 class DemoRunRequest(BaseModel):

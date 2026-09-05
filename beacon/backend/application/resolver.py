@@ -62,6 +62,10 @@ class ApplicationResolver:
 
         # 1. Directly passed callable
         if callable(target):
+            if isinstance(target, type) and issubclass(target, ImplementationAdapter):
+                inst = target()
+                inst.role = role
+                return inst
             name = getattr(target, "__name__", f"callable_{role}")
             if role in (AdapterRole.REFERENCE, "reference", "legacy"):
                 return ReferenceAdapter(target_fn=target, name=name, output_normalizer=output_norm)
@@ -80,7 +84,11 @@ class ApplicationResolver:
                 try:
                     mod = importlib.import_module(mod_name)
                     fn = getattr(mod, fn_name)
-                    if callable(fn):
+                    if isinstance(fn, type) and issubclass(fn, ImplementationAdapter):
+                        inst = fn()
+                        inst.role = role
+                        return inst
+                    elif callable(fn):
                         return FunctionAdapter(
                             target_fn=fn,
                             name=f"{mod_name}.{fn_name}",
@@ -121,13 +129,19 @@ class ApplicationResolver:
                     try:
                         mod = importlib.import_module(mod_name)
                         fn = getattr(mod, fn_name)
-                        return FunctionAdapter(
-                            target_fn=fn,
-                            name=target_obj.name,
-                            version=target_obj.version,
-                            role=target_obj.role,
-                            output_normalizer=output_norm,
-                        )
+                        if isinstance(fn, type) and issubclass(fn, ImplementationAdapter):
+                            inst = fn()
+                            if hasattr(target_obj, "role") and target_obj.role:
+                                inst.role = target_obj.role
+                            return inst
+                        elif callable(fn):
+                            return FunctionAdapter(
+                                target_fn=fn,
+                                name=target_obj.name,
+                                version=target_obj.version,
+                                role=target_obj.role,
+                                output_normalizer=output_norm,
+                            )
                     except Exception as exc:
                         raise ApplicationResolutionError(f"Could not import entrypoint '{target_obj.entrypoint}': {exc}")
 
@@ -492,3 +506,9 @@ class ApplicationResolver:
         )
         oracle_registry.register_oracle_set(oset)
         return oset
+
+
+application_resolver = ApplicationResolver()
+
+__all__ = ["ApplicationResolver", "application_resolver", "ApplicationResolutionError"]
+
