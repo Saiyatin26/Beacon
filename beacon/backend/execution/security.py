@@ -17,9 +17,16 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger("beacon.execution.security")
 
-# Sensitive key patterns for recursive credential masking
+# Sensitive key names and word boundaries (avoids over-redacting words like monkey, keyboard, keypad)
+_SENSITIVE_KEY_NAMES = {
+    "auth", "authorization", "token", "access_token", "refresh_token", "secret",
+    "client_secret", "private_key", "password", "passwd", "database_password",
+    "db_password", "db_pass", "api_key", "apikey", "cookie", "set_cookie",
+    "session", "credential", "bearer", "proxy_authorization"
+}
+
 _SENSITIVE_KEY_PATTERN = re.compile(
-    r"(?i)(auth|token|secret|password|api_?key|key|cookie|credential|bearer|session|private)"
+    r"(?i)^(auth|authorization|token|access_token|refresh_token|secret|client_secret|private_key|password|passwd|database_password|db_password|db_pass|api_?key|apikey|cookie|set_cookie|session|credential|bearer|proxy_authorization)$"
 )
 
 # Blocked SSRF metadata hostnames and IPs
@@ -38,12 +45,30 @@ class SecretRedactor:
     REDACTED_TEXT = "[REDACTED]"
 
     @classmethod
+    def is_sensitive_key(cls, key: Any) -> bool:
+        """Determines if a dictionary key represents sensitive credentials using normalized word matching."""
+        s = str(key).lower().strip()
+        if _SENSITIVE_KEY_PATTERN.match(s):
+            return True
+        s_norm = re.sub(r"[._\-/\\]+", "_", s)
+        s_clean = re.sub(r"[._\-/\\]+", "", s)
+        for sens in _SENSITIVE_KEY_NAMES:
+            sens_clean = re.sub(r"[._\-/\\]+", "", sens)
+            if sens in s_norm or sens_clean in s_clean:
+                return True
+        # Split on non-alphanumeric separators (e.g. user.password, app_secret, api-key)
+        parts = [p for p in re.split(r"[._\-/\\]+", s) if p]
+        if any(p in _SENSITIVE_KEY_NAMES for p in parts):
+            return True
+        return False
+
+    @classmethod
     def redact(cls, data: Any) -> Any:
         """Recursively sanitizes dictionary, list, and string structures."""
         if isinstance(data, dict):
             redacted_dict: dict[str, Any] = {}
             for k, v in data.items():
-                if _SENSITIVE_KEY_PATTERN.search(str(k)):
+                if cls.is_sensitive_key(k):
                     redacted_dict[k] = cls.REDACTED_TEXT
                 else:
                     redacted_dict[k] = cls.redact(v)
@@ -72,7 +97,7 @@ class SecretRedactor:
             text,
         )
         text = re.sub(
-            r"(?i)\b(x-api-key|api-key)\s*[:=]\s*([^\r\n,;]+)",
+            r"(?i)\b(x-api-key|api-key|apikey)\s*[:=]\s*([^\r\n,;]+)",
             r"\1: [REDACTED]",
             text,
         )
@@ -84,14 +109,14 @@ class SecretRedactor:
 
         # 3. Redact key-value pairs with sensitive names (passwords, tokens, keys)
         text = re.sub(
-            r"(?i)\b(password|passwd|secret|access_token|refresh_token|token|api_?key|apikey|credential|private_key|client_secret|database_password|db_password|db_pass)\b\s*([:=])\s*['\"]?([^'\"\s,;&\r\n]+)['\"]?",
+            r"(?i)\b([A-Za-z0-9_.-]*(?:password|passwd|secret|token|access_token|refresh_token|api_?key|apikey|credential|private_key|client_secret|database_password|db_password|db_pass)[A-Za-z0-9_.-]*)\b\s*([:=])\s*['\"]?([^'\"\s,;&\r\n]+)['\"]?",
             r"\1\2[REDACTED]",
             text,
         )
 
         # 4. Redact URL query parameters
         text = re.sub(
-            r"(?i)([?&](?:api_?key|token|access_token|secret|password|auth)=)[^&\s]+",
+            r"(?i)([?&](?:api_?key|token|access_token|secret|password|auth|passwd)=)[^&\s]+",
             r"\1[REDACTED]",
             text,
         )
@@ -146,20 +171,30 @@ class SandboxedPathValidator:
         target_dir: Union[str, Path],
         allowed_roots: Optional[list[Union[str, Path]]] = None,
     ) -> Path:
-        """Resolves target directory and validates against permitted directory boundaries."""
+        """Resolves target directory and validates against permitted directory boundaries.
+        
+        Defaults allowed_roots to settings.get_sandbox_root() if omitted.
+        Fails closed if target_dir does not exist, is not a directory, or resolves outside allowed roots.
+        """
         resolved = Path(target_dir).resolve()
         if not resolved.exists():
             raise FileNotFoundError(f"Configured working directory does not exist: '{resolved}'")
         if not resolved.is_dir():
             raise NotADirectoryError(f"Configured working directory is not a directory: '{resolved}'")
 
-        if allowed_roots:
-            resolved_roots = [Path(r).resolve() for r in allowed_roots]
-            is_permitted = any(cls.is_subpath(resolved, r) for r in resolved_roots)
-            if not is_permitted:
-                raise PermissionError(
-                    f"Working directory '{resolved}' is outside allowed root boundaries: {[str(r) for r in resolved_roots]}"
-                )
+        if allowed_roots is None:
+            try:
+                from common.config import settings
+                allowed_roots = [settings.get_sandbox_root()]
+            except Exception:
+                allowed_roots = [Path.cwd().resolve()]
+
+        resolved_roots = [Path(r).resolve() for r in allowed_roots]
+        is_permitted = any(cls.is_subpath(resolved, r) for r in resolved_roots)
+        if not is_permitted:
+            raise PermissionError(
+                f"Working directory '{resolved}' is outside allowed root boundaries: {[str(r) for r in resolved_roots]}"
+            )
 
         return resolved
 
@@ -205,17 +240,17 @@ class SSRFValidator:
                 raise PermissionError(f"SSRF Protection: Access to private network IP '{ip}' is not permitted.")
 
     @classmethod
-    def validate_url(
+    def validate_and_resolve_destination(
         cls,
         url: str,
         allow_private: bool = True,
         dns_resolver: Optional[Callable[[str], list[str]]] = None,
-    ) -> str:
-        """Validates URL scheme, hostname, resolves DNS to IP addresses, and checks against SSRF rules.
+    ) -> tuple[str, str, str, int]:
+        """Validates URL and resolves destination host to safe IP addresses.
         
-        allow_private allows local loopback (localhost/127.0.0.1) and RFC1918 private IPs for local testing.
-        dns_resolver allows injecting a mock resolver for deterministic testing.
-        Fails closed if hostname resolution fails or returns no IP addresses.
+        Returns:
+            (validated_url, primary_validated_ip, original_host, port)
+        Fails closed on resolution error or SSRF policy violation.
         """
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
@@ -225,14 +260,16 @@ class SSRFValidator:
         if not host:
             raise ValueError(f"Invalid URL without hostname: '{url}'")
 
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
         if host.lower() in _BLOCKED_METADATA_HOSTS:
             raise PermissionError(f"SSRF Protection: Access to cloud metadata endpoint '{host}' is prohibited.")
 
-        # Try parsing directly as IP address
+        # Check if hostname is directly an IP literal
         try:
             ip = ipaddress.ip_address(host)
             cls._inspect_ip(ip, allow_private=allow_private)
-            return url
+            return url, str(ip), host, port
         except ValueError:
             pass
 
@@ -242,12 +279,10 @@ class SSRFValidator:
             try:
                 resolved_ips = dns_resolver(host)
             except Exception as exc:
-                # Fail closed if custom resolver raises an error
                 raise PermissionError(
                     f"Unable to resolve hostname '{host}'; HTTP request blocked by SSRF policy."
                 ) from exc
         else:
-            # Standard socket resolution (fails closed on gaierror / resolution failure)
             try:
                 addr_info = socket.getaddrinfo(host, None)
                 resolved_ips = list({info[4][0] for info in addr_info if info[4]})
@@ -276,4 +311,17 @@ class SSRFValidator:
                     f"Invalid resolved IP address '{ip_str}' for host '{host}'; HTTP request blocked by SSRF policy."
                 )
 
-        return url
+        return url, resolved_ips[0], host, port
+
+    @classmethod
+    def validate_url(
+        cls,
+        url: str,
+        allow_private: bool = True,
+        dns_resolver: Optional[Callable[[str], list[str]]] = None,
+    ) -> str:
+        """Validates URL scheme, hostname, resolves DNS to IP addresses, and checks against SSRF rules."""
+        validated_url, _, _, _ = cls.validate_and_resolve_destination(
+            url, allow_private=allow_private, dns_resolver=dns_resolver
+        )
+        return validated_url

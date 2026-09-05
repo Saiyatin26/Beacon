@@ -45,6 +45,7 @@ class ProcessAdapter(ImplementationAdapter):
         version: str = "1.0.0",
         role: Union[AdapterRole, str] = AdapterRole.TARGET,
         working_directory: Optional[Union[str, Path]] = None,
+        allowed_sandbox_root: Optional[Union[str, Path]] = None,
         allowed_environment_variables: Optional[list[str]] = None,
         timeout_seconds: float = 30.0,
         max_output_bytes: int = 1_000_000,  # 1MB output limit
@@ -58,6 +59,7 @@ class ProcessAdapter(ImplementationAdapter):
         self.adapter_type = AdapterType.PROCESS
         self.command = [command] if isinstance(command, str) else list(command)
         self.working_directory = Path(working_directory).resolve() if working_directory else None
+        self.allowed_sandbox_root = Path(allowed_sandbox_root).resolve() if allowed_sandbox_root else None
         self.allowed_env_vars = set(allowed_environment_variables or [
             "PATH", "SYSTEMROOT", "TEMP", "TMP", "HOMEPATH", "USERPROFILE", "LANG", "LC_ALL"
         ])
@@ -91,7 +93,7 @@ class ProcessAdapter(ImplementationAdapter):
         return hashlib.sha256(str(payload).encode()).hexdigest()
 
     def health_check(self) -> AdapterHealth:
-        """Verifies executable existence and working directory validity."""
+        """Verifies executable existence and working directory validity against sandbox root."""
         if not self.command:
             return AdapterHealth(
                 adapter_id=f"{self.name}:{self.version}",
@@ -112,14 +114,18 @@ class ProcessAdapter(ImplementationAdapter):
                 capabilities=self.capabilities,
             )
 
-        if self.working_directory and not self.working_directory.exists():
-            return AdapterHealth(
-                adapter_id=f"{self.name}:{self.version}",
-                status=AdapterHealthStatus.MISCONFIGURED,
-                is_ready=False,
-                diagnostics=f"Configured working directory does not exist: '{self.working_directory}'",
-                capabilities=self.capabilities,
-            )
+        if self.working_directory:
+            try:
+                allowed_roots = [self.allowed_sandbox_root] if self.allowed_sandbox_root else None
+                SandboxedPathValidator.validate_working_directory(self.working_directory, allowed_roots=allowed_roots)
+            except Exception as exc:
+                return AdapterHealth(
+                    adapter_id=f"{self.name}:{self.version}",
+                    status=AdapterHealthStatus.MISCONFIGURED,
+                    is_ready=False,
+                    diagnostics=f"Working directory sandbox validation failed: {exc}",
+                    capabilities=self.capabilities,
+                )
 
         return AdapterHealth(
             adapter_id=f"{self.name}:{self.version}",
@@ -167,6 +173,11 @@ class ProcessAdapter(ImplementationAdapter):
         error_msg: Optional[str] = None
 
         try:
+            # Validate working directory containment before spawning subprocess
+            if self.working_directory:
+                allowed_roots = [self.allowed_sandbox_root] if self.allowed_sandbox_root else None
+                SandboxedPathValidator.validate_working_directory(self.working_directory, allowed_roots=allowed_roots)
+
             # Cross-platform process group flags
             creationflags = 0
             preexec_fn = None

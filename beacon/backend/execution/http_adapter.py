@@ -92,7 +92,7 @@ class HttpAdapter(ImplementationAdapter):
         return hashlib.sha256(str(payload).encode()).hexdigest()
 
     def health_check(self) -> AdapterHealth:
-        """Validates endpoint URL format and SSRF constraints."""
+        """Validates endpoint URL format, auth references, and SSRF constraints."""
         try:
             full_url = f"{self.base_url}/{self.path_template.lstrip('/')}".rstrip("/")
             SSRFValidator.validate_url(
@@ -100,6 +100,16 @@ class HttpAdapter(ImplementationAdapter):
                 allow_private=self.allow_private_network,
                 dns_resolver=self.dns_resolver,
             )
+            if self.auth_reference:
+                token = os.environ.get(self.auth_reference)
+                if not token:
+                    return AdapterHealth(
+                        adapter_id=f"{self.name}:{self.version}",
+                        status=AdapterHealthStatus.MISCONFIGURED,
+                        is_ready=False,
+                        diagnostics=f"HTTP Adapter missing required auth reference environment variable '{self.auth_reference}'",
+                        capabilities=self.capabilities,
+                    )
             return AdapterHealth(
                 adapter_id=f"{self.name}:{self.version}",
                 status=AdapterHealthStatus.AVAILABLE,
@@ -124,8 +134,11 @@ class HttpAdapter(ImplementationAdapter):
         req_headers = dict(self.headers)
         if self.auth_reference:
             token = os.environ.get(self.auth_reference)
-            if token:
-                req_headers["Authorization"] = f"Bearer {token}"
+            if not token:
+                raise ValueError(
+                    f"Required auth reference '{self.auth_reference}' is missing or empty in environment."
+                )
+            req_headers["Authorization"] = f"Bearer {token}"
         if "Content-Type" not in req_headers and self.method in ("POST", "PUT", "PATCH"):
             req_headers["Content-Type"] = "application/json"
         return req_headers
@@ -147,31 +160,84 @@ class HttpAdapter(ImplementationAdapter):
         except KeyError:
             pass
 
-        # Validate URL for SSRF with hostname resolution
-        SSRFValidator.validate_url(
-            full_url,
-            allow_private=self.allow_private_network,
-            dns_resolver=self.dns_resolver,
-        )
+        # Validate URL for SSRF with hostname resolution and destination pinning
+        try:
+            validated_url, primary_ip, host, port = SSRFValidator.validate_and_resolve_destination(
+                full_url,
+                allow_private=self.allow_private_network,
+                dns_resolver=self.dns_resolver,
+            )
+        except Exception as exc:
+            safe_exc_str = SecretRedactor.redact_string(str(exc))
+            logger.error(f"HTTP adapter '{self.name}' SSRF block: {safe_exc_str}")
+            return Observation(
+                input_id=actual_input_id,
+                raw_inputs=SecretRedactor.redact(raw_inputs),
+                normalized_inputs=SecretRedactor.redact(raw_inputs),
+                raw_outputs={"error": safe_exc_str},
+                normalized_outputs={"error": safe_exc_str},
+                execution_status="EXCEPTION",
+                implementation_name=self.name,
+                implementation_version=self.version,
+                execution_time_ms=0.0,
+                error_message=safe_exc_str,
+                provenance={
+                    "adapter_type": AdapterType.HTTP.value,
+                    "role": str(self.role),
+                    "error_type": type(exc).__name__,
+                },
+            )
 
-        headers = self._prepare_headers()
+        try:
+            headers = self._prepare_headers()
+        except ValueError as auth_exc:
+            safe_auth_err = SecretRedactor.redact_string(str(auth_exc))
+            logger.error(f"HTTP adapter '{self.name}' auth error: {safe_auth_err}")
+            return Observation(
+                input_id=actual_input_id,
+                raw_inputs=SecretRedactor.redact(raw_inputs),
+                normalized_inputs=SecretRedactor.redact(raw_inputs),
+                raw_outputs={"error": safe_auth_err},
+                normalized_outputs={"error": safe_auth_err},
+                execution_status="EXCEPTION",
+                implementation_name=self.name,
+                implementation_version=self.version,
+                execution_time_ms=0.0,
+                error_message=safe_auth_err,
+                provenance={
+                    "adapter_type": AdapterType.HTTP.value,
+                    "role": str(self.role),
+                    "error_type": "AuthReferenceError",
+                },
+            )
+
         safe_url = SecretRedactor.redact_string(full_url)
         safe_inputs = SecretRedactor.redact(raw_inputs)
         logger.info(f"Executing HTTP request [{self.method}] {safe_url} on input #{actual_input_id}")
+
+        # Construct target connection destination pinned to validated IP to prevent DNS TOCTOU
+        from urllib.parse import urlparse
+        target_url = full_url
+        if host and primary_ip and host != primary_ip:
+            headers.setdefault("Host", host)
+            parsed_u = urlparse(full_url)
+            netloc_port = f":{parsed_u.port}" if parsed_u.port else ""
+            target_netloc = f"{primary_ip}{netloc_port}"
+            target_url = parsed_u._replace(netloc=target_netloc).geturl()
 
         start_time = time.perf_counter()
         try:
             with httpx.Client(timeout=self.timeout_seconds) as client:
                 if self.method == "GET":
-                    resp = client.get(full_url, headers=headers, params=mapped_kwargs)
+                    resp = client.get(target_url, headers=headers, params=mapped_kwargs)
                 elif self.method == "POST":
-                    resp = client.post(full_url, headers=headers, json=mapped_kwargs)
+                    resp = client.post(target_url, headers=headers, json=mapped_kwargs)
                 elif self.method == "PUT":
-                    resp = client.put(full_url, headers=headers, json=mapped_kwargs)
+                    resp = client.put(target_url, headers=headers, json=mapped_kwargs)
                 elif self.method == "PATCH":
-                    resp = client.patch(full_url, headers=headers, json=mapped_kwargs)
+                    resp = client.patch(target_url, headers=headers, json=mapped_kwargs)
                 elif self.method == "DELETE":
-                    resp = client.delete(full_url, headers=headers, params=mapped_kwargs)
+                    resp = client.delete(target_url, headers=headers, params=mapped_kwargs)
                 else:
                     raise ValueError(f"Unsupported HTTP method: {self.method}")
 

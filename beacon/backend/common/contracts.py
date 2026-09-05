@@ -103,7 +103,7 @@ def compute_canonical_input_hash(values: dict[str, Any]) -> str:
 
 class CanonicalInput(BaseModel):
     """Generic canonical input contract for arbitrary domain payloads."""
-    input_id: str
+    input_id: str = Field(default="")
     payload: dict[str, Any] = Field(default_factory=dict)
     values: dict[str, Any] = Field(default_factory=dict)
     input_hash: str = ""
@@ -111,6 +111,10 @@ class CanonicalInput(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
     expected_context: Optional[dict[str, Any]] = None
     tags: list[str] = Field(default_factory=list)
+
+    @classmethod
+    def _get_known_fields(cls) -> set[str]:
+        return {"input_id", "payload", "values", "input_hash", "metadata", "provenance", "expected_context", "tags"}
 
     def model_post_init(self, __context: Any) -> None:
         target_dict = self.payload or self.values
@@ -120,6 +124,20 @@ class CanonicalInput(BaseModel):
             object.__setattr__(self, "values", self.payload)
         if not self.input_hash and target_dict:
             object.__setattr__(self, "input_hash", compute_canonical_input_hash(target_dict))
+        if not self.input_id:
+            computed_id = f"INP-{self.input_hash[:12]}" if self.input_hash else f"INP-{compute_canonical_input_hash(target_dict or {})[:12]}"
+            object.__setattr__(self, "input_id", computed_id)
+
+    @classmethod
+    def from_raw(cls, data: Any, input_id: str = "") -> "CanonicalInput":
+        """Creates a CanonicalInput from arbitrary dict or object payload."""
+        if isinstance(data, CanonicalInput):
+            return data
+        raw_dict = data if isinstance(data, dict) else dict(getattr(data, "__dict__", {}))
+        known = cls._get_known_fields()
+        if "payload" in raw_dict or "values" in raw_dict:
+            return cls(**raw_dict)
+        return cls(input_id=input_id, payload=raw_dict, values=raw_dict)
 
     def get_data(self) -> dict[str, Any]:
         return self.payload or self.values

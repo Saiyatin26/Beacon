@@ -961,4 +961,233 @@ def test_selective_secret_redaction_preserves_useful_behavior():
     assert "token=[REDACTED]" in redacted
 
 
+def test_process_adapter_actual_sandbox_execution_blocked(tmp_path, monkeypatch):
+    """ProcessAdapter blocks execution before subprocess.Popen when working directory escapes sandbox root."""
+    sandbox_root = tmp_path / "sandbox"
+    sandbox_root.mkdir(parents=True, exist_ok=True)
+
+    outside_dir = tmp_path / "outside_dir"
+    outside_dir.mkdir(parents=True, exist_ok=True)
+
+    adapter = ProcessAdapter(
+        command=[sys.executable, str(CLI_FIXTURE_SCRIPT)],
+        working_directory=outside_dir,
+        allowed_sandbox_root=sandbox_root,
+        name="test_sandbox_escape",
+    )
+
+    # Health check must report MISCONFIGURED
+    health = adapter.health_check()
+    assert health.is_ready is False
+    assert health.status == AdapterHealthStatus.MISCONFIGURED
+    assert "outside allowed root boundaries" in health.diagnostics
+
+    # Execute must fail closed with EXCEPTION and never call subprocess.Popen
+    popen_called = []
+    real_popen = subprocess.Popen
+    def mock_popen(*args, **kwargs):
+        popen_called.append(True)
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", mock_popen)
+    obs = adapter.execute(CanonicalInput(input_id="INP-SB-1", payload={"op": "echo"}))
+
+    assert obs.execution_status == "EXCEPTION"
+    assert "outside allowed root boundaries" in obs.error_message
+    assert len(popen_called) == 0, "subprocess.Popen was invoked despite sandbox violation!"
+
+
+def test_http_adapter_dns_rebinding_and_toctou_prevention():
+    """HttpAdapter enforces SSRF on all resolved IPs and pins destination to prevent DNS rebinding."""
+    # 1. Mixed resolution with one private IP fails closed immediately
+    mixed_dns = lambda host: ["93.184.216.34", "10.0.0.1"]
+    with pytest.raises(PermissionError) as exc_mixed:
+        SSRFValidator.validate_and_resolve_destination(
+            "http://rebinding-service.internal/data",
+            allow_private=False,
+            dns_resolver=mixed_dns,
+        )
+    assert "private network IP" in str(exc_mixed.value)
+
+    # 2. DNS failure / Empty resolution fails closed
+    empty_dns = lambda host: []
+    with pytest.raises(PermissionError) as exc_empty:
+        SSRFValidator.validate_and_resolve_destination(
+            "http://unresolvable.example/data",
+            allow_private=False,
+            dns_resolver=empty_dns,
+        )
+    assert "Unable to resolve hostname" in str(exc_empty.value)
+
+    # 3. DNS exception fails closed
+    import socket
+    def failing_dns(host):
+        raise socket.gaierror("Name or service not known")
+
+    with pytest.raises(PermissionError) as exc_fail:
+        SSRFValidator.validate_and_resolve_destination(
+            "http://failing.example/data",
+            allow_private=False,
+            dns_resolver=failing_dns,
+        )
+    assert "Unable to resolve hostname" in str(exc_fail.value)
+
+    # 4. Valid resolution returns pinned destination IP
+    valid_dns = lambda host: ["93.184.216.34"]
+    url, primary_ip, host, port = SSRFValidator.validate_and_resolve_destination(
+        "http://example.com/api/test",
+        allow_private=False,
+        dns_resolver=valid_dns,
+    )
+    assert primary_ip == "93.184.216.34"
+    assert host == "example.com"
+    assert port == 80
+
+
+def test_http_adapter_auth_reference_fail_closed(monkeypatch):
+    """HttpAdapter fails closed if a declared auth_reference is missing or empty in the environment."""
+    monkeypatch.delenv("NON_EXISTENT_AUTH_TOKEN_VAR", raising=False)
+
+    adapter = HttpAdapter(
+        base_url="http://127.0.0.1:8000",
+        path_template="/api/data",
+        auth_reference="NON_EXISTENT_AUTH_TOKEN_VAR",
+        name="test_missing_auth",
+    )
+
+    # Health check reports MISCONFIGURED
+    health = adapter.health_check()
+    assert health.is_ready is False
+    assert health.status == AdapterHealthStatus.MISCONFIGURED
+    assert "missing required auth reference" in health.diagnostics
+
+    # Execute fails closed without making request
+    obs = adapter.execute({"query": 1}, input_id="INP-AUTH-1")
+    assert obs.execution_status == "EXCEPTION"
+    assert "missing or empty" in obs.error_message
+    assert obs.provenance["error_type"] == "AuthReferenceError"
+
+    # With valid env var present, headers include token
+    monkeypatch.setenv("VALID_BEACON_AUTH_TOKEN_VAR", "secret_bearer_token_xyz")
+    valid_adapter = HttpAdapter(
+        base_url="http://127.0.0.1:8000",
+        path_template="/api/data",
+        auth_reference="VALID_BEACON_AUTH_TOKEN_VAR",
+        name="test_valid_auth",
+    )
+    health_valid = valid_adapter.health_check()
+    assert health_valid.is_ready is True
+    assert health_valid.status == AdapterHealthStatus.AVAILABLE
+    headers = valid_adapter._prepare_headers()
+    assert headers["Authorization"] == "Bearer secret_bearer_token_xyz"
+
+
+def test_secret_redactor_no_over_redaction_and_word_boundaries():
+    """SecretRedactor does not over-redact normal words containing substring 'key' or 'pass'."""
+    normal_text = "The monkey typed on the keyboard keypad while playing hockey near the turnkey project."
+    redacted = SecretRedactor.redact_string(normal_text)
+    assert redacted == normal_text
+    assert "monkey" in redacted
+    assert "keyboard" in redacted
+    assert "keypad" in redacted
+    assert "hockey" in redacted
+    assert "turnkey" in redacted
+
+    # Normal dict keys containing substrings
+    data = {
+        "keyboard_type": "mechanical",
+        "hockey_puck": True,
+        "monkey_patch": False,
+        "password": "secret_password_value",
+        "api_key": "secret_api_key_value",
+    }
+    redacted_dict = SecretRedactor.redact(data)
+    assert redacted_dict["keyboard_type"] == "mechanical"
+    assert redacted_dict["hockey_puck"] is True
+    assert redacted_dict["monkey_patch"] is False
+    assert redacted_dict["password"] == "[REDACTED]"
+    assert redacted_dict["api_key"] == "[REDACTED]"
+
+
+def test_execution_request_get_canonical_input_deterministic():
+    """ExecutionRequest.get_canonical_input() always produces a valid, deterministic CanonicalInput."""
+    # 1. From raw dictionary
+    req1 = ExecutionRequest(
+        application_id="app_test",
+        input_data={"credit_score": 720, "amount": 50000.0},
+    )
+    can1 = req1.get_canonical_input()
+    assert isinstance(can1, CanonicalInput)
+    assert can1.input_id.startswith("INP-")
+    assert can1.payload == {"credit_score": 720, "amount": 50000.0}
+
+    # Determinism: same input produces identical input_id
+    req2 = ExecutionRequest(
+        application_id="app_test",
+        input_data={"credit_score": 720, "amount": 50000.0},
+    )
+    can2 = req2.get_canonical_input()
+    assert can1.input_id == can2.input_id
+
+    # 2. From existing CanonicalInput
+    pre_existing = CanonicalInput(input_id="CUSTOM-ID-999", payload={"x": 10})
+    req3 = ExecutionRequest(
+        application_id="app_test",
+        input_data=pre_existing,
+    )
+    can3 = req3.get_canonical_input()
+    assert can3.input_id == "CUSTOM-ID-999"
+    assert can3.payload == {"x": 10}
+
+
+def test_clean_subprocess_import_all_execution_modules():
+    """Clean Python process verifies independent low-level execution imports without LLM or DB."""
+    code = (
+        "import sys\n"
+        "sys.path.insert(0, 'backend')\n"
+        "import execution.models\n"
+        "import execution.security\n"
+        "import execution.mapping\n"
+        "import execution.process_adapter\n"
+        "import execution.http_adapter\n"
+        "import execution.container_adapter\n"
+        "sys.exit(0)\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code], cwd=str(ROOT), capture_output=True, text=True)
+    assert res.returncode == 0, f"Clean-process execution import failed: {res.stderr}"
+
+
+def test_security_manual_verification_secret_injection():
+    """Inject BEACON_FINAL_PHASE2_SECRET_987654 into all channels and verify zero leakage."""
+    test_secret = "BEACON_FINAL_PHASE2_SECRET_987654"
+
+    # 1. Secret in stdout / stderr
+    raw_stdout = f"Operation completed successfully. secret_token={test_secret} done."
+    raw_stderr = f"Error: Authorization: Bearer {test_secret} rejected"
+    assert test_secret not in SecretRedactor.redact_string(raw_stdout)
+    assert test_secret not in SecretRedactor.redact_string(raw_stderr)
+
+    # 2. Secret in HTTP headers and body
+    http_headers = {"Authorization": f"Bearer {test_secret}", "X-API-Key": test_secret}
+    http_body = {"user": "admin", "client_secret": test_secret}
+    safe_headers = SecretRedactor.redact(http_headers)
+    safe_body = SecretRedactor.redact(http_body)
+    assert test_secret not in str(safe_headers)
+    assert test_secret not in str(safe_body)
+
+    # 3. Secret in Exception message handled by ApplicationExecutor
+    class SecretExceptionAdapter(ImplementationAdapter):
+        name = "secret_exc_adapter"
+        def execute(self, inputs, input_id=""):
+            raise RuntimeError(f"Connection failed to DB using password={test_secret}")
+
+    adapter = SecretExceptionAdapter()
+    result = application_executor.execute_single(adapter, CanonicalInput(input_id="INP-SEC-TEST", payload={}))
+    assert test_secret not in result.error_message
+    assert test_secret not in result.observation.error_message
+    assert test_secret not in str(result.observation.raw_outputs)
+    assert "[REDACTED]" in result.error_message
+
+
+
 

@@ -93,6 +93,21 @@ class Settings:
         """Returns the canonical SQLite database path and ensures its parent directory exists."""
         return self.database_path
 
+    # Phase 2 Execution Sandbox Root (Single Source of Truth for Process/Container Execution)
+    @property
+    def sandbox_root(self) -> Path:
+        custom = os.getenv("BEACON_SANDBOX_ROOT", None) or os.getenv("EXECUTION_SANDBOX_ROOT", None)
+        if custom and custom.strip():
+            p = Path(custom.strip()).resolve()
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        default_p = Path(__file__).resolve().parents[2]
+        return default_p.resolve()
+
+    def get_sandbox_root(self) -> Path:
+        """Returns the authoritative execution sandbox root directory."""
+        return self.sandbox_root
+
     # Trusted Reverse Proxies (for secure X-Forwarded-For resolution)
     trusted_proxies: list[str] = [
         ip.strip()

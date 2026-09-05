@@ -10,7 +10,7 @@ from enum import Enum
 import hashlib
 import json
 from typing import Any, Literal, Optional, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from common.contracts import (
     AdapterCapabilities,
@@ -29,19 +29,29 @@ class ExecutionRequest(BaseModel):
     execution_id: str = Field(
         default_factory=lambda: f"EXEC-{hashlib.sha256(str(datetime.now(timezone.utc).timestamp()).encode()).hexdigest()[:12]}"
     )
-    application_id: str
-    implementation_id: str
+    application_id: str = ""
+    implementation_id: str = "default_impl"
     role: Union[AdapterRole, str] = AdapterRole.TARGET
-    input: Union[CanonicalInput, dict[str, Any]]
+    input: Any = None
+    input_data: Any = None
     timeout_seconds: float = 30.0
     environment_reference: Optional[str] = None
     trace_options: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def _sync_input(self) -> "ExecutionRequest":
+        if self.input is None and self.input_data is not None:
+            object.__setattr__(self, "input", self.input_data)
+        elif self.input_data is None and self.input is not None:
+            object.__setattr__(self, "input_data", self.input)
+        return self
+
     def get_canonical_input(self) -> CanonicalInput:
-        if isinstance(self.input, CanonicalInput):
-            return self.input
-        return CanonicalInput(payload=self.input)
+        actual_inp = self.input if self.input is not None else (self.input_data if self.input_data is not None else {})
+        if isinstance(actual_inp, CanonicalInput):
+            return actual_inp
+        return CanonicalInput.from_raw(actual_inp)
 
 
 class ExecutionResult(BaseModel):
