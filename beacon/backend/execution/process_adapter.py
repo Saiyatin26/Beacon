@@ -31,7 +31,15 @@ from common.contracts import (
     ImplementationAdapter,
     Observation,
 )
-from .mapping import InputMapper, InputMapperConfig, OutputMapper, OutputMapperConfig
+from .mapping import (
+    InputMapper,
+    InputMapperConfig,
+    MappedInput,
+    OutputMapper,
+    OutputMapperConfig,
+    PersistentInputSerializer,
+    PersistentProtocol,
+)
 from .models import ExecutionResult
 from .security import SandboxedPathValidator, SecretRedactor
 
@@ -54,6 +62,17 @@ class ProcessLifecycleState(str, Enum):
     FAILED = "FAILED"
 
 
+class ShutdownStrategy(str, Enum):
+    """Explicit strategy for terminating persistent subprocesses during adapter stop/cleanup."""
+    SIGNAL = "signal"
+    STDIN_COMMAND = "stdin_command"
+    NONE = "none"
+    UNSUPPORTED = "unsupported"
+
+
+ProcessShutdownStrategy = ShutdownStrategy
+
+
 
 class ProcessAdapter(ImplementationAdapter):
     """Executes an external executable or script via subprocess with safety bounds."""
@@ -72,6 +91,11 @@ class ProcessAdapter(ImplementationAdapter):
         max_output_bytes: int = 1_000_000,  # 1MB output limit
         input_mapper: Optional[InputMapper] = None,
         output_mapper: Optional[OutputMapper] = None,
+        persistent_protocol: Union[PersistentProtocol, str] = PersistentProtocol.JSON_LINES,
+        persistent_serializer: Optional[PersistentInputSerializer] = None,
+        shutdown_strategy: Union[ShutdownStrategy, str] = ShutdownStrategy.SIGNAL,
+        shutdown_payload: Optional[Union[dict[str, Any], str]] = None,
+        shutdown_timeout_seconds: float = 2.0,
         metadata: Optional[dict[str, Any]] = None,
     ):
         self.name = name
@@ -95,6 +119,22 @@ class ProcessAdapter(ImplementationAdapter):
         self.max_output_bytes = max_output_bytes
         self.input_mapper = input_mapper or InputMapper()
         self.output_mapper = output_mapper or OutputMapper()
+
+        if persistent_serializer is not None:
+            self.persistent_serializer = persistent_serializer
+        else:
+            self.persistent_serializer = PersistentInputSerializer(protocol=persistent_protocol)
+
+        if isinstance(shutdown_strategy, str):
+            try:
+                self.shutdown_strategy = ShutdownStrategy(shutdown_strategy.lower())
+            except ValueError:
+                self.shutdown_strategy = ShutdownStrategy.SIGNAL
+        else:
+            self.shutdown_strategy = shutdown_strategy
+        self.shutdown_payload = shutdown_payload
+        self.shutdown_timeout_seconds = shutdown_timeout_seconds
+
         self.metadata = metadata or {}
         self._process: Optional[subprocess.Popen] = None
         self._pid: Optional[int] = None
@@ -122,8 +162,11 @@ class ProcessAdapter(ImplementationAdapter):
             "role": str(self.role),
             "command": self.command,
             "execution_mode": self.execution_mode.value,
+            "persistent_protocol": self.persistent_serializer.protocol.value,
+            "shutdown_strategy": self.shutdown_strategy.value,
         }
         return hashlib.sha256(str(payload).encode()).hexdigest()
+
 
 
     def health_check(self) -> AdapterHealth:
@@ -263,14 +306,19 @@ class ProcessAdapter(ImplementationAdapter):
         start_time = time.perf_counter()
         logger.info(f"[PERSISTENT] Executing input #{actual_input_id} on persistent PID {self._pid}")
 
-        # 4. Write line-delimited JSON payload to stdin
-        payload_str = json.dumps(raw_inputs) + "\n"
+        # 4. Canonical Input Mapping: CanonicalInput -> InputMapper -> MappedInput
+        mapped_input: MappedInput = self.input_mapper.map_input(inputs, input_id=actual_input_id)
+        mapped_payload: dict[str, Any] = mapped_input.payload
+
+        # 5. Persistent Input Serialization: MappedInput -> PersistentInputSerializer -> wire representation
+        payload_str = self.persistent_serializer.serialize(mapped_input)
         try:
             if self._process.stdin is None or self._process.stdin.closed:
                 raise BrokenPipeError("stdin stream is closed")
             self._process.stdin.write(payload_str)
             self._process.stdin.flush()
         except (BrokenPipeError, OSError) as write_err:
+
             self.lifecycle_state = ProcessLifecycleState.EXITED
             poll_code = self._process.poll()
             err_msg = f"Failed to dispatch input to persistent process PID {self._pid} (Broken Pipe): {write_err}"
@@ -407,6 +455,8 @@ class ProcessAdapter(ImplementationAdapter):
                 "stdout": safe_stdout,
                 "stdout_truncated": stdout_truncated,
                 "lifecycle_state": self.lifecycle_state.value,
+                "mapped_input": SecretRedactor.redact(mapped_payload),
+                "persistent_protocol": self.persistent_serializer.protocol.value,
             },
         )
 
@@ -419,12 +469,14 @@ class ProcessAdapter(ImplementationAdapter):
         else:
             raw_inputs = dict(inputs)
 
-        cli_args = self.input_mapper.map_to_cli_args(inputs)
+        mapped_input: MappedInput = self.input_mapper.map_input(inputs, input_id=actual_input_id)
+        cli_args = mapped_input.cli_args
         full_command = self.command + cli_args
 
         # Redact for logging
         safe_log_cmd = SecretRedactor.redact_command(full_command)
         logger.info(f"Executing one-shot process adapter '{self.name}' on input #{actual_input_id}: {safe_log_cmd}")
+
 
         start_time = time.perf_counter()
         process = None
@@ -538,6 +590,7 @@ class ProcessAdapter(ImplementationAdapter):
                     "stderr": safe_stderr,
                     "stdout_truncated": stdout_truncated,
                     "stderr_truncated": stderr_truncated,
+                    "mapped_input": SecretRedactor.redact(mapped_input.payload),
                 },
             )
 
@@ -653,19 +706,39 @@ class ProcessAdapter(ImplementationAdapter):
             raise
 
     def stop(self, context: Optional[dict[str, Any]] = None) -> None:
-        """Lifecycle hook: Gracefully terminates the running process."""
+        """Lifecycle hook: Gracefully terminates the running process via configured ShutdownStrategy."""
         if self._process is not None:
             pid = self._pid
-            logger.info(f"Stopping process adapter '{self.name}' (PID: {pid})")
+            logger.info(
+                f"Stopping process adapter '{self.name}' (PID: {pid}) with strategy={self.shutdown_strategy.value}"
+            )
             try:
-                if self._process.poll() is None:
-                    try:
-                        if self._process.stdin and not self._process.stdin.closed:
-                            self._process.stdin.write(json.dumps({"command": "exit"}) + "\n")
-                            self._process.stdin.flush()
-                            self._process.wait(timeout=1.0)
-                    except Exception:
-                        pass
+                # 1. Configured Stdin Shutdown Command
+                if self.shutdown_strategy == ShutdownStrategy.STDIN_COMMAND:
+                    if self._process.poll() is None:
+                        if self.shutdown_payload is not None:
+                            try:
+                                if self._process.stdin and not self._process.stdin.closed:
+                                    payload_str = self.persistent_serializer.serialize(self.shutdown_payload)
+                                    safe_payload = (
+                                        SecretRedactor.redact(self.shutdown_payload)
+                                        if isinstance(self.shutdown_payload, dict)
+                                        else "[CONFIGURED_SHUTDOWN_PAYLOAD]"
+                                    )
+                                    logger.debug(f"[SHUTDOWN] Dispatching stdin shutdown payload to PID {pid}: {safe_payload}")
+                                    self._process.stdin.write(payload_str)
+                                    self._process.stdin.flush()
+                                    self._process.wait(timeout=self.shutdown_timeout_seconds)
+                            except Exception as cmd_err:
+                                logger.debug(f"[SHUTDOWN] Stdin shutdown command notice for PID {pid}: {cmd_err}")
+                        else:
+                            logger.warning(
+                                f"ProcessAdapter '{self.name}' has shutdown_strategy=STDIN_COMMAND "
+                                f"but shutdown_payload is None; skipping stdin command."
+                            )
+
+                # 2. SIGNAL / NONE / UNSUPPORTED / Fallback:
+                # For SIGNAL, NONE, or if STDIN_COMMAND process hasn't exited yet:
                 if self._process.poll() is None:
                     self._terminate_process_tree(self._process)
             finally:
@@ -676,6 +749,7 @@ class ProcessAdapter(ImplementationAdapter):
         if self._thread_pool is not None:
             self._thread_pool.shutdown(wait=False)
             self._thread_pool = None
+
 
     def get_process(self) -> Optional[Any]:
         """Returns the active subprocess.Popen handle."""

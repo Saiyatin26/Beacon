@@ -5,10 +5,71 @@ and runtime-specific invocation payloads (arguments, JSON payloads, query parame
 CLI flags, and stdout/stderr).
 """
 
+from enum import Enum
 import json
 from typing import Any, Callable, Optional, Union
 from pydantic import BaseModel, Field
 from common.contracts import CanonicalInput, Observation
+
+
+class MappedInput(BaseModel):
+    """Generic internal representation of application input produced by InputMapper.
+
+    Acts as the single unified mapped artifact consumed by:
+    - ONE-SHOT: mapped_input.cli_args for process argument execution
+    - PERSISTENT: mapped_input.payload for persistent protocol serialization (e.g. JSON-lines)
+    """
+    payload: dict[str, Any] = Field(default_factory=dict)
+    cli_args: list[str] = Field(default_factory=list)
+    raw_source: dict[str, Any] = Field(default_factory=dict)
+    input_id: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PersistentProtocol(str, Enum):
+    """Supported wire protocols for persistent process communication over stdin."""
+    JSON_LINES = "json_lines"
+    TEXT_LINES = "text_lines"
+    CUSTOM = "custom"
+
+
+class PersistentInputSerializer:
+    """Serializes a MappedInput or payload into wire format for persistent stdin transmission."""
+
+    def __init__(
+        self,
+        protocol: Union[PersistentProtocol, str] = PersistentProtocol.JSON_LINES,
+        custom_serializer: Optional[Callable[[Any], str]] = None,
+    ):
+        if isinstance(protocol, str):
+            try:
+                self.protocol = PersistentProtocol(protocol.lower())
+            except ValueError:
+                self.protocol = PersistentProtocol.JSON_LINES
+        else:
+            self.protocol = protocol
+        self.custom_serializer = custom_serializer
+
+    def serialize(self, input_item: Union[MappedInput, dict[str, Any], Any]) -> str:
+        """Serializes input item into the configured wire protocol string with a newline delimiter."""
+        data = input_item.payload if isinstance(input_item, MappedInput) else input_item
+
+        if self.protocol == PersistentProtocol.CUSTOM and self.custom_serializer:
+            res = self.custom_serializer(data)
+            return res if res.endswith("\n") else res + "\n"
+
+        if self.protocol == PersistentProtocol.TEXT_LINES:
+            if isinstance(data, dict):
+                line = " ".join(f"{k}={v}" for k, v in data.items())
+            else:
+                line = str(data)
+            return line + "\n"
+
+        # Default: JSON_LINES
+        if isinstance(data, (dict, list)):
+            return json.dumps(data) + "\n"
+        return json.dumps({"value": data}) + "\n"
+
 
 
 class InputMapperConfig(BaseModel):
@@ -69,6 +130,28 @@ class InputMapper:
 
     def __init__(self, config: Optional[InputMapperConfig] = None):
         self.config = config or InputMapperConfig()
+
+    def map_input(self, canonical_input: Union[CanonicalInput, dict[str, Any]], input_id: str = "") -> MappedInput:
+        """Canonical mapping entrypoint producing a generic MappedInput representation."""
+        if isinstance(canonical_input, CanonicalInput):
+            actual_id = input_id or canonical_input.input_id
+            raw_source = canonical_input.get_data()
+            metadata = canonical_input.metadata
+        else:
+            actual_id = input_id
+            raw_source = dict(canonical_input)
+            metadata = {}
+
+        kwargs = self.map_to_kwargs(canonical_input)
+        cli_args = self.map_to_cli_args(canonical_input)
+
+        return MappedInput(
+            payload=kwargs,
+            cli_args=cli_args,
+            raw_source=raw_source,
+            input_id=actual_id,
+            metadata=metadata,
+        )
 
     def map_to_kwargs(self, canonical_input: Union[CanonicalInput, dict[str, Any]]) -> dict[str, Any]:
         """Maps canonical input to keyword arguments for Python callables or HTTP JSON bodies."""

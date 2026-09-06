@@ -72,10 +72,17 @@ from execution import (
     PairedExecutionRequest,
     PairedExecutionSession,
     PairedExecutionStatus,
+    InputMapper,
+    InputMapperConfig,
+    MappedInput,
+    PersistentInputSerializer,
+    PersistentProtocol,
     ProcessAdapter,
     ProcessExecutionMode,
     ProcessLifecycleState,
+    ProcessShutdownStrategy,
     ReadinessChecker,
+    ShutdownStrategy,
 
     ReadinessConfig,
     ReadinessResult,
@@ -1526,6 +1533,333 @@ def test_paired_execution_with_real_persistent_process_adapters():
     # Verify both processes are terminated after paired execution completes
     assert ref_adp.get_process() is None
     assert target_adp.get_process() is None
+
+
+def test_real_process_adapter_persistent_input_mapping_respected():
+    """TEST: Real ProcessAdapter in persistent mode strictly respects configured InputMapper.
+
+    Canonical input with domain fields (customer_age, amount) must be mapped to application
+    expected fields (age, transaction_amount) before reaching the persistent application.
+    Application must receive the mapped representation, NOT the raw canonical input.
+    """
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    # Configured field mappings: customer_age -> age, amount -> transaction_amount
+    mapper = InputMapper(
+        InputMapperConfig(
+            field_mappings={
+                "age": "customer_age",
+                "transaction_amount": "amount",
+            }
+        )
+    )
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_persistent_mapping",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        input_mapper=mapper,
+        shutdown_strategy=ShutdownStrategy.STDIN_COMMAND,
+        shutdown_payload={"command": "exit"},
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    started_pid = proc.pid
+    assert proc.poll() is None
+
+    canonical_input = CanonicalInput.from_raw(
+        {"customer_age": 35, "amount": 1000},
+        input_id="in_mapping_001",
+    )
+
+    obs = adapter.execute(canonical_input)
+
+    assert obs.execution_status == "SUCCESS"
+    assert obs.provenance["pid"] == started_pid
+    # Application echoed back what it received on stdin
+    echoed = obs.raw_outputs.get("echo", {})
+    # The application received the mapped representation!
+    assert echoed.get("age") == 35
+    assert echoed.get("transaction_amount") == 1000
+    # Original canonical keys were NOT passed to application
+    assert "customer_age" not in echoed
+    assert "amount" not in echoed
+
+    # Provenance tracks mapped representation and protocol
+    assert obs.provenance.get("mapped_input") == {"age": 35, "transaction_amount": 1000}
+    assert obs.provenance.get("persistent_protocol") == "json_lines"
+
+    # Canonical source is safely preserved in observation
+    assert obs.raw_inputs == {"customer_age": 35, "amount": 1000}
+
+    adapter.stop()
+    assert proc.poll() is not None
+
+
+def test_real_process_adapter_multi_input_mapping_same_process():
+    """TEST: Multi-input mapping guarantees all inputs go through InputMapper -> Serializer -> same PID."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    mapper = InputMapper(
+        InputMapperConfig(
+            field_mappings={
+                "age": "customer_age",
+                "transaction_amount": "amount",
+            }
+        )
+    )
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_multi_input_mapping",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        input_mapper=mapper,
+        shutdown_strategy=ShutdownStrategy.STDIN_COMMAND,
+        shutdown_payload={"command": "exit"},
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    started_pid = proc.pid
+
+    inputs = [
+        {"customer_age": 25, "amount": 500},
+        {"customer_age": 35, "amount": 1000},
+        {"customer_age": 45, "amount": 1500},
+    ]
+
+    for idx, inp in enumerate(inputs, start=1):
+        obs = adapter.execute(inp, input_id=f"inp_{idx}")
+        assert obs.execution_status == "SUCCESS"
+        assert obs.provenance["pid"] == started_pid
+        assert obs.raw_outputs["count"] == idx
+        echoed = obs.raw_outputs["echo"]
+        assert echoed["age"] == inp["customer_age"]
+        assert echoed["transaction_amount"] == inp["amount"]
+        assert "customer_age" not in echoed
+        assert "amount" not in echoed
+
+    adapter.stop()
+    assert proc.poll() is not None
+
+
+def test_real_process_adapter_configured_stdin_shutdown():
+    """SHUTDOWN TEST A: Configured stdin shutdown command gracefully terminates process."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_stdin_shutdown",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        shutdown_strategy=ShutdownStrategy.STDIN_COMMAND,
+        shutdown_payload={"command": "exit"},
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    pid = proc.pid
+    assert proc.poll() is None
+
+    # Process an input
+    obs = adapter.execute({"test": "stdin_shutdown"})
+    assert obs.execution_status == "SUCCESS"
+
+    # Stop via configured stdin command
+    adapter.stop()
+    assert proc.poll() == 0  # Exited cleanly via exit command
+    assert adapter.lifecycle_state == ProcessLifecycleState.STOPPED
+    assert adapter.get_process() is None
+
+
+def test_real_process_adapter_signal_shutdown_on_non_exit_command_app():
+    """SHUTDOWN TEST B: Signal shutdown terminates application that does not understand exit command."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    signal_app_script = str(ROOT / "tests" / "helpers" / "test_signal_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, signal_app_script],
+        name="test_signal_shutdown",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        shutdown_strategy=ShutdownStrategy.SIGNAL,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    pid = proc.pid
+    assert proc.poll() is None
+
+    obs = adapter.execute({"probe": "signal_test"})
+    assert obs.execution_status == "SUCCESS"
+    assert obs.raw_outputs["received"] == {"probe": "signal_test"}
+
+    # Stop via SIGNAL (cross-platform process tree termination)
+    adapter.stop()
+    assert proc.poll() is not None
+    assert adapter.lifecycle_state == ProcessLifecycleState.STOPPED
+    assert adapter.get_process() is None
+
+
+def test_real_process_adapter_no_hardcoded_exit_command_sent_when_strategy_signal(tmp_path):
+    """SHUTDOWN TEST C: Proves adapter sends ZERO exit commands when strategy is not STDIN_COMMAND."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    signal_app_script = str(ROOT / "tests" / "helpers" / "test_signal_app.py")
+    log_file = tmp_path / "stdin_received.log"
+
+    adapter = ProcessAdapter(
+        command=[python_bin, signal_app_script, str(log_file)],
+        name="test_no_hardcoded_exit",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        shutdown_strategy=ShutdownStrategy.SIGNAL,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    obs = adapter.execute({"data": "payload_content_123"})
+    assert obs.execution_status == "SUCCESS"
+
+    # Stop via SIGNAL
+    adapter.stop()
+    assert proc.poll() is not None
+
+    # Inspect log file containing all lines received on stdin
+    log_content = log_file.read_text(encoding="utf-8")
+    assert "payload_content_123" in log_content
+    # Crucial assertion: no exit command was ever sent!
+    assert "command" not in log_content
+    assert "exit" not in log_content
+
+
+def test_real_process_adapter_shutdown_strategy_none():
+    """TEST: ShutdownStrategy.NONE terminates lifecycle cleanly without sending arbitrary input."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_shutdown_none",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        shutdown_strategy=ShutdownStrategy.NONE,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    obs = adapter.execute({"test": "none_strategy"})
+    assert obs.execution_status == "SUCCESS"
+
+    adapter.stop()
+    assert proc.poll() is not None
+    assert adapter.lifecycle_state == ProcessLifecycleState.STOPPED
+
+
+def test_real_process_adapter_shutdown_payload_secret_redaction():
+    """TEST: Shutdown payload with sensitive tokens does not leak secrets in logs or traces."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    sensitive_payload = {
+        "command": "exit",
+        "api_key": "BEACON_SECRET_KEY_xyz987654",
+        "auth_token": "bearer_token_super_secret",
+    }
+
+    adapter = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="test_secret_shutdown",
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        shutdown_strategy=ShutdownStrategy.STDIN_COMMAND,
+        shutdown_payload=sensitive_payload,
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    proc = adapter.start()
+    adapter.execute({"test": "alive"})
+    adapter.stop()
+    assert proc.poll() is not None
+
+    redacted = SecretRedactor.redact(sensitive_payload)
+    assert redacted["api_key"] == "[REDACTED]"
+    assert redacted["auth_token"] == "[REDACTED]"
+    assert redacted["command"] == "exit"
+
+
+def test_persistent_input_serializer_text_lines_and_custom():
+    """TEST: PersistentInputSerializer supports TEXT_LINES and CUSTOM protocols."""
+    # Text lines
+    s_text = PersistentInputSerializer(protocol=PersistentProtocol.TEXT_LINES)
+    out = s_text.serialize({"key1": "val1", "key2": "val2"})
+    assert out == "key1=val1 key2=val2\n"
+
+    # Custom
+    s_custom = PersistentInputSerializer(
+        protocol=PersistentProtocol.CUSTOM,
+        custom_serializer=lambda d: f"CUSTOM:{d.get('msg', '')}",
+    )
+    out_custom = s_custom.serialize({"msg": "hello_world"})
+    assert out_custom == "CUSTOM:hello_world\n"
+
+
+def test_paired_execution_with_configured_mapping_and_shutdown():
+    """TEST: Paired execution end-to-end with configured InputMapper and ShutdownStrategy."""
+    python_bin = getattr(sys, "_base_executable", sys.executable)
+    app_script = str(ROOT / "tests" / "helpers" / "test_persistent_app.py")
+
+    ref_mapper = InputMapper(InputMapperConfig(field_mappings={"computed_x": "raw_x"}))
+    target_mapper = InputMapper(InputMapperConfig(field_mappings={"computed_x": "raw_x"}))
+
+    ref_adp = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="ref_mapped_app",
+        role=AdapterRole.REFERENCE,
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        input_mapper=ref_mapper,
+        shutdown_strategy=ShutdownStrategy.STDIN_COMMAND,
+        shutdown_payload={"command": "exit"},
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+    target_adp = ProcessAdapter(
+        command=[python_bin, app_script],
+        name="target_mapped_app",
+        role=AdapterRole.TARGET,
+        execution_mode=ProcessExecutionMode.PERSISTENT,
+        input_mapper=target_mapper,
+        shutdown_strategy=ShutdownStrategy.STDIN_COMMAND,
+        shutdown_payload={"command": "exit"},
+        allowed_environment_variables=list(os.environ.keys()),
+    )
+
+    req = PairedExecutionRequest(
+        application_id="paired_mapped_shutdown_app",
+        reference_adapter=ref_adp,
+        target_adapter=target_adp,
+        readiness_config_ref=ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=5.0),
+        readiness_config_target=ReadinessConfig(strategy=ReadinessStrategy.PROCESS_ALIVE, timeout_seconds=5.0),
+        custom_inputs=[{"raw_x": 100}, {"raw_x": 200}],
+    )
+
+    session, bundle = paired_execution_coordinator.execute_paired(req)
+    assert session.status == PairedExecutionStatus.COMPLETED
+    assert len(session.paired_results) == 2
+
+    for item_result in session.paired_results:
+        assert item_result.reference_status in ("SUCCESS", "SUCCEEDED")
+        assert item_result.target_status in ("SUCCESS", "SUCCEEDED")
+        assert len(item_result.evidence_ids) > 0
+
+    # Verify evidence records for output capture mapped representation
+    output_records = [r for r in bundle.records if r.evidence_type == EvidenceType.OUTPUT]
+    assert len(output_records) == 4  # 2 inputs * 2 implementations
+    for rec in output_records:
+        echo_data = rec.payload.get("raw_output", {}).get("echo", {})
+        assert echo_data.get("computed_x") in (100, 200)
+
+    # Both adapters stopped and cleaned up
+    assert ref_adp.get_process() is None
+    assert target_adp.get_process() is None
+
 
 
 

@@ -13,8 +13,11 @@ from .models import (
 from .mapping import (
     InputMapper,
     InputMapperConfig,
+    MappedInput,
     OutputMapper,
     OutputMapperConfig,
+    PersistentInputSerializer,
+    PersistentProtocol,
     resolve_dot_path,
 )
 from .security import (
@@ -27,6 +30,8 @@ from .process_adapter import (
     ProcessAdapter,
     ProcessExecutionMode,
     ProcessLifecycleState,
+    ProcessShutdownStrategy,
+    ShutdownStrategy,
 )
 
 from .http_adapter import HttpAdapter
@@ -105,8 +110,11 @@ __all__ = [
     "ExecutionStatus",
     "InputMapper",
     "InputMapperConfig",
+    "MappedInput",
     "OutputMapper",
     "OutputMapperConfig",
+    "PersistentInputSerializer",
+    "PersistentProtocol",
     "resolve_dot_path",
     "SandboxedPathValidator",
     "SecretRedactor",
@@ -115,6 +123,8 @@ __all__ = [
     "CliAdapter",
     "ProcessExecutionMode",
     "ProcessLifecycleState",
+    "ProcessShutdownStrategy",
+    "ShutdownStrategy",
     "HttpAdapter",
 
     "ContainerAdapter",
