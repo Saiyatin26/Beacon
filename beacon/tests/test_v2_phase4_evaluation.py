@@ -1647,6 +1647,7 @@ class TestPhase4FinalBlockerRemediation:
         from execution.evidence_models import (
             DatabaseEvidence,
             EvidenceBundle,
+            EvidenceCaptureStatus,
             EvidenceManifest,
             EvidenceRecord,
             EvidenceType,
@@ -1658,11 +1659,13 @@ class TestPhase4FinalBlockerRemediation:
             configured_tables=["customers"],
             table_row_counts_before={"customers": 1},
             table_row_counts_after={"customers": 2},
+            status=EvidenceCaptureStatus.CAPTURED,
         )
         tgt_db = DatabaseEvidence(
             configured_tables=["customers"],
             table_row_counts_before={"customers": 1},
             table_row_counts_after={"customers": 1},
+            status=EvidenceCaptureStatus.CAPTURED,
         )
 
         recs = [

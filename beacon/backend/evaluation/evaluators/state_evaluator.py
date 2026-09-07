@@ -312,6 +312,30 @@ class StateEvaluator:
 
         _get = self._get
 
+        # 0. Check capture status (e.g. NOT_SUPPORTED, FAILED, UNAVAILABLE, CONFIGURATION_ERROR)
+        ref_status_raw = _get(ref_db, "status", "capture_status", default="CAPTURED")
+        target_status_raw = _get(target_db, "status", "capture_status", default="CAPTURED")
+        ref_status = str(getattr(ref_status_raw, "value", ref_status_raw)).upper()
+        target_status = str(getattr(target_status_raw, "value", target_status_raw)).upper()
+
+        unsupported_terms = ("NOT_SUPPORTED", "NOT_AVAILABLE", "FAILED", "CONFIGURATION_ERROR", "CAPTURE_ERROR")
+        if any(term in ref_status for term in unsupported_terms) or any(term in target_status for term in unsupported_terms):
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    field_path="database.status",
+                    reference_value=ref_status,
+                    target_value=target_status,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="db_capture_status",
+                    details={"message": f"Database capture status is not supported/captured (ref: {ref_status}, target: {target_status})."},
+                )
+            )
+            return
+
         # 1. Check delta_detected flags
         ref_delta = _get(ref_db, "delta_detected")
         target_delta = _get(target_db, "delta_detected")
@@ -346,13 +370,47 @@ class StateEvaluator:
                 )
             )
 
-        # 2. Check Phase 3 before/after row counts: table_row_counts_before, table_row_counts_after
+        # 2. Check Phase 3 before/after snapshots (snapshot_before, snapshot_after)
+        for snap_key in ("snapshot_before", "snapshot_after"):
+            ref_snap = _get(ref_db, snap_key)
+            target_snap = _get(target_db, snap_key)
+            if (ref_snap is None) != (target_snap is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"database.{snap_key}",
+                        reference_value=bool(ref_snap),
+                        target_value=bool(target_snap),
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="snapshot_presence",
+                        details={"message": f"{snap_key} present on one side but missing on the other."},
+                    )
+                )
+            elif ref_snap is not None and target_snap is not None and ref_snap != target_snap:
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                        field_path=f"database.{snap_key}",
+                        reference_value=ref_snap,
+                        target_value=target_snap,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="snapshot_hash",
+                    )
+                )
+
+        # 3. Check Phase 3 before/after row counts: table_row_counts_before, table_row_counts_after
         ref_counts_before = _get(ref_db, "table_row_counts_before", default={}) or {}
         target_counts_before = _get(target_db, "table_row_counts_before", default={}) or {}
         ref_counts_after = _get(ref_db, "table_row_counts_after", default={}) or {}
         target_counts_after = _get(target_db, "table_row_counts_after", default={}) or {}
 
-        # 3. Check configured_tables and multi-table dictionaries
+        # 4. Check configured_tables and multi-table dictionaries
         ref_cfg_tables = _get(ref_db, "configured_tables", default=[]) or []
         target_cfg_tables = _get(target_db, "configured_tables", default=[]) or []
         ref_affected = _get(ref_db, "affected_tables", "tables", default={}) or {}
@@ -376,7 +434,7 @@ class StateEvaluator:
 
         all_tables = all_tables - set(policy.ignored_tables)
 
-        # 4. Multi-table / Phase 3 canonical evaluation if tables are tracked
+        # 5. Multi-table / Phase 3 canonical evaluation if tables are tracked
         if all_tables:
             for tbl in sorted(all_tables):
                 # Check table presence
@@ -480,40 +538,7 @@ class StateEvaluator:
                             )
                         )
 
-            # Check snapshots if provided
-            ref_snap = _get(ref_db, "snapshot_after")
-            target_snap = _get(target_db, "snapshot_after")
-            if (ref_snap is None) != (target_snap is None):
-                differences.append(
-                    BehaviorDifference(
-                        dimension=BehaviorDimension.STATE,
-                        input_id=input_id,
-                        difference_type=DifferenceType.EVIDENCE_MISSING,
-                        field_path="database.snapshot_after",
-                        reference_value=bool(ref_snap),
-                        target_value=bool(target_snap),
-                        reference_evidence_id=ref_eid,
-                        target_evidence_id=target_eid,
-                        comparison_method="snapshot_presence",
-                        details={"message": "snapshot_after present on one side but missing on the other."},
-                    )
-                )
-            elif ref_snap is not None and target_snap is not None and ref_snap != target_snap:
-                differences.append(
-                    BehaviorDifference(
-                        dimension=BehaviorDimension.STATE,
-                        input_id=input_id,
-                        difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
-                        field_path="database.snapshot_after",
-                        reference_value=ref_snap,
-                        target_value=target_snap,
-                        reference_evidence_id=ref_eid,
-                        target_evidence_id=target_eid,
-                        comparison_method="snapshot_hash",
-                    )
-                )
-
-        # 5. Single-table payload comparison (table, operation, row_count, records)
+        # 6. Single-table payload comparison (table, operation, row_count, records)
         ref_table = _get(ref_db, "table")
         target_table = _get(target_db, "table")
         ref_op = _get(ref_db, "operation", "op", "action")
@@ -684,6 +709,30 @@ class StateEvaluator:
 
         _get = self._get
 
+        # 0. Check capture status (e.g. NOT_SUPPORTED, FAILED, UNAVAILABLE, CONFIGURATION_ERROR)
+        ref_status_raw = _get(ref_file, "status", "capture_status", default="CAPTURED")
+        target_status_raw = _get(target_file, "status", "capture_status", default="CAPTURED")
+        ref_status = str(getattr(ref_status_raw, "value", ref_status_raw)).upper()
+        target_status = str(getattr(target_status_raw, "value", target_status_raw)).upper()
+
+        unsupported_terms = ("NOT_SUPPORTED", "NOT_AVAILABLE", "FAILED", "CONFIGURATION_ERROR", "CAPTURE_ERROR")
+        if any(term in ref_status for term in unsupported_terms) or any(term in target_status for term in unsupported_terms):
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    field_path="filesystem.status",
+                    reference_value=ref_status,
+                    target_value=target_status,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="file_capture_status",
+                    details={"message": f"Filesystem capture status is not supported/captured (ref: {ref_status}, target: {target_status})."},
+                )
+            )
+            return
+
         # 1. Check delta_detected flags
         ref_delta = _get(ref_file, "delta_detected")
         target_delta = _get(target_file, "delta_detected")
@@ -763,23 +812,98 @@ class StateEvaluator:
                 r_size = _get(r_snap, "size_bytes", "size")
                 t_size = _get(t_snap, "size_bytes", "size")
 
-                if (r_exists is not None and t_exists is not None and r_exists != t_exists) or \
-                   (r_hash is not None and t_hash is not None and r_hash != t_hash) or \
-                   (r_size is not None and t_size is not None and r_size != t_size):
+                # Check existence equivalence
+                if (r_exists is not None) != (t_exists is not None):
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            field_path=f"filesystem.paths['{path}'].exists",
+                            reference_value=r_exists,
+                            target_value=t_exists,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="path_exists_presence",
+                        )
+                    )
+                elif r_exists != t_exists:
                     differences.append(
                         BehaviorDifference(
                             dimension=BehaviorDimension.STATE,
                             input_id=input_id,
                             difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
-                            field_path=f"filesystem.paths['{path}']",
-                            reference_value={"exists": r_exists, "sha256": r_hash, "size": r_size},
-                            target_value={"exists": t_exists, "sha256": t_hash, "size": t_size},
+                            field_path=f"filesystem.paths['{path}'].exists",
+                            reference_value=r_exists,
+                            target_value=t_exists,
                             reference_evidence_id=ref_eid,
                             target_evidence_id=target_eid,
-                            comparison_method="file_snapshot_delta",
-                            details={"path": path, "ref_hash": r_hash, "target_hash": t_hash},
+                            comparison_method="path_exists_mismatch",
                         )
                     )
+
+                # If file exists on both sides, check hash completeness & equivalence
+                if r_exists and t_exists:
+                    if (r_hash is None) != (t_hash is None):
+                        differences.append(
+                            BehaviorDifference(
+                                dimension=BehaviorDimension.STATE,
+                                input_id=input_id,
+                                difference_type=DifferenceType.EVIDENCE_MISSING,
+                                field_path=f"filesystem.paths['{path}'].sha256_hash",
+                                reference_value=r_hash,
+                                target_value=t_hash,
+                                reference_evidence_id=ref_eid,
+                                target_evidence_id=target_eid,
+                                comparison_method="path_hash_presence",
+                                details={"message": f"SHA-256 hash for path '{path}' present on one side but missing on the other."},
+                            )
+                        )
+                    elif r_hash is not None and t_hash is not None and r_hash != t_hash:
+                        differences.append(
+                            BehaviorDifference(
+                                dimension=BehaviorDimension.STATE,
+                                input_id=input_id,
+                                difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
+                                field_path=f"filesystem.paths['{path}'].sha256_hash",
+                                reference_value=r_hash,
+                                target_value=t_hash,
+                                reference_evidence_id=ref_eid,
+                                target_evidence_id=target_eid,
+                                comparison_method="file_snapshot_hash",
+                                details={"path": path, "ref_hash": r_hash, "target_hash": t_hash},
+                            )
+                        )
+
+                    # Check size completeness & equivalence
+                    if (r_size is None) != (t_size is None):
+                        differences.append(
+                            BehaviorDifference(
+                                dimension=BehaviorDimension.STATE,
+                                input_id=input_id,
+                                difference_type=DifferenceType.EVIDENCE_MISSING,
+                                field_path=f"filesystem.paths['{path}'].size_bytes",
+                                reference_value=r_size,
+                                target_value=t_size,
+                                reference_evidence_id=ref_eid,
+                                target_evidence_id=target_eid,
+                                comparison_method="path_size_presence",
+                            )
+                        )
+                    elif r_size is not None and t_size is not None and r_size != t_size:
+                        differences.append(
+                            BehaviorDifference(
+                                dimension=BehaviorDimension.STATE,
+                                input_id=input_id,
+                                difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
+                                field_path=f"filesystem.paths['{path}'].size_bytes",
+                                reference_value=r_size,
+                                target_value=t_size,
+                                reference_evidence_id=ref_eid,
+                                target_evidence_id=target_eid,
+                                comparison_method="file_snapshot_size",
+                            )
+                        )
 
         # 3. Check created_files, modified_files, deleted_files lists
         for field_name in ("created_files", "modified_files", "deleted_files"):

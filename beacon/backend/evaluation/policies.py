@@ -195,7 +195,10 @@ POLICY_REGISTRY: dict[str, ComparisonPolicy] = {
 def resolve_comparison_policy(
     policy_spec: Optional[Union[ComparisonPolicy, dict[str, Any], str]] = None
 ) -> ComparisonPolicy:
-    """Resolves policy from policy instance, dict, or named identifier, falling back to default."""
+    """Resolves policy from policy instance, dict, or named identifier.
+
+    Fails closed (raises ValueError) if policy is unknown or invalid.
+    """
     if policy_spec is None:
         return DEFAULT_COMPARISON_POLICY
 
@@ -205,16 +208,15 @@ def resolve_comparison_policy(
     if isinstance(policy_spec, str):
         if policy_spec in POLICY_REGISTRY:
             return POLICY_REGISTRY[policy_spec]
-        # Return default if unknown name
-        return DEFAULT_COMPARISON_POLICY
+        raise ValueError(
+            f"Unknown comparison policy: '{policy_spec}'. "
+            f"Available policies: {list(POLICY_REGISTRY.keys())}"
+        )
 
     if isinstance(policy_spec, dict):
-        try:
-            return ComparisonPolicy(**policy_spec)
-        except Exception:
-            return DEFAULT_COMPARISON_POLICY
+        return ComparisonPolicy(**policy_spec)
 
-    return DEFAULT_COMPARISON_POLICY
+    raise ValueError(f"Invalid policy specification type: {type(policy_spec)}")
 
 
 def get_builtin_policy(policy_id: str) -> Optional[ComparisonPolicy]:
