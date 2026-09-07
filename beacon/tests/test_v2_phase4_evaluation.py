@@ -1216,4 +1216,177 @@ class TestPhase4FinalBlockerRemediation:
         )
         assert res_relaxed.verdict == EvaluationVerdict.EQUIVALENT
 
+    # --- SECTION 74: DB ROW COUNT PARTIAL EVIDENCE ---
+    def test_regression_74_db_row_count_missing_on_target_is_inconclusive(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-reg-74-tgt-missing",
+            reference_db_or_records={"table": "customers", "operation": "UPDATE", "row_count": 1},
+            target_db_or_records={"table": "customers", "operation": "UPDATE"},  # row_count omitted
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_db_74",
+            target_evidence_id="tgt_db_74",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    def test_regression_74_db_row_count_missing_on_reference_is_inconclusive(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-reg-74-ref-missing",
+            reference_db_or_records={"table": "customers", "operation": "UPDATE"},
+            target_db_or_records={"table": "customers", "operation": "UPDATE", "row_count": 1},
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_db_74b",
+            target_evidence_id="tgt_db_74b",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    # --- SECTION 75: HTTP SIDE EFFECT DETAIL ---
+    def test_regression_75_http_side_effect_different_method_status(self, default_policy):
+        from execution.evidence_models import HttpEvidence
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-reg-75",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_http=HttpEvidence(calls=[{"method": "POST", "url": "/customer", "status": 201}]),
+            target_http=HttpEvidence(calls=[{"method": "GET", "url": "/customer", "status": 200}]),
+            policy=default_policy,
+            reference_evidence_id="ref_http_75",
+            target_evidence_id="tgt_http_75",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.HTTP_SIDE_EFFECT_MISMATCH for d in res.differences)
+
+    def test_regression_75_http_side_effect_missing_detail_is_inconclusive(self, default_policy):
+        from execution.evidence_models import HttpEvidence
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-reg-75-missing",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_http=HttpEvidence(calls=[{"method": "POST", "url": "/customer", "status": 201}]),
+            target_http=HttpEvidence(calls=[{"method": "POST"}]),  # url and status omitted
+            policy=default_policy,
+            reference_evidence_id="ref_http_75m",
+            target_evidence_id="tgt_http_75m",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    # --- SECTION 76: WORKFLOW SUBSEQUENCE AND EXACT ---
+    def test_regression_76_workflow_subsequence_and_exact(self):
+        evaluator = WorkflowEvaluator()
+        ref_tr = {"events": [{"name": "A"}, {"name": "B"}, {"name": "C"}]}
+        tgt_tr = {"events": [{"name": "A"}, {"name": "X"}, {"name": "B"}, {"name": "C"}]}
+
+        # Under exact mode -> DIFFERENT
+        exact_p = ComparisonPolicy(policy_id="exact_p")
+        res_exact = evaluator.evaluate(
+            input_id="in-reg-76",
+            reference_trace=ref_tr,
+            target_trace=tgt_tr,
+            policy=exact_p,
+            reference_evidence_id="ref_tr_76",
+            target_evidence_id="tgt_tr_76",
+        )
+        assert res_exact.verdict == EvaluationVerdict.DIFFERENT
+
+        # Under subsequence mode -> EQUIVALENT
+        from evaluation.policies import WorkflowComparisonPolicy
+        subseq_p = ComparisonPolicy(
+            policy_id="subseq_p",
+            workflow_policy=WorkflowComparisonPolicy(sequence_matching="subsequence"),
+        )
+        res_subseq = evaluator.evaluate(
+            input_id="in-reg-76",
+            reference_trace=ref_tr,
+            target_trace=tgt_tr,
+            policy=subseq_p,
+            reference_evidence_id="ref_tr_76",
+            target_evidence_id="tgt_tr_76",
+        )
+        assert res_subseq.verdict == EvaluationVerdict.EQUIVALENT
+
+    # --- SECTION 77: BOUNDARY ERROR DIVERGENCE VIA HTTP STATUS ---
+    def test_regression_77_boundary_http_status_derived_error_divergence(self, default_policy):
+        evaluator = BoundaryEvaluator()
+        # Reference HTTP 400 (error), Target HTTP 200 (success) without separate ErrorEvidence
+        res = evaluator.evaluate(
+            input_id="in-reg-77",
+            boundary_category="lower_bound",
+            reference_output={"status_code": 400, "error": "Invalid bound"},
+            target_output={"status_code": 200, "result": "OK"},
+            policy=default_policy,
+            reference_evidence_id="ref_bnd_77",
+            target_evidence_id="tgt_bnd_77",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.BOUNDARY_BEHAVIOR_MISMATCH for d in res.differences)
+
+    # --- SECTION 78: MISSING EXECUTION ACROSS ALL SELECTED DIMENSIONS ---
+    def test_regression_78_missing_execution_across_all_selected_dimensions(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        session_id = "sess_reg_78"
+        app_id = "app_reg"
+        r_out = OutputEvidencePayload(status_code=200, raw_output={"val": 10}, normalized_output={"val": 10})
+        # Reference execution exists, target execution completely absent
+        recs = [
+            EvidenceRecord(evidence_id="r78", session_id=session_id, input_id="in-78", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r_out.model_dump()),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_reg_78",
+            session_id=session_id,
+            application_id=app_id,
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c78", application_id=app_id, input_set_id="is78", input_set_hash="h78", records=recs),
+            records=recs,
+        )
+        selected_dims = [
+            BehaviorDimension.OUTPUT,
+            BehaviorDimension.ERROR,
+            BehaviorDimension.STATE,
+            BehaviorDimension.WORKFLOW,
+        ]
+        res = engine.evaluate_bundle(bundle, policy=default_policy, dimensions=selected_dims)
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert len(res.input_results) == 1
+        inp_res = res.input_results[0]
+        # Verify every selected dimension has an explicit result and is INCONCLUSIVE
+        for dim in selected_dims:
+            assert dim in inp_res.dimension_results
+            assert inp_res.dimension_results[dim].verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # --- SECTION 79: LEGITIMATE NULL PAYLOAD VS MISSING OUTPUT EVIDENCE ---
+    def test_regression_79_legitimate_null_vs_missing_output_evidence(self, default_policy):
+        evaluator = OutputEvaluator()
+        # Case A: Both outputs exist and both are JSON null -> EQUIVALENT
+        res_both_null = evaluator.evaluate(
+            input_id="in-reg-79-null",
+            reference_payload=None,
+            target_payload=None,
+            policy=default_policy,
+            reference_evidence_id="ref_null",
+            target_evidence_id="tgt_null",
+            reference_present=True,
+            target_present=True,
+        )
+        assert res_both_null.verdict == EvaluationVerdict.EQUIVALENT
+
+        # Case B: Reference exists with null payload, Target output evidence missing -> INCONCLUSIVE
+        res_tgt_missing = evaluator.evaluate(
+            input_id="in-reg-79-missing",
+            reference_payload=None,
+            target_payload=None,
+            policy=default_policy,
+            reference_evidence_id="ref_null",
+            target_evidence_id=None,
+            reference_present=True,
+            target_present=False,
+        )
+        assert res_tgt_missing.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res_tgt_missing.differences)
+
+
 

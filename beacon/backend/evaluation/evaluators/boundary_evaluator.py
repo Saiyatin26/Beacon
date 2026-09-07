@@ -63,11 +63,33 @@ class BoundaryEvaluator:
                 details={"message": "Input is not classified with boundary metadata; boundary evaluation skipped."},
             )
 
-        # Infer error presence from objects when not explicitly provided
+        # Infer error presence from error objects, HTTP status codes, exit codes when not explicitly provided
+        def _detect_error(err: Any, out: Any) -> bool:
+            if err is not None:
+                return True
+            if out is not None:
+                def _g(obj: Any, *keys: str) -> Any:
+                    if isinstance(obj, dict):
+                        for k in keys:
+                            if k in obj:
+                                return obj[k]
+                        return None
+                    for k in keys:
+                        if hasattr(obj, k):
+                            return getattr(obj, k)
+                    return None
+                exit_c = _g(out, "exit_code")
+                if exit_c is not None and exit_c != 0:
+                    return True
+                http_st = _g(out, "status_code", "http_status", "status")
+                if http_st is not None and isinstance(http_st, int) and http_st >= 400:
+                    return True
+            return False
+
         if reference_has_error is None:
-            reference_has_error = reference_error is not None
+            reference_has_error = _detect_error(reference_error, reference_output)
         if target_has_error is None:
-            target_has_error = target_error is not None
+            target_has_error = _detect_error(target_error, target_output)
 
         evidence_refs = [eid for eid in (reference_evidence_id, target_evidence_id) if eid]
 

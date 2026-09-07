@@ -31,6 +31,8 @@ class OutputEvaluator:
         policy: ComparisonPolicy,
         reference_evidence_id: Optional[str] = None,
         target_evidence_id: Optional[str] = None,
+        reference_present: Optional[bool] = None,
+        target_present: Optional[bool] = None,
     ) -> DimensionResult:
         """Compares Reference and Target outputs against the specified OutputComparisonPolicy.
 
@@ -63,8 +65,12 @@ class OutputEvaluator:
             ignored_fields=effective_ignored,
         )
 
-        # Case 1: Both outputs absent
-        if reference_payload is None and target_payload is None:
+        # Disambiguate evidence record presence from payload value
+        is_ref_present = reference_present if reference_present is not None else (reference_payload is not None)
+        is_tgt_present = target_present if target_present is not None else (target_payload is not None)
+
+        # Case 1: Both output records absent
+        if not is_ref_present and not is_tgt_present:
             return DimensionResult(
                 dimension=BehaviorDimension.OUTPUT,
                 status=EvaluationVerdict.NOT_APPLICABLE,
@@ -73,36 +79,50 @@ class OutputEvaluator:
                 details={"message": "No output payload provided for either Reference or Target."},
             )
 
-        # Case 2: One side absent
-        if reference_payload is None or target_payload is None:
+        # Case 2: One output record absent
+        if not is_ref_present or not is_tgt_present:
             diff = BehaviorDifference(
                 dimension=BehaviorDimension.OUTPUT,
                 input_id=input_id,
                 difference_type=DifferenceType.EVIDENCE_MISSING,
                 reference_evidence_id=reference_evidence_id,
                 target_evidence_id=target_evidence_id,
-                reference_value=reference_payload,
-                target_value=target_payload,
+                reference_value=reference_payload if is_ref_present else None,
+                target_value=target_payload if is_tgt_present else None,
                 comparison_method="presence_check",
                 details={
                     "message": "Output payload present on one side but absent on the other.",
-                    "reference_present": reference_payload is not None,
-                    "target_present": target_payload is not None,
+                    "reference_present": is_ref_present,
+                    "target_present": is_tgt_present,
                 },
             )
             return DimensionResult(
                 dimension=BehaviorDimension.OUTPUT,
                 status=EvaluationVerdict.INCONCLUSIVE,
                 verdict=EvaluationVerdict.INCONCLUSIVE,
-                reference_value=reference_payload,
-                target_value=target_payload,
+                reference_value=reference_payload if is_ref_present else None,
+                target_value=target_payload if is_tgt_present else None,
                 comparison_method="presence_check",
                 difference_type=DifferenceType.EVIDENCE_MISSING,
                 differences=[diff],
                 evidence_references=[eid for eid in (reference_evidence_id, target_evidence_id) if eid],
             )
 
-        # Case 3: Both outputs present -- perform deep structural comparison
+        # Case 3: Both output records present -- handle both null payloads or perform deep comparison
+        evidence_refs = [eid for eid in (reference_evidence_id, target_evidence_id) if eid]
+
+        if reference_payload is None and target_payload is None:
+            return DimensionResult(
+                dimension=BehaviorDimension.OUTPUT,
+                status=EvaluationVerdict.EQUIVALENT,
+                verdict=EvaluationVerdict.EQUIVALENT,
+                reference_value=None,
+                target_value=None,
+                comparison_method="null_equivalence",
+                evidence_references=evidence_refs,
+                details={"message": "Both outputs exist and are explicitly null."},
+            )
+
         differences: list[BehaviorDifference] = []
         self._compare_nodes(
             path="",

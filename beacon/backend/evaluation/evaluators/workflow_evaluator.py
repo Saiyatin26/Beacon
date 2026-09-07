@@ -107,6 +107,44 @@ class WorkflowEvaluator:
                         },
                     )
                 )
+        elif wf_policy.sequence_matching == "subsequence":
+            # Check if reference event sequence is preserved in order within target
+            it = iter(target_events)
+            is_subseq = all(item in it for item in ref_events)
+            if not is_subseq:
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.WORKFLOW,
+                        input_id=input_id,
+                        difference_type=DifferenceType.WORKFLOW_SEQUENCE_MISMATCH,
+                        field_path="trace.events",
+                        reference_value=ref_events,
+                        target_value=target_events,
+                        reference_evidence_id=reference_evidence_id,
+                        target_evidence_id=target_evidence_id,
+                        comparison_method="subsequence",
+                        details={
+                            "message": "Reference event sequence is not a subsequence of Target events.",
+                            "reference_events": ref_events,
+                            "target_events": target_events,
+                        },
+                    )
+                )
+        else:
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.WORKFLOW,
+                    input_id=input_id,
+                    difference_type=DifferenceType.WORKFLOW_SEQUENCE_MISMATCH,
+                    field_path="trace.events",
+                    reference_value=ref_events,
+                    target_value=target_events,
+                    reference_evidence_id=reference_evidence_id,
+                    target_evidence_id=target_evidence_id,
+                    comparison_method=f"unknown_mode_{wf_policy.sequence_matching}",
+                    details={"message": f"Unsupported sequence matching mode: {wf_policy.sequence_matching}"},
+                )
+            )
 
         if not differences:
             return DimensionResult(

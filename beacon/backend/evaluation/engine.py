@@ -138,58 +138,93 @@ class BehavioralEvaluationEngine:
         ref_eid = item.reference_records[0].evidence_id if item.reference_records else None
         target_eid = item.target_records[0].evidence_id if item.target_records else None
 
-        # When target or reference is completely missing -> INCONCLUSIVE
-        if item.has_missing_target:
-            diff = BehaviorDifference(
-                dimension=BehaviorDimension.OUTPUT,
-                input_id=item.input_id,
-                difference_type=DifferenceType.EVIDENCE_MISSING,
-                reference_evidence_id=ref_eid,
-                target_evidence_id=None,
-                comparison_method="execution_presence",
-                details={"message": f"Input '{item.input_id}' was executed by Reference but omitted by Target."},
-            )
-            input_diffs.append(diff)
-            dim_results[BehaviorDimension.OUTPUT] = DimensionResult(
-                dimension=BehaviorDimension.OUTPUT,
-                status=EvaluationVerdict.INCONCLUSIVE,
-                verdict=EvaluationVerdict.INCONCLUSIVE,
-                comparison_method="execution_presence",
-                difference_type=DifferenceType.EVIDENCE_MISSING,
-                differences=[diff],
-                evidence_references=[ref_eid] if ref_eid else [],
-            )
-            return InputEvaluationResult(
-                input_id=item.input_id,
-                verdict=EvaluationVerdict.INCONCLUSIVE,
-                status=EvaluationVerdict.INCONCLUSIVE,
-                dimension_results=dim_results,
-                differences=input_diffs,
-                boundary_category=item.boundary_category,
-                reference_evidence_ids=[r.evidence_id for r in item.reference_records],
-                target_evidence_ids=[r.evidence_id for r in item.target_records],
-            )
+        # When target or reference is completely missing -> populate all selected dimensions explicitly
+        if item.has_missing_target or item.is_extra_target:
+            missing_side = "Target" if item.has_missing_target else "Reference"
+            present_eid = ref_eid if item.has_missing_target else target_eid
+            ev_refs = [present_eid] if present_eid else []
 
-        if item.is_extra_target:
-            diff = BehaviorDifference(
-                dimension=BehaviorDimension.OUTPUT,
-                input_id=item.input_id,
-                difference_type=DifferenceType.EVIDENCE_MISSING,
-                reference_evidence_id=None,
-                target_evidence_id=target_eid,
-                comparison_method="execution_presence",
-                details={"message": f"Input '{item.input_id}' was executed by Target but absent from Reference."},
-            )
-            input_diffs.append(diff)
-            dim_results[BehaviorDimension.OUTPUT] = DimensionResult(
-                dimension=BehaviorDimension.OUTPUT,
-                status=EvaluationVerdict.INCONCLUSIVE,
-                verdict=EvaluationVerdict.INCONCLUSIVE,
-                comparison_method="execution_presence",
-                difference_type=DifferenceType.EVIDENCE_MISSING,
-                differences=[diff],
-                evidence_references=[target_eid] if target_eid else [],
-            )
+            for dim in selected_dimensions:
+                if dim == BehaviorDimension.BOUNDARY:
+                    if item.boundary_category and policy.boundary_policy.enabled:
+                        diff = BehaviorDifference(
+                            dimension=BehaviorDimension.BOUNDARY,
+                            input_id=item.input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="execution_presence",
+                            details={"message": f"Boundary input '{item.input_id}' missing {missing_side} execution."},
+                        )
+                        input_diffs.append(diff)
+                        dim_results[BehaviorDimension.BOUNDARY] = DimensionResult(
+                            dimension=BehaviorDimension.BOUNDARY,
+                            status=EvaluationVerdict.INCONCLUSIVE,
+                            verdict=EvaluationVerdict.INCONCLUSIVE,
+                            comparison_method="execution_presence",
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            differences=[diff],
+                            evidence_references=ev_refs,
+                        )
+                    else:
+                        dim_results[BehaviorDimension.BOUNDARY] = DimensionResult(
+                            dimension=BehaviorDimension.BOUNDARY,
+                            status=EvaluationVerdict.NOT_APPLICABLE,
+                            verdict=EvaluationVerdict.NOT_APPLICABLE,
+                            comparison_method="metadata_presence",
+                            details={"message": "No boundary metadata or boundary evaluation disabled."},
+                        )
+                elif dim == BehaviorDimension.NONFUNCTIONAL:
+                    nf_active = policy.nonfunctional_policy.enabled or (policy.max_latency_ratio > 0)
+                    if nf_active:
+                        diff = BehaviorDifference(
+                            dimension=BehaviorDimension.NONFUNCTIONAL,
+                            input_id=item.input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="execution_presence",
+                            details={"message": f"Input '{item.input_id}' missing {missing_side} execution metrics."},
+                        )
+                        input_diffs.append(diff)
+                        dim_results[BehaviorDimension.NONFUNCTIONAL] = DimensionResult(
+                            dimension=BehaviorDimension.NONFUNCTIONAL,
+                            status=EvaluationVerdict.INCONCLUSIVE,
+                            verdict=EvaluationVerdict.INCONCLUSIVE,
+                            comparison_method="execution_presence",
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            differences=[diff],
+                            evidence_references=ev_refs,
+                        )
+                    else:
+                        dim_results[BehaviorDimension.NONFUNCTIONAL] = DimensionResult(
+                            dimension=BehaviorDimension.NONFUNCTIONAL,
+                            status=EvaluationVerdict.NOT_APPLICABLE,
+                            verdict=EvaluationVerdict.NOT_APPLICABLE,
+                            comparison_method="policy_disabled",
+                            details={"message": "Nonfunctional evaluation disabled."},
+                        )
+                else:
+                    diff = BehaviorDifference(
+                        dimension=dim,
+                        input_id=item.input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="execution_presence",
+                        details={"message": f"Input '{item.input_id}' missing {missing_side} execution evidence for {dim.value}."},
+                    )
+                    input_diffs.append(diff)
+                    dim_results[dim] = DimensionResult(
+                        dimension=dim,
+                        status=EvaluationVerdict.INCONCLUSIVE,
+                        verdict=EvaluationVerdict.INCONCLUSIVE,
+                        comparison_method="execution_presence",
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        differences=[diff],
+                        evidence_references=ev_refs,
+                    )
+
             return InputEvaluationResult(
                 input_id=item.input_id,
                 verdict=EvaluationVerdict.INCONCLUSIVE,
@@ -223,6 +258,8 @@ class BehavioralEvaluationEngine:
                 policy=policy,
                 reference_evidence_id=ref_eid,
                 target_evidence_id=target_eid,
+                reference_present=item.reference_output is not None,
+                target_present=item.target_output is not None,
             )
             dim_results[BehaviorDimension.OUTPUT] = res_out
             input_diffs.extend(res_out.differences)

@@ -139,15 +139,20 @@ class FileStateSnapshot(BaseModel):
 
 class FileEvidence(BaseModel):
     """Filesystem state capture across configured safe paths."""
+    model_config = {"extra": "allow"}
     configured_paths: list[str] = Field(default_factory=list)
     before_state: dict[str, FileStateSnapshot] = Field(default_factory=dict)
     after_state: dict[str, FileStateSnapshot] = Field(default_factory=dict)
     delta_detected: bool = False
     status: EvidenceCaptureStatus = EvidenceCaptureStatus.CAPTURED
+    created_files: Optional[list[str]] = None
+    modified_files: Optional[list[str]] = None
+    deleted_files: Optional[list[str]] = None
 
 
 class DatabaseEvidence(BaseModel):
     """Database state snapshot capture before and after execution."""
+    model_config = {"extra": "allow"}
     provider_name: str = "none"
     connection_target: Optional[str] = None
     configured_tables: list[str] = Field(default_factory=list)
@@ -158,12 +163,17 @@ class DatabaseEvidence(BaseModel):
     delta_detected: bool = False
     status: EvidenceCaptureStatus = EvidenceCaptureStatus.NOT_SUPPORTED
     message: str = "Database state capture not configured or not supported."
+    table: Optional[str] = None
+    operation: Optional[str] = None
+    row_count: Optional[int] = None
+    records: Optional[Any] = None
 
 
 class HttpEvidence(BaseModel):
     """HTTP transaction evidence with secret-redacted headers and timing."""
-    method: str = "GET"
-    url_or_endpoint: str = ""
+    model_config = {"extra": "allow"}
+    method: Optional[str] = None
+    url_or_endpoint: Optional[str] = None
     request_headers: dict[str, str] = Field(default_factory=dict)
     request_body: Optional[Any] = None
     response_status: Optional[int] = None
@@ -171,6 +181,7 @@ class HttpEvidence(BaseModel):
     response_body: Optional[Any] = None
     latency_ms: float = 0.0
     correlation_id: Optional[str] = None
+    calls: Optional[list[Any]] = None
 
 
 class MetadataEvidence(BaseModel):

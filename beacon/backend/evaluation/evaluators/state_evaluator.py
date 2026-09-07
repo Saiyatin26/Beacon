@@ -303,6 +303,23 @@ class StateEvaluator:
 
         if ref_table is not None or target_table is not None:
             # Single-table comparison mode
+            if (ref_table is None) != (target_table is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path="database.table",
+                        reference_value=ref_table,
+                        target_value=target_table,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="table_name",
+                        details={"message": "Table name present on one side but missing on the other."},
+                    )
+                )
+                return
+
             if ref_table != target_table and ref_table not in policy.ignored_tables and target_table not in policy.ignored_tables:
                 differences.append(
                     BehaviorDifference(
@@ -319,7 +336,23 @@ class StateEvaluator:
                 )
                 return
 
-            if ref_op is not None and target_op is not None:
+            # Check operation field completeness & equivalence
+            if (ref_op is None) != (target_op is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path="database.operation",
+                        reference_value=ref_op,
+                        target_value=target_op,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="db_operation",
+                        details={"message": "Database operation field present on one side but missing on the other."},
+                    )
+                )
+            elif ref_op is not None and target_op is not None:
                 if str(ref_op).upper() != str(target_op).upper():
                     differences.append(
                         BehaviorDifference(
@@ -336,10 +369,26 @@ class StateEvaluator:
                         )
                     )
 
+            # Check row count field completeness & equivalence
             ref_row_count = _get(ref_db, "row_count", "rows_affected", "rows")
             target_row_count = _get(target_db, "row_count", "rows_affected", "rows")
 
-            if ref_row_count is not None and target_row_count is not None:
+            if (ref_row_count is None) != (target_row_count is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"database.tables.{ref_table or target_table}.row_count",
+                        reference_value=ref_row_count,
+                        target_value=target_row_count,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="table_row_count",
+                        details={"message": "Database row count field present on one side but missing on the other."},
+                    )
+                )
+            elif ref_row_count is not None and target_row_count is not None:
                 if ref_row_count != target_row_count:
                     differences.append(
                         BehaviorDifference(
@@ -355,9 +404,26 @@ class StateEvaluator:
                         )
                     )
 
+            # Check records field completeness & equivalence
             ref_data = _get(ref_db, "records", "data", "rows_data")
             target_data = _get(target_db, "records", "data", "rows_data")
-            if ref_data is not None and target_data is not None:
+
+            if (ref_data is None) != (target_data is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"database.tables.{ref_table or target_table}.records",
+                        reference_value=ref_data,
+                        target_value=target_data,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="db_records",
+                        details={"message": "Database records field present on one side but missing on the other."},
+                    )
+                )
+            elif ref_data is not None and target_data is not None:
                 if ref_data != target_data:
                     differences.append(
                         BehaviorDifference(
@@ -407,26 +473,41 @@ class StateEvaluator:
                 )
             )
 
-        # Check row count deltas if available
+        # Check multi-table row count completeness and deltas
         ref_counts = _get(ref_db, "row_counts", default={}) or {}
         target_counts = _get(target_db, "row_counts", default={}) or {}
         for tbl in ref_t_set & target_t_set:
-            if tbl in ref_counts and tbl in target_counts:
-                if ref_counts[tbl] != target_counts[tbl]:
-                    differences.append(
-                        BehaviorDifference(
-                            dimension=BehaviorDimension.STATE,
-                            input_id=input_id,
-                            difference_type=DifferenceType.DATABASE_ROW_COUNT_MISMATCH,
-                            field_path=f"database.tables.{tbl}.row_count",
-                            reference_value=ref_counts[tbl],
-                            target_value=target_counts[tbl],
-                            reference_evidence_id=ref_eid,
-                            target_evidence_id=target_eid,
-                            comparison_method="table_row_count",
-                        )
+            has_ref_cnt = tbl in ref_counts
+            has_tgt_cnt = tbl in target_counts
+            if has_ref_cnt != has_tgt_cnt:
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"database.tables.{tbl}.row_count",
+                        reference_value=ref_counts.get(tbl),
+                        target_value=target_counts.get(tbl),
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="table_row_count",
+                        details={"message": f"Row count for table '{tbl}' present on one side but missing on the other."},
                     )
-
+                )
+            elif has_ref_cnt and has_tgt_cnt and ref_counts[tbl] != target_counts[tbl]:
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.DATABASE_ROW_COUNT_MISMATCH,
+                        field_path=f"database.tables.{tbl}.row_count",
+                        reference_value=ref_counts[tbl],
+                        target_value=target_counts[tbl],
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="table_row_count",
+                    )
+                )
 
     def _compare_file_state(
         self,
@@ -453,22 +534,48 @@ class StateEvaluator:
             )
             return
 
-        ref_created = set(getattr(ref_file, "created_files", []) or [])
-        target_created = set(getattr(target_file, "created_files", []) or [])
-        if ref_created != target_created:
-            differences.append(
-                BehaviorDifference(
-                    dimension=BehaviorDimension.STATE,
-                    input_id=input_id,
-                    difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
-                    field_path="filesystem.created_files",
-                    reference_value=sorted(list(ref_created)),
-                    target_value=sorted(list(target_created)),
-                    reference_evidence_id=ref_eid,
-                    target_evidence_id=target_eid,
-                    comparison_method="created_files_set",
-                )
-            )
+        def _get_file_list(obj: Any, key: str) -> Optional[list]:
+            if isinstance(obj, dict):
+                return obj.get(key)
+            return getattr(obj, key, None)
+
+        for field_name in ("created_files", "modified_files", "deleted_files"):
+            ref_list = _get_file_list(ref_file, field_name)
+            target_list = _get_file_list(target_file, field_name)
+
+            if (ref_list is not None) or (target_list is not None):
+                if (ref_list is None) != (target_list is None):
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            field_path=f"filesystem.{field_name}",
+                            reference_value=ref_list,
+                            target_value=target_list,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method=f"{field_name}_presence",
+                            details={"message": f"Filesystem field '{field_name}' present on one side but missing on the other."},
+                        )
+                    )
+                else:
+                    ref_set = set(ref_list or [])
+                    target_set = set(target_list or [])
+                    if ref_set != target_set:
+                        differences.append(
+                            BehaviorDifference(
+                                dimension=BehaviorDimension.STATE,
+                                input_id=input_id,
+                                difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
+                                field_path=f"filesystem.{field_name}",
+                                reference_value=sorted(list(ref_set)),
+                                target_value=sorted(list(target_set)),
+                                reference_evidence_id=ref_eid,
+                                target_evidence_id=target_eid,
+                                comparison_method=f"{field_name}_set",
+                            )
+                        )
 
     def _compare_http_state(
         self,
@@ -495,8 +602,33 @@ class StateEvaluator:
             )
             return
 
-        ref_calls = getattr(ref_http, "calls", []) or getattr(ref_http, "endpoints", []) or []
-        target_calls = getattr(target_http, "calls", []) or getattr(target_http, "endpoints", []) or []
+        def _get_calls(obj: Any) -> list:
+            if isinstance(obj, list):
+                return obj
+            if isinstance(obj, dict):
+                if "calls" in obj and obj["calls"] is not None:
+                    return obj["calls"]
+                if "endpoints" in obj and obj["endpoints"] is not None:
+                    return obj["endpoints"]
+                return [obj]
+            if hasattr(obj, "calls") and getattr(obj, "calls") is not None:
+                return getattr(obj, "calls")
+            if hasattr(obj, "endpoints") and getattr(obj, "endpoints") is not None:
+                return getattr(obj, "endpoints")
+            if hasattr(obj, "__dict__"):
+                d = getattr(obj, "__dict__", {})
+                if "calls" in d and d["calls"] is not None:
+                    return d["calls"]
+                if "endpoints" in d and d["endpoints"] is not None:
+                    return d["endpoints"]
+            if hasattr(obj, "model_extra") and getattr(obj, "model_extra"):
+                extra = getattr(obj, "model_extra")
+                if "calls" in extra:
+                    return extra["calls"]
+            return [obj]
+
+        ref_calls = _get_calls(ref_http)
+        target_calls = _get_calls(target_http)
 
         if len(ref_calls) != len(target_calls):
             differences.append(
@@ -512,6 +644,121 @@ class StateEvaluator:
                     comparison_method="http_call_count",
                 )
             )
+            return
+
+        # Compare detailed HTTP call side-effects (method, url/endpoint, status, payload)
+        for idx, (rc, tc) in enumerate(zip(ref_calls, target_calls)):
+            def _cget(call_obj: Any, *keys: str) -> Any:
+                if isinstance(call_obj, dict):
+                    for k in keys:
+                        if k in call_obj and call_obj[k] is not None:
+                            return call_obj[k]
+                    return None
+                for k in keys:
+                    if hasattr(call_obj, k):
+                        val = getattr(call_obj, k)
+                        if val is not None:
+                            return val
+                if hasattr(call_obj, "__dict__"):
+                    d = getattr(call_obj, "__dict__", {})
+                    for k in keys:
+                        if k in d and d[k] is not None:
+                            return d[k]
+                return None
+
+            r_method = _cget(rc, "method")
+            t_method = _cget(tc, "method")
+            r_url = _cget(rc, "url_or_endpoint", "url", "endpoint", "path")
+            t_url = _cget(tc, "url_or_endpoint", "url", "endpoint", "path")
+            r_status = _cget(rc, "response_status", "status", "status_code", "http_status")
+            t_status = _cget(tc, "response_status", "status", "status_code", "http_status")
+
+            if (r_method is None) != (t_method is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"http.calls[{idx}].method",
+                        reference_value=r_method,
+                        target_value=t_method,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="http_call_method",
+                    )
+                )
+            elif r_method is not None and t_method is not None and str(r_method).upper() != str(t_method).upper():
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.HTTP_SIDE_EFFECT_MISMATCH,
+                        field_path=f"http.calls[{idx}].method",
+                        reference_value=r_method,
+                        target_value=t_method,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="http_call_method",
+                    )
+                )
+
+            if (r_url is None) != (t_url is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"http.calls[{idx}].url",
+                        reference_value=r_url,
+                        target_value=t_url,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="http_call_url",
+                    )
+                )
+            elif r_url is not None and t_url is not None and str(r_url) != str(t_url):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.HTTP_SIDE_EFFECT_MISMATCH,
+                        field_path=f"http.calls[{idx}].url",
+                        reference_value=r_url,
+                        target_value=t_url,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="http_call_url",
+                    )
+                )
+
+            if (r_status is None) != (t_status is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"http.calls[{idx}].status",
+                        reference_value=r_status,
+                        target_value=t_status,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="http_call_status",
+                    )
+                )
+            elif r_status is not None and t_status is not None and r_status != t_status:
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.HTTP_SIDE_EFFECT_MISMATCH,
+                        field_path=f"http.calls[{idx}].status",
+                        reference_value=r_status,
+                        target_value=t_status,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="http_call_status",
+                    )
+                )
 
 
 state_evaluator = StateEvaluator()
