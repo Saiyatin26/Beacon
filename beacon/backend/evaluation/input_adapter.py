@@ -28,11 +28,36 @@ from execution.evidence_models import (
 logger = logging.getLogger("beacon.evaluation.input_adapter")
 
 
+class AdaptationFailure(BaseModel):
+    """Preserves identity and failure context for evidence records that failed typed adaptation."""
+    evidence_id: Optional[str] = None
+    input_id: str
+    role: str
+    evidence_type: str
+    capture_status: Optional[str] = None
+    reason: str
+
+
+def normalize_role(role: Any) -> Optional[str]:
+    """Normalizes role into 'reference', 'target', or None if invalid/unknown."""
+    if role is None:
+        return None
+    r_str = str(getattr(role, "value", role)).strip().lower()
+    if r_str in ("reference", "legacy", "ref", "adapterrole.reference"):
+        return "reference"
+    if r_str in ("target", "modern", "tgt", "adapterrole.target"):
+        return "target"
+    return None
+
+
 class CorrelatedInputItem(BaseModel):
     """Holds correlated Reference and Target evidence records for a specific canonical input_id."""
     input_id: str
     reference_records: list[Any] = Field(default_factory=list)
     target_records: list[Any] = Field(default_factory=list)
+    invalid_records: list[Any] = Field(default_factory=list)
+    adaptation_failures: list[AdaptationFailure] = Field(default_factory=list)
+    invalid_role_records: list[str] = Field(default_factory=list)
 
     reference_output: Optional[OutputEvidence] = None
     target_output: Optional[OutputEvidence] = None
@@ -113,37 +138,53 @@ class EvaluationInputAdapter:
                         logger.error(rec_err)
                         issues.append(rec_err)
 
-        # 2. Segregate records by input_id and role
-        input_groups: dict[str, dict[str, list[EvidenceRecord]]] = {}
+        # 2. Segregate records by input_id and role (fail-closed on invalid role)
+        input_groups: dict[str, dict[str, list[Any]]] = {}
 
         for rec in bundle.records:
-            inp_id = rec.input_id or "global"
+            inp_id = rec.input_id or "unspecified_input"
             if inp_id not in input_groups:
-                input_groups[inp_id] = {"reference": [], "target": []}
+                input_groups[inp_id] = {"reference": [], "target": [], "invalid": []}
 
-            role_norm = "reference" if rec.role in ("reference", "legacy") else "target"
-            input_groups[inp_id][role_norm].append(rec)
+            role_norm = normalize_role(getattr(rec, "role", None))
+            if role_norm is None:
+                err_msg = (
+                    f"INVALID_ROLE: Record '{getattr(rec, 'evidence_id', 'unknown')}' "
+                    f"has invalid or unsupported role '{getattr(rec, 'role', None)}' (input: {inp_id})"
+                )
+                logger.error(err_msg)
+                issues.append(err_msg)
+                input_groups[inp_id]["invalid"].append(rec)
+            else:
+                input_groups[inp_id][role_norm].append(rec)
 
         correlated_items: list[CorrelatedInputItem] = []
 
         for inp_id, roles in input_groups.items():
-            # Skip global/session-level unassociated items from per-input correlation
-            if inp_id == "global":
-                continue
-
             ref_recs = roles["reference"]
             target_recs = roles["target"]
+            invalid_recs = roles["invalid"]
 
             item = CorrelatedInputItem(
                 input_id=inp_id,
                 reference_records=ref_recs,
                 target_records=target_recs,
+                invalid_records=invalid_recs,
             )
+
+            # Check if any record in this input has an invalid role
+            if invalid_recs:
+                item.integrity_valid = False
+                for inv_rec in invalid_recs:
+                    eid = getattr(inv_rec, "evidence_id", "unknown")
+                    item.invalid_role_records.append(eid)
+                item.integrity_error = f"Invalid role records detected: {item.invalid_role_records}"
 
             # Check if any record in this input has an integrity failure reported in issues
             if any(f"(input: {inp_id}" in issue for issue in issues):
                 item.integrity_valid = False
-                item.integrity_error = "Record tamper detected for this input"
+                if not item.integrity_error:
+                    item.integrity_error = "Record tamper detected for this input"
 
             # Check matching status
             if ref_recs and not target_recs:
@@ -161,7 +202,7 @@ class EvaluationInputAdapter:
                 self._populate_typed_evidence(item, rec, is_reference=False)
 
             # Detect boundary category from explicit provenance or metadata only
-            for rec in ref_recs + target_recs:
+            for rec in ref_recs + target_recs + invalid_recs:
                 category = (
                     rec.metadata.get("boundary_category")
                     or rec.provenance.get("boundary_category")
@@ -180,7 +221,7 @@ class EvaluationInputAdapter:
     def _populate_typed_evidence(
         self, item: CorrelatedInputItem, rec: Any, is_reference: bool
     ) -> None:
-        """Parses record payload into strongly typed evidence models where available, preserving capture_status."""
+        """Parses record payload into strongly typed evidence models where available, preserving capture_status and tracking adaptation failures."""
         etype = rec.evidence_type
         payload = dict(rec.payload) if rec.payload else {}
 
@@ -265,7 +306,20 @@ class EvaluationInputAdapter:
                     item.target_trace = tr
                     item.target_trace_status = status_str
         except Exception as exc:
-            logger.debug(f"Could not parse typed payload for {etype}: {exc}")
+            reason = f"Malformed {etype} payload: {exc}"
+            logger.warning(
+                f"Adaptation failure for record '{getattr(rec, 'evidence_id', 'unknown')}' "
+                f"(input: {item.input_id}, role: {'reference' if is_reference else 'target'}): {reason}"
+            )
+            failure = AdaptationFailure(
+                evidence_id=getattr(rec, "evidence_id", None),
+                input_id=item.input_id,
+                role="reference" if is_reference else "target",
+                evidence_type=str(getattr(etype, "value", etype)),
+                capture_status=status_str,
+                reason=reason,
+            )
+            item.adaptation_failures.append(failure)
 
 
 evaluation_input_adapter = EvaluationInputAdapter()

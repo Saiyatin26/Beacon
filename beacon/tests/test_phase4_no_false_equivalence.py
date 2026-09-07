@@ -687,3 +687,356 @@ class TestPhase4NoFalseEquivalence:
         assert res.verdict == EvaluationVerdict.ERROR
         assert res.metadata["integrity_issues_count"] > 0
 
+    # 10. CRITICAL CENTRAL REGRESSION: MALFORMED STATE WITH VALID EQUAL OUTPUT
+    def test_e2e_central_regression_malformed_state_with_valid_output(self, policy):
+        """Sections 10 & 32: Ref & Target have equal valid OUTPUT but malformed STATE.
+        Expected: OUTPUT -> EQUIVALENT, STATE -> INCONCLUSIVE, OVERALL -> INCONCLUSIVE.
+        Must NEVER be: STATE -> NOT_APPLICABLE, OVERALL -> EQUIVALENT.
+        """
+        session_id = "sess_central_reg"
+        app_id = "app_central_1"
+        rec_r_out = EvidenceRecord(
+            evidence_id="r_out",
+            session_id=session_id,
+            input_id="inp_01",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"result": "success"}, "normalized_output": {"result": "success"}},
+        )
+        rec_t_out = EvidenceRecord(
+            evidence_id="t_out",
+            session_id=session_id,
+            input_id="inp_01",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"result": "success"}, "normalized_output": {"result": "success"}},
+        )
+        # Malformed STATE: table_row_counts_before should be a dict, passing a string/invalid schema
+        rec_r_state = EvidenceRecord(
+            evidence_id="r_state",
+            session_id=session_id,
+            input_id="inp_01",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"table_row_counts_before": "NOT_A_DICT_INVALID_PAYLOAD"},
+        )
+        rec_t_state = EvidenceRecord(
+            evidence_id="t_state",
+            session_id=session_id,
+            input_id="inp_01",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"table_row_counts_before": "NOT_A_DICT_INVALID_PAYLOAD"},
+        )
+        recs = [rec_r_out, rec_t_out, rec_r_state, rec_t_state]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_central",
+            session_id=session_id,
+            correlation_id="c_central",
+            application_id=app_id,
+            input_set_id="is_central",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_central", application_id=app_id, input_set_id="is_central", input_set_hash="h_central", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        dims = [BehaviorDimension.OUTPUT, BehaviorDimension.STATE]
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=dims)
+
+        inp_res = res.input_results[0]
+        # Dimension OUTPUT must be EQUIVALENT
+        assert inp_res.dimension_results[BehaviorDimension.OUTPUT].verdict == EvaluationVerdict.EQUIVALENT
+        # Dimension STATE must be INCONCLUSIVE (NOT NOT_APPLICABLE and NOT EQUIVALENT)
+        assert inp_res.dimension_results[BehaviorDimension.STATE].verdict == EvaluationVerdict.INCONCLUSIVE
+        # Overall verdict must be INCONCLUSIVE
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+
+        # Unselected dimension verification: if only OUTPUT is selected, OVERALL is EQUIVALENT
+        res_out_only = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res_out_only.verdict == EvaluationVerdict.EQUIVALENT
+
+    # 11. ONE-SIDED MALFORMED EVIDENCE
+    def test_e2e_one_sided_malformed_state(self, policy):
+        """Section 11: Reference STATE malformed, Target STATE valid CAPTURED -> INCONCLUSIVE."""
+        session_id = "sess_one_sided"
+        app_id = "app_one_sided_1"
+        rec_r_state = EvidenceRecord(
+            evidence_id="r_state_mal",
+            session_id=session_id,
+            input_id="inp_os_01",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"table_row_counts_before": "INVALID_TYPE"},
+        )
+        rec_t_state = EvidenceRecord(
+            evidence_id="t_state_val",
+            session_id=session_id,
+            input_id="inp_os_01",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"configured_tables": ["users"], "table_row_counts_before": {"users": 10}, "table_row_counts_after": {"users": 10}},
+        )
+        recs = [rec_r_state, rec_t_state]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_os",
+            session_id=session_id,
+            correlation_id="c_os",
+            application_id=app_id,
+            input_set_id="is_os",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_os", application_id=app_id, input_set_id="is_os", input_set_hash="h_os", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.STATE])
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+
+    # 12. MALFORMED OUTPUT TEST
+    def test_e2e_malformed_output_payload(self, policy):
+        """Section 13: Ref OUTPUT valid, Target OUTPUT malformed -> OUTPUT INCONCLUSIVE."""
+        session_id = "sess_mal_out"
+        app_id = "app_mal_out_1"
+        rec_r = EvidenceRecord(
+            evidence_id="r_out_val",
+            session_id=session_id,
+            input_id="inp_mo",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"data": 123}, "normalized_output": {"data": 123}},
+        )
+        # Passing invalid non-dict or unparseable fields that fail OutputEvidence model instantiation
+        rec_t = EvidenceRecord(
+            evidence_id="t_out_mal",
+            session_id=session_id,
+            input_id="inp_mo",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"duration_ms": "NOT_A_FLOAT_OR_INT_INVALID"},
+        )
+        recs = [rec_r, rec_t]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_mo",
+            session_id=session_id,
+            correlation_id="c_mo",
+            application_id=app_id,
+            input_set_id="is_mo",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_mo", application_id=app_id, input_set_id="is_mo", input_set_hash="h_mo", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.input_results[0].dimension_results[BehaviorDimension.OUTPUT].verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # 13. MALFORMED HTTP EVIDENCE
+    def test_e2e_malformed_http_evidence(self, policy):
+        """Section 14: Malformed HTTP evidence -> STATE INCONCLUSIVE, not NOT_APPLICABLE."""
+        session_id = "sess_mal_http"
+        app_id = "app_mal_http_1"
+        rec_r = EvidenceRecord(
+            evidence_id="r_http_mal",
+            session_id=session_id,
+            input_id="inp_m_http",
+            role="reference",
+            evidence_type=EvidenceType.HTTP,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"calls": "NOT_A_LIST"},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_http_mal",
+            session_id=session_id,
+            input_id="inp_m_http",
+            role="target",
+            evidence_type=EvidenceType.HTTP,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"calls": "NOT_A_LIST"},
+        )
+        recs = [rec_r, rec_t]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_m_http",
+            session_id=session_id,
+            correlation_id="c_mh",
+            application_id=app_id,
+            input_set_id="is_mh",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_mh", application_id=app_id, input_set_id="is_mh", input_set_hash="h_mh", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.STATE])
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.input_results[0].dimension_results[BehaviorDimension.STATE].verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # 14. MALFORMED FILESYSTEM EVIDENCE
+    def test_e2e_malformed_filesystem_evidence(self, policy):
+        """Section 15: Malformed filesystem evidence -> STATE INCONCLUSIVE."""
+        session_id = "sess_mal_fs"
+        app_id = "app_mal_fs_1"
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_mal",
+            session_id=session_id,
+            input_id="inp_m_fs",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"configured_paths": "NOT_A_LIST_OF_PATHS"},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_mal",
+            session_id=session_id,
+            input_id="inp_m_fs",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"configured_paths": "NOT_A_LIST_OF_PATHS"},
+        )
+        recs = [rec_r, rec_t]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_m_fs",
+            session_id=session_id,
+            correlation_id="c_mfs",
+            application_id=app_id,
+            input_set_id="is_mfs",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_mfs", application_id=app_id, input_set_id="is_mfs", input_set_hash="h_mfs", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.STATE])
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # 15. MALFORMED WORKFLOW EVIDENCE
+    def test_e2e_malformed_workflow_evidence(self, policy):
+        """Section 17: Malformed workflow trace evidence -> WORKFLOW INCONCLUSIVE."""
+        session_id = "sess_mal_wf"
+        app_id = "app_mal_wf_1"
+        rec_r = EvidenceRecord(
+            evidence_id="r_wf_mal",
+            session_id=session_id,
+            input_id="inp_m_wf",
+            role="reference",
+            evidence_type=EvidenceType.TRACE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"events": "NOT_A_LIST_OF_EVENTS"},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_wf_mal",
+            session_id=session_id,
+            input_id="inp_m_wf",
+            role="target",
+            evidence_type=EvidenceType.TRACE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"events": "NOT_A_LIST_OF_EVENTS"},
+        )
+        recs = [rec_r, rec_t]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_m_wf",
+            session_id=session_id,
+            correlation_id="c_mwf",
+            application_id=app_id,
+            input_set_id="is_mwf",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_mwf", application_id=app_id, input_set_id="is_mwf", input_set_hash="h_mwf", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.WORKFLOW])
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # 16. INVALID ROLE TESTS (FAIL-CLOSED)
+    @pytest.mark.parametrize("bad_role", ["banana", "unknown", "", None, 12345])
+    def test_e2e_invalid_role_fails_closed(self, bad_role, policy):
+        """Sections 18, 19, 20: Unknown/invalid role must NEVER be treated as target; must fail closed."""
+        session_id = "sess_bad_role"
+        app_id = "app_bad_role_1"
+        rec_r = EvidenceRecord(
+            evidence_id="r_good",
+            session_id=session_id,
+            input_id="inp_bad_role",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        rec_bad = EvidenceRecord.model_construct(
+            evidence_id="rec_invalid_role",
+            session_id=session_id,
+            input_id="inp_bad_role",
+            role=bad_role,
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+            metadata={},
+            provenance={},
+        )
+        recs = [rec_r, rec_bad]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_bad_role",
+            session_id=session_id,
+            correlation_id="c_br",
+            application_id=app_id,
+            input_set_id="is_br",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_br", application_id=app_id, input_set_id="is_br", input_set_hash="h_br", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict in (EvaluationVerdict.ERROR, EvaluationVerdict.INCONCLUSIVE)
+        assert res.metadata["integrity_issues_count"] > 0 or any("INVALID_ROLE" in issue for issue in res.metadata.get("integrity_issues", []))
+
+    # 17. DETERMINISM ON REPEATED EVALUATION WITH ADAPTATION FAILURES
+    def test_e2e_adaptation_failure_determinism(self, policy):
+        """Section 39: Repeated evaluation of bundle with adaptation failures yields identical hash."""
+        session_id = "sess_det"
+        app_id = "app_det_1"
+        recs = [
+            EvidenceRecord(
+                evidence_id="r1",
+                session_id=session_id,
+                input_id="inp_det",
+                role="reference",
+                evidence_type=EvidenceType.OUTPUT,
+                payload={"raw_output": {"data": 1}, "normalized_output": {"data": 1}},
+            ),
+            EvidenceRecord(
+                evidence_id="t1",
+                session_id=session_id,
+                input_id="inp_det",
+                role="target",
+                evidence_type=EvidenceType.OUTPUT,
+                payload={"raw_output": {"data": 1}, "normalized_output": {"data": 1}},
+            ),
+            EvidenceRecord(
+                evidence_id="r2_mal",
+                session_id=session_id,
+                input_id="inp_det",
+                role="reference",
+                evidence_type=EvidenceType.DATABASE,
+                payload={"table_row_counts_before": "INVALID"},
+            ),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_det",
+            session_id=session_id,
+            correlation_id="c_det",
+            application_id=app_id,
+            input_set_id="is_det",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_det", application_id=app_id, input_set_id="is_det", input_set_hash="h_det", records=recs),
+            records=recs,
+        )
+        engine = BehavioralEvaluationEngine()
+        dims = [BehaviorDimension.OUTPUT, BehaviorDimension.STATE]
+        res1 = engine.evaluate_bundle(bundle, policy=policy, dimensions=dims)
+        res2 = engine.evaluate_bundle(bundle, policy=policy, dimensions=dims)
+
+        assert res1.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res2.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res1.evaluation_hash == res2.evaluation_hash
+
+

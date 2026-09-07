@@ -239,39 +239,71 @@ class BehavioralEvaluationEngine:
 
         # Evaluate 1: OUTPUT
         if BehaviorDimension.OUTPUT in selected_dimensions:
-            ref_out = item.reference_output
-            target_out = item.target_output
-            ref_out_status = item.reference_output_status or getattr(ref_out, "capture_status", getattr(ref_out, "status", None))
-            target_out_status = item.target_output_status or getattr(target_out, "capture_status", getattr(target_out, "status", None))
+            output_failures = [
+                f for f in item.adaptation_failures
+                if f.evidence_type.lower() in ("output", "evidencetype.output")
+            ]
+            if output_failures:
+                failure_reasons = "; ".join([f.reason for f in output_failures])
+                fail_eids = [f.evidence_id for f in output_failures if f.evidence_id]
+                diff = BehaviorDifference(
+                    dimension=BehaviorDimension.OUTPUT,
+                    input_id=item.input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="adaptation_validation",
+                    details={
+                        "reason": "ADAPTATION_FAILED",
+                        "message": f"Malformed output evidence payload: {failure_reasons}",
+                        "failed_evidence_ids": fail_eids,
+                    },
+                )
+                dim_results[BehaviorDimension.OUTPUT] = DimensionResult(
+                    dimension=BehaviorDimension.OUTPUT,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    comparison_method="adaptation_validation",
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    differences=[diff],
+                    evidence_references=fail_eids or [eid for eid in (ref_eid, target_eid) if eid],
+                    details={"reason": "ADAPTATION_FAILED", "message": failure_reasons},
+                )
+                input_diffs.append(diff)
+            else:
+                ref_out = item.reference_output
+                target_out = item.target_output
+                ref_out_status = item.reference_output_status or getattr(ref_out, "capture_status", getattr(ref_out, "status", None))
+                target_out_status = item.target_output_status or getattr(target_out, "capture_status", getattr(target_out, "status", None))
 
-            def _extract_payload(out_obj: Optional[OutputEvidence]) -> Any:
-                if out_obj is None:
-                    return None
-                norm = getattr(out_obj, "normalized_output", None)
-                raw = getattr(out_obj, "raw_output", None)
-                if norm is not None and (norm or raw is None):
+                def _extract_payload(out_obj: Optional[OutputEvidence]) -> Any:
+                    if out_obj is None:
+                        return None
+                    norm = getattr(out_obj, "normalized_output", None)
+                    raw = getattr(out_obj, "raw_output", None)
+                    if norm is not None and (norm or raw is None):
+                        return norm
+                    if raw is not None:
+                        return raw
                     return norm
-                if raw is not None:
-                    return raw
-                return norm
 
-            ref_out_payload = _extract_payload(ref_out)
-            target_out_payload = _extract_payload(target_out)
+                ref_out_payload = _extract_payload(ref_out)
+                target_out_payload = _extract_payload(target_out)
 
-            res_out = self.output_eval.evaluate(
-                input_id=item.input_id,
-                reference_payload=ref_out_payload,
-                target_payload=target_out_payload,
-                policy=policy,
-                reference_evidence_id=ref_eid,
-                target_evidence_id=target_eid,
-                reference_present=item.reference_output is not None,
-                target_present=item.target_output is not None,
-                reference_status=ref_out_status,
-                target_status=target_out_status,
-            )
-            dim_results[BehaviorDimension.OUTPUT] = res_out
-            input_diffs.extend(res_out.differences)
+                res_out = self.output_eval.evaluate(
+                    input_id=item.input_id,
+                    reference_payload=ref_out_payload,
+                    target_payload=target_out_payload,
+                    policy=policy,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    reference_present=item.reference_output is not None,
+                    target_present=item.target_output is not None,
+                    reference_status=ref_out_status,
+                    target_status=target_out_status,
+                )
+                dim_results[BehaviorDimension.OUTPUT] = res_out
+                input_diffs.extend(res_out.differences)
 
         # Evaluate 2: ERROR
         # Extract observable error info from ErrorEvidence or OutputEvidence (status_code, exit_code, stderr)
@@ -313,22 +345,54 @@ class BehavioralEvaluationEngine:
         )
 
         if BehaviorDimension.ERROR in selected_dimensions:
-            ref_err_status = item.reference_error_status or getattr(item.reference_error, "capture_status", getattr(item.reference_error, "status", None))
-            target_err_status = item.target_error_status or getattr(item.target_error, "capture_status", getattr(item.target_error, "status", None))
-            res_err = self.error_eval.evaluate(
-                input_id=item.input_id,
-                reference_error=ref_err_obj,
-                target_error=target_err_obj,
-                policy=policy,
-                reference_has_error=ref_has_err,
-                target_has_error=target_has_err,
-                reference_evidence_id=ref_eid,
-                target_evidence_id=target_eid,
-                reference_status=ref_err_status,
-                target_status=target_err_status,
-            )
-            dim_results[BehaviorDimension.ERROR] = res_err
-            input_diffs.extend(res_err.differences)
+            error_failures = [
+                f for f in item.adaptation_failures
+                if f.evidence_type.lower() in ("error", "evidencetype.error")
+            ]
+            if error_failures:
+                failure_reasons = "; ".join([f.reason for f in error_failures])
+                fail_eids = [f.evidence_id for f in error_failures if f.evidence_id]
+                diff = BehaviorDifference(
+                    dimension=BehaviorDimension.ERROR,
+                    input_id=item.input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="adaptation_validation",
+                    details={
+                        "reason": "ADAPTATION_FAILED",
+                        "message": f"Malformed error evidence payload: {failure_reasons}",
+                        "failed_evidence_ids": fail_eids,
+                    },
+                )
+                dim_results[BehaviorDimension.ERROR] = DimensionResult(
+                    dimension=BehaviorDimension.ERROR,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    comparison_method="adaptation_validation",
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    differences=[diff],
+                    evidence_references=fail_eids or [eid for eid in (ref_eid, target_eid) if eid],
+                    details={"reason": "ADAPTATION_FAILED", "message": failure_reasons},
+                )
+                input_diffs.append(diff)
+            else:
+                ref_err_status = item.reference_error_status or getattr(item.reference_error, "capture_status", getattr(item.reference_error, "status", None))
+                target_err_status = item.target_error_status or getattr(item.target_error, "capture_status", getattr(item.target_error, "status", None))
+                res_err = self.error_eval.evaluate(
+                    input_id=item.input_id,
+                    reference_error=ref_err_obj,
+                    target_error=target_err_obj,
+                    policy=policy,
+                    reference_has_error=ref_has_err,
+                    target_has_error=target_has_err,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    reference_status=ref_err_status,
+                    target_status=target_err_status,
+                )
+                dim_results[BehaviorDimension.ERROR] = res_err
+                input_diffs.extend(res_err.differences)
 
         # Evaluate 3: BOUNDARY
         if BehaviorDimension.BOUNDARY in selected_dimensions:
@@ -350,33 +414,100 @@ class BehavioralEvaluationEngine:
 
         # Evaluate 4: STATE
         if BehaviorDimension.STATE in selected_dimensions:
-            res_state = self.state_eval._evaluate_typed(
-                input_id=item.input_id,
-                reference_db=item.reference_database,
-                target_db=item.target_database,
-                reference_file=item.reference_file,
-                target_file=item.target_file,
-                reference_http=item.reference_http,
-                target_http=item.target_http,
-                policy=policy,
-                reference_evidence_id=ref_eid,
-                target_evidence_id=target_eid,
-            )
-            dim_results[BehaviorDimension.STATE] = res_state
-            input_diffs.extend(res_state.differences)
+            state_failures = [
+                f for f in item.adaptation_failures
+                if f.evidence_type.lower() in (
+                    "database", "filesystem", "http",
+                    "evidencetype.database", "evidencetype.filesystem", "evidencetype.http"
+                )
+            ]
+            if state_failures:
+                failure_reasons = "; ".join([f.reason for f in state_failures])
+                fail_eids = [f.evidence_id for f in state_failures if f.evidence_id]
+                diff = BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=item.input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="adaptation_validation",
+                    details={
+                        "reason": "ADAPTATION_FAILED",
+                        "message": f"Malformed state/side-effect evidence payload: {failure_reasons}",
+                        "failed_evidence_ids": fail_eids,
+                    },
+                )
+                dim_results[BehaviorDimension.STATE] = DimensionResult(
+                    dimension=BehaviorDimension.STATE,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    comparison_method="adaptation_validation",
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    differences=[diff],
+                    evidence_references=fail_eids or [eid for eid in (ref_eid, target_eid) if eid],
+                    details={"reason": "ADAPTATION_FAILED", "message": failure_reasons},
+                )
+                input_diffs.append(diff)
+            else:
+                res_state = self.state_eval._evaluate_typed(
+                    input_id=item.input_id,
+                    reference_db=item.reference_database,
+                    target_db=item.target_database,
+                    reference_file=item.reference_file,
+                    target_file=item.target_file,
+                    reference_http=item.reference_http,
+                    target_http=item.target_http,
+                    policy=policy,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                )
+                dim_results[BehaviorDimension.STATE] = res_state
+                input_diffs.extend(res_state.differences)
 
         # Evaluate 5: WORKFLOW
         if BehaviorDimension.WORKFLOW in selected_dimensions:
-            res_wf = self.workflow_eval.evaluate(
-                input_id=item.input_id,
-                reference_trace=item.reference_trace,
-                target_trace=item.target_trace,
-                policy=policy,
-                reference_evidence_id=ref_eid,
-                target_evidence_id=target_eid,
-            )
-            dim_results[BehaviorDimension.WORKFLOW] = res_wf
-            input_diffs.extend(res_wf.differences)
+            workflow_failures = [
+                f for f in item.adaptation_failures
+                if f.evidence_type.lower() in ("trace", "evidencetype.trace")
+            ]
+            if workflow_failures:
+                failure_reasons = "; ".join([f.reason for f in workflow_failures])
+                fail_eids = [f.evidence_id for f in workflow_failures if f.evidence_id]
+                diff = BehaviorDifference(
+                    dimension=BehaviorDimension.WORKFLOW,
+                    input_id=item.input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="adaptation_validation",
+                    details={
+                        "reason": "ADAPTATION_FAILED",
+                        "message": f"Malformed workflow trace evidence payload: {failure_reasons}",
+                        "failed_evidence_ids": fail_eids,
+                    },
+                )
+                dim_results[BehaviorDimension.WORKFLOW] = DimensionResult(
+                    dimension=BehaviorDimension.WORKFLOW,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    comparison_method="adaptation_validation",
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    differences=[diff],
+                    evidence_references=fail_eids or [eid for eid in (ref_eid, target_eid) if eid],
+                    details={"reason": "ADAPTATION_FAILED", "message": failure_reasons},
+                )
+                input_diffs.append(diff)
+            else:
+                res_wf = self.workflow_eval.evaluate(
+                    input_id=item.input_id,
+                    reference_trace=item.reference_trace,
+                    target_trace=item.target_trace,
+                    policy=policy,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                )
+                dim_results[BehaviorDimension.WORKFLOW] = res_wf
+                input_diffs.extend(res_wf.differences)
 
         # Evaluate 6: NONFUNCTIONAL
         if BehaviorDimension.NONFUNCTIONAL in selected_dimensions:
@@ -393,11 +524,38 @@ class BehavioralEvaluationEngine:
             dim_results[BehaviorDimension.NONFUNCTIONAL] = res_nf
             input_diffs.extend(res_nf.differences)
 
+        # Check for invalid roles or integrity errors
+        if item.invalid_role_records:
+            diff = BehaviorDifference(
+                dimension=selected_dimensions[0] if selected_dimensions else BehaviorDimension.OUTPUT,
+                input_id=item.input_id,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                reference_evidence_id=ref_eid,
+                target_evidence_id=target_eid,
+                comparison_method="role_validation",
+                details={
+                    "reason": "INVALID_ROLE",
+                    "message": f"Invalid role records detected: {item.invalid_role_records}",
+                },
+            )
+            input_diffs.append(diff)
+            for dim in selected_dimensions:
+                if dim not in dim_results or dim_results[dim].verdict == EvaluationVerdict.EQUIVALENT:
+                    dim_results[dim] = DimensionResult(
+                        dimension=dim,
+                        status=EvaluationVerdict.ERROR,
+                        verdict=EvaluationVerdict.ERROR,
+                        comparison_method="role_validation",
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        differences=[diff],
+                        details={"reason": "INVALID_ROLE", "message": f"Invalid role records: {item.invalid_role_records}"},
+                    )
+
         # Compute overall input verdict
         verdicts = [dr.verdict for dr in dim_results.values()]
         if EvaluationVerdict.DIFFERENT in verdicts:
             input_verdict = EvaluationVerdict.DIFFERENT
-        elif EvaluationVerdict.ERROR in verdicts:
+        elif EvaluationVerdict.ERROR in verdicts or bool(item.invalid_role_records) or not item.integrity_valid:
             input_verdict = EvaluationVerdict.ERROR
         elif EvaluationVerdict.INCONCLUSIVE in verdicts:
             input_verdict = EvaluationVerdict.INCONCLUSIVE
