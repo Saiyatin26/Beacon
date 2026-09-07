@@ -147,13 +147,12 @@ class EvaluationInputAdapter:
             for rec in target_recs:
                 self._populate_typed_evidence(item, rec, is_reference=False)
 
-            # Detect boundary category from provenance or metadata
+            # Detect boundary category from explicit provenance or metadata only
             for rec in ref_recs + target_recs:
                 category = (
                     rec.metadata.get("boundary_category")
                     or rec.provenance.get("boundary_category")
                     or rec.metadata.get("boundary_type")
-                    or rec.metadata.get("origin")
                 )
                 if category and category not in ("diverse_sampling", "standard", "normal"):
                     item.boundary_category = str(category)

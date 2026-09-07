@@ -231,12 +231,26 @@ class StateEvaluator:
                 details={"message": "All observable state mutations and side-effects are equivalent."},
             )
 
+        # Distinguish missing evidence from actual observed behavioral differences
+        actual_diffs = [d for d in differences if d.difference_type != DifferenceType.EVIDENCE_MISSING]
+        if not actual_diffs:
+            return DimensionResult(
+                dimension=BehaviorDimension.STATE,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
+                comparison_method="state_snapshots",
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                differences=differences,
+                evidence_references=evidence_refs,
+                details={"message": "State evidence is missing or insufficient on one or more subsystems."},
+            )
+
         return DimensionResult(
             dimension=BehaviorDimension.STATE,
             status=EvaluationVerdict.DIFFERENT,
             verdict=EvaluationVerdict.DIFFERENT,
             comparison_method="state_snapshots",
-            difference_type=differences[0].difference_type,
+            difference_type=actual_diffs[0].difference_type,
             differences=differences,
             evidence_references=evidence_refs,
             details={"total_differences": len(differences)},
@@ -428,7 +442,7 @@ class StateEvaluator:
                 BehaviorDifference(
                     dimension=BehaviorDimension.STATE,
                     input_id=input_id,
-                    difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
                     field_path="filesystem",
                     reference_value=bool(ref_file),
                     target_value=bool(target_file),
@@ -470,7 +484,7 @@ class StateEvaluator:
                 BehaviorDifference(
                     dimension=BehaviorDimension.STATE,
                     input_id=input_id,
-                    difference_type=DifferenceType.HTTP_SIDE_EFFECT_MISMATCH,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
                     field_path="http",
                     reference_value=bool(ref_http),
                     target_value=bool(target_http),

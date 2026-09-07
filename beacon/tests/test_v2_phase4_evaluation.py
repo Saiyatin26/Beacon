@@ -1036,3 +1036,184 @@ class TestPhase4RemediationCorrectness:
             assert diff.target_evidence_id == "tgt_trace_31"
             assert diff.input_id == "in-tr-31"
 
+
+# ==============================================================================
+# 9. Phase 4 Final Blocker Remediation Suite
+# ==============================================================================
+
+class TestPhase4FinalBlockerRemediation:
+    """Explicit validation for State cases A-F, boundary explicit metadata, and array policies."""
+
+    def test_state_case_a_ref_db_target_missing_is_inconclusive(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-case-a",
+            reference_db_or_records={"table": "accounts", "operation": "INSERT", "row_count": 1},
+            target_db_or_records=None,
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_db_a",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    def test_state_case_b_ref_fs_target_missing_is_inconclusive(self, default_policy):
+        from execution.evidence_models import FileEvidence
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-case-b",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_file=FileEvidence(created_files=["/tmp/output.txt"]),
+            target_file=None,
+            policy=default_policy,
+            reference_evidence_id="ref_fs_b",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    def test_state_case_c_ref_http_target_missing_is_inconclusive(self, default_policy):
+        from execution.evidence_models import HttpEvidence
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-case-c",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_http=HttpEvidence(calls=[{"method": "POST", "url": "http://api.internal/notify"}]),
+            target_http=None,
+            policy=default_policy,
+            reference_evidence_id="ref_http_c",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    def test_state_case_d_both_db_differ_is_different(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-case-d",
+            reference_db_or_records={"table": "orders", "operation": "INSERT", "records": [{"id": 1, "total": 100}]},
+            target_db_or_records={"table": "orders", "operation": "INSERT", "records": [{"id": 1, "total": 200}]},
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_db_d",
+            target_evidence_id="tgt_db_d",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.DATABASE_MUTATION_MISMATCH for d in res.differences)
+
+    def test_state_case_e_both_db_equivalent_is_equivalent(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-case-e",
+            reference_db_or_records={"table": "orders", "operation": "INSERT", "records": [{"id": 1, "total": 100}]},
+            target_db_or_records={"table": "orders", "operation": "INSERT", "records": [{"id": 1, "total": 100}]},
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_db_e",
+            target_evidence_id="tgt_db_e",
+        )
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+        assert len(res.differences) == 0
+
+    def test_state_case_f_no_state_evidence_is_not_applicable(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-case-f",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            policy_or_file=default_policy,
+        )
+        assert res.verdict == EvaluationVerdict.NOT_APPLICABLE
+
+    def test_boundary_origin_metadata_does_not_imply_boundary_category(self, default_policy):
+        adapter = EvaluationInputAdapter()
+        recs = [
+            EvidenceRecord(
+                evidence_id="r1",
+                session_id="s1",
+                input_id="in-orig-1",
+                role=AdapterRole.REFERENCE,
+                evidence_type=EvidenceType.OUTPUT,
+                payload={"status_code": 200, "raw_output": {"ok": True}},
+                metadata={"origin": "external_api"},  # generic metadata, NOT explicit boundary
+            ),
+            EvidenceRecord(
+                evidence_id="t1",
+                session_id="s1",
+                input_id="in-orig-1",
+                role=AdapterRole.TARGET,
+                evidence_type=EvidenceType.OUTPUT,
+                payload={"status_code": 200, "raw_output": {"ok": True}},
+                metadata={"origin": "external_api"},
+            ),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_orig",
+            session_id="s1",
+            application_id="app1",
+            manifest=EvidenceManifest(session_id="s1", correlation_id="c1", application_id="app1", input_set_id="is1", input_set_hash="h1", records=recs),
+            records=recs,
+        )
+        items, _ = adapter.adapt_bundle(bundle, verify_integrity=False)
+        assert len(items) == 1
+        # boundary_category must be None because 'origin' is not an explicit boundary metadata field
+        assert items[0].boundary_category is None
+
+    def test_boundary_explicit_metadata_detected(self, default_policy):
+        adapter = EvaluationInputAdapter()
+        recs = [
+            EvidenceRecord(
+                evidence_id="r1",
+                session_id="s2",
+                input_id="in-bnd-exp",
+                role=AdapterRole.REFERENCE,
+                evidence_type=EvidenceType.OUTPUT,
+                payload={"status_code": 200, "raw_output": {"ok": True}},
+                metadata={"boundary_category": "MAX_INTEGER"},
+            ),
+            EvidenceRecord(
+                evidence_id="t1",
+                session_id="s2",
+                input_id="in-bnd-exp",
+                role=AdapterRole.TARGET,
+                evidence_type=EvidenceType.OUTPUT,
+                payload={"status_code": 200, "raw_output": {"ok": True}},
+                metadata={"boundary_category": "MAX_INTEGER"},
+            ),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_exp",
+            session_id="s2",
+            application_id="app1",
+            manifest=EvidenceManifest(session_id="s2", correlation_id="c2", application_id="app1", input_set_id="is2", input_set_hash="h2", records=recs),
+            records=recs,
+        )
+        items, _ = adapter.adapt_bundle(bundle, verify_integrity=False)
+        assert len(items) == 1
+        assert items[0].boundary_category == "MAX_INTEGER"
+
+    def test_array_ordering_default_different_relaxed_equivalent(self):
+        default_p = resolve_comparison_policy("default_v2")
+        relaxed_p = resolve_comparison_policy("relaxed_v2")
+
+        evaluator = OutputEvaluator()
+        # Default: array order matters
+        res_default = evaluator.evaluate(
+            input_id="in-arr-order",
+            reference_payload=["A", "B", "C"],
+            target_payload=["C", "B", "A"],
+            policy=default_p,
+            reference_evidence_id="ref_arr",
+            target_evidence_id="tgt_arr",
+        )
+        assert res_default.verdict == EvaluationVerdict.DIFFERENT
+
+        # Relaxed: ignore_array_order is True
+        res_relaxed = evaluator.evaluate(
+            input_id="in-arr-order",
+            reference_payload=["A", "B", "C"],
+            target_payload=["C", "B", "A"],
+            policy=relaxed_p,
+            reference_evidence_id="ref_arr",
+            target_evidence_id="tgt_arr",
+        )
+        assert res_relaxed.verdict == EvaluationVerdict.EQUIVALENT
+
+
