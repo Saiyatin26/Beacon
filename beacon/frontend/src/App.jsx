@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import ControlledMode from "./ControlledMode";
 
 // Environment-based API Base URL with safe production & development defaults
 const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? "" : "http://localhost:8000");
@@ -1038,6 +1039,7 @@ export default function App() {
         <div style={{ maxWidth: "1440px", margin: "0 auto", display: "flex", gap: "24px" }}>
           {[
             { id: "benchmark", label: "🎯 Benchmark Certification", desc: "Select & Certify Applications" },
+            { id: "controlled", label: "⚖️ Controlled Mode", desc: "Business Rules & Behavioral Compliance" },
             { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },
             { id: "dossier", label: "📑 Evidence Dossier", desc: "Explainability & Traceability" },
             { id: "operations", label: "⚙️ Operations & Reliability", desc: "System Health, Metrics & Jobs" },
@@ -3458,6 +3460,18 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: CONTROLLED MODE (PHASE 5 BUSINESS RULE COMPLIANCE)                   */}
+        {/* ========================================================================= */}
+        {activeTab === "controlled" && (
+          <ControlledMode
+            apiBase={API_BASE}
+            authFetch={authFetch}
+            badgeStyle={badgeStyle}
+            cardStyle={cardStyle}
+          />
         )}
       </main>
   

@@ -214,6 +214,10 @@ app.include_router(paired_router)
 from api.evaluation_router import evaluation_router
 app.include_router(evaluation_router)
 
+# Phase 5 (V2) Business-Rule Understanding & Controlled Mode Routes
+from api.controlled_router import controlled_router
+app.include_router(controlled_router)
+
 
 
 
