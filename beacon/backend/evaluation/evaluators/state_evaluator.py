@@ -41,12 +41,10 @@ class StateEvaluator:
         2. (input_id, ref_db, target_db, ref_file, target_file, ref_http, target_http, policy)
            where each argument is a typed evidence object.
         """
-        # --- Detect calling convention ---
-        # Convention 1: third argument is a list (records-based)
+        # Convention 1: list-of-records calling convention
         if isinstance(reference_db_or_records, list) and isinstance(target_db_or_records, list):
             ref_records = reference_db_or_records
             target_records = target_db_or_records
-            # policy_or_file is actually the policy in this convention
             effective_policy = policy_or_file if isinstance(policy_or_file, ComparisonPolicy) else policy
             if effective_policy is None:
                 from ..policies import DEFAULT_COMPARISON_POLICY
@@ -124,10 +122,6 @@ class StateEvaluator:
             pass
         return None
 
-    def _extract_db_from_records(self, records: list) -> Optional[Any]:
-        from execution.evidence_models import EvidenceType
-        return self._extract_payload_by_type(records, EvidenceType.DATABASE)
-
     def _evaluate_typed(
         self,
         input_id: str,
@@ -141,7 +135,7 @@ class StateEvaluator:
         reference_evidence_id: Optional[str] = None,
         target_evidence_id: Optional[str] = None,
     ) -> DimensionResult:
-        """Core state evaluation using typed evidence objects."""
+        """Core state evaluation using typed evidence objects or payloads."""
         state_policy = policy.state_policy
         evidence_refs = [eid for eid in (reference_evidence_id, target_evidence_id) if eid]
 
@@ -256,6 +250,39 @@ class StateEvaluator:
             details={"total_differences": len(differences)},
         )
 
+    # =========================================================================
+    # Helpers
+    # =========================================================================
+    @staticmethod
+    def _get(obj: Any, *keys: str, default: Any = None) -> Any:
+        """Safely extracts field from dict, Pydantic model, or generic object."""
+        if obj is None:
+            return default
+        if isinstance(obj, dict):
+            for k in keys:
+                if k in obj and obj[k] is not None:
+                    return obj[k]
+            return default
+        for k in keys:
+            if hasattr(obj, k):
+                val = getattr(obj, k)
+                if val is not None:
+                    return val
+        if hasattr(obj, "__dict__"):
+            d = getattr(obj, "__dict__", {})
+            for k in keys:
+                if k in d and d[k] is not None:
+                    return d[k]
+        if hasattr(obj, "model_extra") and getattr(obj, "model_extra"):
+            extra = getattr(obj, "model_extra")
+            for k in keys:
+                if k in extra and extra[k] is not None:
+                    return extra[k]
+        return default
+
+    # =========================================================================
+    # Database Comparison
+    # =========================================================================
     def _compare_db_state(
         self,
         input_id: str,
@@ -266,6 +293,7 @@ class StateEvaluator:
         ref_eid: Optional[str],
         target_eid: Optional[str],
     ) -> None:
+        """Evaluates database mutations across Phase 3 DatabaseEvidence models and payloads."""
         if ref_db is None or target_db is None:
             differences.append(
                 BehaviorDifference(
@@ -282,27 +310,216 @@ class StateEvaluator:
             )
             return
 
-        # Helper: get field from dict OR object attribute
-        def _get(obj: Any, *keys: str, default: Any = None) -> Any:
-            if isinstance(obj, dict):
-                for k in keys:
-                    if k in obj:
-                        return obj[k]
-                return default
-            for k in keys:
-                v = getattr(obj, k, None)
-                if v is not None:
-                    return v
-            return default
+        _get = self._get
 
-        # Compare single-table payloads ({"table": "...", "operation": "...", "row_count": ...})
+        # 1. Check delta_detected flags
+        ref_delta = _get(ref_db, "delta_detected")
+        target_delta = _get(target_db, "delta_detected")
+        if (ref_delta is None) != (target_delta is None):
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    field_path="database.delta_detected",
+                    reference_value=ref_delta,
+                    target_value=target_delta,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="delta_presence",
+                    details={"message": "delta_detected present on one side but missing on the other."},
+                )
+            )
+        elif ref_delta is not None and target_delta is not None and ref_delta != target_delta:
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=input_id,
+                    difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                    field_path="database.delta_detected",
+                    reference_value=ref_delta,
+                    target_value=target_delta,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="delta_flag",
+                    details={"ref_delta_detected": ref_delta, "target_delta_detected": target_delta},
+                )
+            )
+
+        # 2. Check Phase 3 before/after row counts: table_row_counts_before, table_row_counts_after
+        ref_counts_before = _get(ref_db, "table_row_counts_before", default={}) or {}
+        target_counts_before = _get(target_db, "table_row_counts_before", default={}) or {}
+        ref_counts_after = _get(ref_db, "table_row_counts_after", default={}) or {}
+        target_counts_after = _get(target_db, "table_row_counts_after", default={}) or {}
+
+        # 3. Check configured_tables and multi-table dictionaries
+        ref_cfg_tables = _get(ref_db, "configured_tables", default=[]) or []
+        target_cfg_tables = _get(target_db, "configured_tables", default=[]) or []
+        ref_affected = _get(ref_db, "affected_tables", "tables", default={}) or {}
+        target_affected = _get(target_db, "affected_tables", "tables", default={}) or {}
+
+        # Collect all tracked tables across both implementations
+        all_tables: set[str] = set()
+        for src in (ref_counts_before, target_counts_before, ref_counts_after, target_counts_after):
+            if isinstance(src, dict):
+                all_tables.update(src.keys())
+        all_tables.update(ref_cfg_tables if isinstance(ref_cfg_tables, (list, set)) else [])
+        all_tables.update(target_cfg_tables if isinstance(target_cfg_tables, (list, set)) else [])
+        if isinstance(ref_affected, dict):
+            all_tables.update(ref_affected.keys())
+        elif isinstance(ref_affected, (list, set)):
+            all_tables.update(ref_affected)
+        if isinstance(target_affected, dict):
+            all_tables.update(target_affected.keys())
+        elif isinstance(target_affected, (list, set)):
+            all_tables.update(target_affected)
+
+        all_tables = all_tables - set(policy.ignored_tables)
+
+        # 4. Multi-table / Phase 3 canonical evaluation if tables are tracked
+        if all_tables:
+            for tbl in sorted(all_tables):
+                # Check table presence
+                ref_tracked = tbl in ref_cfg_tables or tbl in ref_counts_before or tbl in ref_counts_after or tbl in ref_affected
+                target_tracked = tbl in target_cfg_tables or tbl in target_counts_before or tbl in target_counts_after or tbl in target_affected
+                if ref_tracked != target_tracked:
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            field_path=f"database.tables.{tbl}",
+                            reference_value=ref_tracked,
+                            target_value=target_tracked,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="table_presence",
+                            details={"message": f"Table '{tbl}' tracked on one side but missing on the other."},
+                        )
+                    )
+                    continue
+
+                # Check before count
+                r_b = ref_counts_before.get(tbl) if isinstance(ref_counts_before, dict) else None
+                t_b = target_counts_before.get(tbl) if isinstance(target_counts_before, dict) else None
+                if (r_b is None) != (t_b is None):
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            field_path=f"database.tables.{tbl}.before_count",
+                            reference_value=r_b,
+                            target_value=t_b,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="table_before_count",
+                            details={"message": f"Before row count for table '{tbl}' present on one side but missing on the other."},
+                        )
+                    )
+
+                # Check after count
+                r_a = ref_counts_after.get(tbl) if isinstance(ref_counts_after, dict) else None
+                t_a = target_counts_after.get(tbl) if isinstance(target_counts_after, dict) else None
+                if (r_a is None) != (t_a is None):
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            field_path=f"database.tables.{tbl}.after_count",
+                            reference_value=r_a,
+                            target_value=t_a,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="table_after_count",
+                            details={"message": f"After row count for table '{tbl}' present on one side but missing on the other."},
+                        )
+                    )
+
+                # Check net deltas and after counts
+                if r_a is not None and t_a is not None:
+                    if r_b is not None and t_b is not None:
+                        ref_net_delta = r_a - r_b
+                        target_net_delta = t_a - t_b
+                        if ref_net_delta != target_net_delta or r_a != t_a:
+                            differences.append(
+                                BehaviorDifference(
+                                    dimension=BehaviorDimension.STATE,
+                                    input_id=input_id,
+                                    difference_type=DifferenceType.DATABASE_ROW_COUNT_MISMATCH,
+                                    field_path=f"database.tables.{tbl}.row_count",
+                                    reference_value={"before": r_b, "after": r_a, "net_delta": ref_net_delta},
+                                    target_value={"before": t_b, "after": t_a, "net_delta": target_net_delta},
+                                    reference_evidence_id=ref_eid,
+                                    target_evidence_id=target_eid,
+                                    comparison_method="table_row_count_delta",
+                                    details={
+                                        "table": tbl,
+                                        "ref_before": r_b,
+                                        "ref_after": r_a,
+                                        "ref_net_delta": ref_net_delta,
+                                        "target_before": t_b,
+                                        "target_after": t_a,
+                                        "target_net_delta": target_net_delta,
+                                    },
+                                )
+                            )
+                    elif r_a != t_a:
+                        differences.append(
+                            BehaviorDifference(
+                                dimension=BehaviorDimension.STATE,
+                                input_id=input_id,
+                                difference_type=DifferenceType.DATABASE_ROW_COUNT_MISMATCH,
+                                field_path=f"database.tables.{tbl}.row_count",
+                                reference_value=r_a,
+                                target_value=t_a,
+                                reference_evidence_id=ref_eid,
+                                target_evidence_id=target_eid,
+                                comparison_method="table_row_count",
+                            )
+                        )
+
+            # Check snapshots if provided
+            ref_snap = _get(ref_db, "snapshot_after")
+            target_snap = _get(target_db, "snapshot_after")
+            if (ref_snap is None) != (target_snap is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path="database.snapshot_after",
+                        reference_value=bool(ref_snap),
+                        target_value=bool(target_snap),
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="snapshot_presence",
+                        details={"message": "snapshot_after present on one side but missing on the other."},
+                    )
+                )
+            elif ref_snap is not None and target_snap is not None and ref_snap != target_snap:
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                        field_path="database.snapshot_after",
+                        reference_value=ref_snap,
+                        target_value=target_snap,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="snapshot_hash",
+                    )
+                )
+
+        # 5. Single-table payload comparison (table, operation, row_count, records)
         ref_table = _get(ref_db, "table")
         target_table = _get(target_db, "table")
         ref_op = _get(ref_db, "operation", "op", "action")
         target_op = _get(target_db, "operation", "op", "action")
 
         if ref_table is not None or target_table is not None:
-            # Single-table comparison mode
             if (ref_table is None) != (target_table is None):
                 differences.append(
                     BehaviorDifference(
@@ -336,7 +553,7 @@ class StateEvaluator:
                 )
                 return
 
-            # Check operation field completeness & equivalence
+            # Check operation field
             if (ref_op is None) != (target_op is None):
                 differences.append(
                     BehaviorDifference(
@@ -352,24 +569,23 @@ class StateEvaluator:
                         details={"message": "Database operation field present on one side but missing on the other."},
                     )
                 )
-            elif ref_op is not None and target_op is not None:
-                if str(ref_op).upper() != str(target_op).upper():
-                    differences.append(
-                        BehaviorDifference(
-                            dimension=BehaviorDimension.STATE,
-                            input_id=input_id,
-                            difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
-                            field_path="database.operation",
-                            reference_value=ref_op,
-                            target_value=target_op,
-                            reference_evidence_id=ref_eid,
-                            target_evidence_id=target_eid,
-                            comparison_method="db_operation",
-                            details={"ref_operation": ref_op, "target_operation": target_op},
-                        )
+            elif ref_op is not None and target_op is not None and str(ref_op).upper() != str(target_op).upper():
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                        field_path="database.operation",
+                        reference_value=ref_op,
+                        target_value=target_op,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="db_operation",
+                        details={"ref_operation": ref_op, "target_operation": target_op},
                     )
+                )
 
-            # Check row count field completeness & equivalence
+            # Check row count field
             ref_row_count = _get(ref_db, "row_count", "rows_affected", "rows")
             target_row_count = _get(target_db, "row_count", "rows_affected", "rows")
 
@@ -388,23 +604,22 @@ class StateEvaluator:
                         details={"message": "Database row count field present on one side but missing on the other."},
                     )
                 )
-            elif ref_row_count is not None and target_row_count is not None:
-                if ref_row_count != target_row_count:
-                    differences.append(
-                        BehaviorDifference(
-                            dimension=BehaviorDimension.STATE,
-                            input_id=input_id,
-                            difference_type=DifferenceType.DATABASE_ROW_COUNT_MISMATCH,
-                            field_path=f"database.tables.{ref_table or target_table}.row_count",
-                            reference_value=ref_row_count,
-                            target_value=target_row_count,
-                            reference_evidence_id=ref_eid,
-                            target_evidence_id=target_eid,
-                            comparison_method="table_row_count",
-                        )
+            elif ref_row_count is not None and target_row_count is not None and ref_row_count != target_row_count:
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.DATABASE_ROW_COUNT_MISMATCH,
+                        field_path=f"database.tables.{ref_table or target_table}.row_count",
+                        reference_value=ref_row_count,
+                        target_value=target_row_count,
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="table_row_count",
                     )
+                )
 
-            # Check records field completeness & equivalence
+            # Check records field
             ref_data = _get(ref_db, "records", "data", "rows_data")
             target_data = _get(target_db, "records", "data", "rows_data")
 
@@ -423,92 +638,24 @@ class StateEvaluator:
                         details={"message": "Database records field present on one side but missing on the other."},
                     )
                 )
-            elif ref_data is not None and target_data is not None:
-                if ref_data != target_data:
-                    differences.append(
-                        BehaviorDifference(
-                            dimension=BehaviorDimension.STATE,
-                            input_id=input_id,
-                            difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
-                            field_path=f"database.tables.{ref_table or target_table}.records",
-                            reference_value=ref_data,
-                            target_value=target_data,
-                            reference_evidence_id=ref_eid,
-                            target_evidence_id=target_eid,
-                            comparison_method="db_records",
-                        )
-                    )
-            return
-
-        # Multi-table payload (affected_tables / tables dict)
-        ref_tables_raw = _get(ref_db, "affected_tables", "tables", default={})
-        target_tables_raw = _get(target_db, "affected_tables", "tables", default={})
-
-        if isinstance(ref_tables_raw, list):
-            ref_t_set = set(ref_tables_raw) - set(policy.ignored_tables)
-        elif isinstance(ref_tables_raw, dict):
-            ref_t_set = set(ref_tables_raw.keys()) - set(policy.ignored_tables)
-        else:
-            ref_t_set = set()
-
-        if isinstance(target_tables_raw, list):
-            target_t_set = set(target_tables_raw) - set(policy.ignored_tables)
-        elif isinstance(target_tables_raw, dict):
-            target_t_set = set(target_tables_raw.keys()) - set(policy.ignored_tables)
-        else:
-            target_t_set = set()
-
-        if ref_t_set != target_t_set:
-            differences.append(
-                BehaviorDifference(
-                    dimension=BehaviorDimension.STATE,
-                    input_id=input_id,
-                    difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
-                    field_path="database.affected_tables",
-                    reference_value=sorted(list(ref_t_set)),
-                    target_value=sorted(list(target_t_set)),
-                    reference_evidence_id=ref_eid,
-                    target_evidence_id=target_eid,
-                    comparison_method="table_set",
-                )
-            )
-
-        # Check multi-table row count completeness and deltas
-        ref_counts = _get(ref_db, "row_counts", default={}) or {}
-        target_counts = _get(target_db, "row_counts", default={}) or {}
-        for tbl in ref_t_set & target_t_set:
-            has_ref_cnt = tbl in ref_counts
-            has_tgt_cnt = tbl in target_counts
-            if has_ref_cnt != has_tgt_cnt:
+            elif ref_data is not None and target_data is not None and ref_data != target_data:
                 differences.append(
                     BehaviorDifference(
                         dimension=BehaviorDimension.STATE,
                         input_id=input_id,
-                        difference_type=DifferenceType.EVIDENCE_MISSING,
-                        field_path=f"database.tables.{tbl}.row_count",
-                        reference_value=ref_counts.get(tbl),
-                        target_value=target_counts.get(tbl),
+                        difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                        field_path=f"database.tables.{ref_table or target_table}.records",
+                        reference_value=ref_data,
+                        target_value=target_data,
                         reference_evidence_id=ref_eid,
                         target_evidence_id=target_eid,
-                        comparison_method="table_row_count",
-                        details={"message": f"Row count for table '{tbl}' present on one side but missing on the other."},
-                    )
-                )
-            elif has_ref_cnt and has_tgt_cnt and ref_counts[tbl] != target_counts[tbl]:
-                differences.append(
-                    BehaviorDifference(
-                        dimension=BehaviorDimension.STATE,
-                        input_id=input_id,
-                        difference_type=DifferenceType.DATABASE_ROW_COUNT_MISMATCH,
-                        field_path=f"database.tables.{tbl}.row_count",
-                        reference_value=ref_counts[tbl],
-                        target_value=target_counts[tbl],
-                        reference_evidence_id=ref_eid,
-                        target_evidence_id=target_eid,
-                        comparison_method="table_row_count",
+                        comparison_method="db_records",
                     )
                 )
 
+    # =========================================================================
+    # Filesystem Comparison
+    # =========================================================================
     def _compare_file_state(
         self,
         input_id: str,
@@ -518,6 +665,7 @@ class StateEvaluator:
         ref_eid: Optional[str],
         target_eid: Optional[str],
     ) -> None:
+        """Evaluates filesystem state across Phase 3 FileEvidence snapshots and deltas."""
         if ref_file is None or target_file is None:
             differences.append(
                 BehaviorDifference(
@@ -534,14 +682,109 @@ class StateEvaluator:
             )
             return
 
-        def _get_file_list(obj: Any, key: str) -> Optional[list]:
-            if isinstance(obj, dict):
-                return obj.get(key)
-            return getattr(obj, key, None)
+        _get = self._get
 
+        # 1. Check delta_detected flags
+        ref_delta = _get(ref_file, "delta_detected")
+        target_delta = _get(target_file, "delta_detected")
+        if (ref_delta is None) != (target_delta is None):
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    field_path="filesystem.delta_detected",
+                    reference_value=ref_delta,
+                    target_value=target_delta,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="file_delta_presence",
+                )
+            )
+        elif ref_delta is not None and target_delta is not None and ref_delta != target_delta:
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=input_id,
+                    difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
+                    field_path="filesystem.delta_detected",
+                    reference_value=ref_delta,
+                    target_value=target_delta,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="file_delta_flag",
+                )
+            )
+
+        # 2. Check Phase 3 before/after snapshots: before_state, after_state
+        ref_after = _get(ref_file, "after_state", default={}) or {}
+        target_after = _get(target_file, "after_state", default={}) or {}
+        ref_before = _get(ref_file, "before_state", default={}) or {}
+        target_before = _get(target_file, "before_state", default={}) or {}
+        ref_cfg_paths = _get(ref_file, "configured_paths", default=[]) or []
+        target_cfg_paths = _get(target_file, "configured_paths", default=[]) or []
+
+        all_paths: set[str] = set()
+        if isinstance(ref_after, dict):
+            all_paths.update(ref_after.keys())
+        if isinstance(target_after, dict):
+            all_paths.update(target_after.keys())
+        if isinstance(ref_before, dict):
+            all_paths.update(ref_before.keys())
+        if isinstance(target_before, dict):
+            all_paths.update(target_before.keys())
+        all_paths.update(ref_cfg_paths if isinstance(ref_cfg_paths, (list, set)) else [])
+        all_paths.update(target_cfg_paths if isinstance(target_cfg_paths, (list, set)) else [])
+
+        for path in sorted(all_paths):
+            r_snap = ref_after.get(path) if isinstance(ref_after, dict) else None
+            t_snap = target_after.get(path) if isinstance(target_after, dict) else None
+
+            if (r_snap is None) != (t_snap is None):
+                differences.append(
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.STATE,
+                        input_id=input_id,
+                        difference_type=DifferenceType.EVIDENCE_MISSING,
+                        field_path=f"filesystem.paths['{path}'].after_state",
+                        reference_value=bool(r_snap),
+                        target_value=bool(t_snap),
+                        reference_evidence_id=ref_eid,
+                        target_evidence_id=target_eid,
+                        comparison_method="path_snapshot_presence",
+                        details={"message": f"after_state for path '{path}' present on one side but missing on the other."},
+                    )
+                )
+            elif r_snap is not None and t_snap is not None:
+                r_exists = _get(r_snap, "exists")
+                t_exists = _get(t_snap, "exists")
+                r_hash = _get(r_snap, "sha256_hash", "hash")
+                t_hash = _get(t_snap, "sha256_hash", "hash")
+                r_size = _get(r_snap, "size_bytes", "size")
+                t_size = _get(t_snap, "size_bytes", "size")
+
+                if (r_exists is not None and t_exists is not None and r_exists != t_exists) or \
+                   (r_hash is not None and t_hash is not None and r_hash != t_hash) or \
+                   (r_size is not None and t_size is not None and r_size != t_size):
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.FILESYSTEM_DELTA_MISMATCH,
+                            field_path=f"filesystem.paths['{path}']",
+                            reference_value={"exists": r_exists, "sha256": r_hash, "size": r_size},
+                            target_value={"exists": t_exists, "sha256": t_hash, "size": t_size},
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="file_snapshot_delta",
+                            details={"path": path, "ref_hash": r_hash, "target_hash": t_hash},
+                        )
+                    )
+
+        # 3. Check created_files, modified_files, deleted_files lists
         for field_name in ("created_files", "modified_files", "deleted_files"):
-            ref_list = _get_file_list(ref_file, field_name)
-            target_list = _get_file_list(target_file, field_name)
+            ref_list = _get(ref_file, field_name)
+            target_list = _get(target_file, field_name)
 
             if (ref_list is not None) or (target_list is not None):
                 if (ref_list is None) != (target_list is None):
@@ -577,6 +820,9 @@ class StateEvaluator:
                             )
                         )
 
+    # =========================================================================
+    # HTTP Side-Effect Comparison
+    # =========================================================================
     def _compare_http_state(
         self,
         input_id: str,
@@ -586,6 +832,7 @@ class StateEvaluator:
         ref_eid: Optional[str],
         target_eid: Optional[str],
     ) -> None:
+        """Evaluates HTTP outbound transaction side-effects."""
         if ref_http is None or target_http is None:
             differences.append(
                 BehaviorDifference(
@@ -623,7 +870,7 @@ class StateEvaluator:
                     return d["endpoints"]
             if hasattr(obj, "model_extra") and getattr(obj, "model_extra"):
                 extra = getattr(obj, "model_extra")
-                if "calls" in extra:
+                if "calls" in extra and extra["calls"] is not None:
                     return extra["calls"]
             return [obj]
 
@@ -646,32 +893,18 @@ class StateEvaluator:
             )
             return
 
+        _get = self._get
+
         # Compare detailed HTTP call side-effects (method, url/endpoint, status, payload)
         for idx, (rc, tc) in enumerate(zip(ref_calls, target_calls)):
-            def _cget(call_obj: Any, *keys: str) -> Any:
-                if isinstance(call_obj, dict):
-                    for k in keys:
-                        if k in call_obj and call_obj[k] is not None:
-                            return call_obj[k]
-                    return None
-                for k in keys:
-                    if hasattr(call_obj, k):
-                        val = getattr(call_obj, k)
-                        if val is not None:
-                            return val
-                if hasattr(call_obj, "__dict__"):
-                    d = getattr(call_obj, "__dict__", {})
-                    for k in keys:
-                        if k in d and d[k] is not None:
-                            return d[k]
-                return None
-
-            r_method = _cget(rc, "method")
-            t_method = _cget(tc, "method")
-            r_url = _cget(rc, "url_or_endpoint", "url", "endpoint", "path")
-            t_url = _cget(tc, "url_or_endpoint", "url", "endpoint", "path")
-            r_status = _cget(rc, "response_status", "status", "status_code", "http_status")
-            t_status = _cget(tc, "response_status", "status", "status_code", "http_status")
+            r_method = _get(rc, "method")
+            t_method = _get(tc, "method")
+            r_url = _get(rc, "url_or_endpoint", "url", "endpoint", "path")
+            t_url = _get(tc, "url_or_endpoint", "url", "endpoint", "path")
+            r_status = _get(rc, "response_status", "status", "status_code", "http_status")
+            t_status = _get(tc, "response_status", "status", "status_code", "http_status")
+            r_req_body = _get(rc, "request_body", "payload", "body")
+            t_req_body = _get(tc, "request_body", "payload", "body")
 
             if (r_method is None) != (t_method is None):
                 differences.append(
@@ -759,6 +992,36 @@ class StateEvaluator:
                         comparison_method="http_call_status",
                     )
                 )
+
+            if (r_req_body is not None) or (t_req_body is not None):
+                if (r_req_body is None) != (t_req_body is None):
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.EVIDENCE_MISSING,
+                            field_path=f"http.calls[{idx}].request_body",
+                            reference_value=r_req_body,
+                            target_value=t_req_body,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="http_call_payload",
+                        )
+                    )
+                elif r_req_body != t_req_body:
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.HTTP_SIDE_EFFECT_MISMATCH,
+                            field_path=f"http.calls[{idx}].request_body",
+                            reference_value=r_req_body,
+                            target_value=t_req_body,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="http_call_payload",
+                        )
+                    )
 
 
 state_evaluator = StateEvaluator()

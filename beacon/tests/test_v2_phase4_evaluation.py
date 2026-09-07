@@ -1388,5 +1388,343 @@ class TestPhase4FinalBlockerRemediation:
         assert res_tgt_missing.verdict == EvaluationVerdict.INCONCLUSIVE
         assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res_tgt_missing.differences)
 
+    # --- SECTION 80: REAL PHASE 3 DATABASE EVIDENCE TESTS ---
+    def test_real_phase3_database_evidence_equivalent(self, default_policy):
+        from execution.evidence_models import DatabaseEvidence, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers", "orders"],
+            table_row_counts_before={"customers": 10, "orders": 5},
+            table_row_counts_after={"customers": 12, "orders": 5},
+            snapshot_before={"hash": "snap_before_1"},
+            snapshot_after={"hash": "snap_after_1"},
+            delta_detected=True,
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers", "orders"],
+            table_row_counts_before={"customers": 10, "orders": 5},
+            table_row_counts_after={"customers": 12, "orders": 5},
+            snapshot_before={"hash": "snap_before_1"},
+            snapshot_after={"hash": "snap_after_1"},
+            delta_detected=True,
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-db-eq",
+            reference_db_or_records=ref_db,
+            target_db_or_records=tgt_db,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_db_1",
+            target_evidence_id="tgt_p3_db_1",
+        )
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
 
+    def test_real_phase3_database_evidence_row_count_difference(self, default_policy):
+        from execution.evidence_models import DatabaseEvidence, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 2},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 1},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-db-rc-diff",
+            reference_db_or_records=ref_db,
+            target_db_or_records=tgt_db,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_db_rc",
+            target_evidence_id="tgt_p3_db_rc",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.DATABASE_ROW_COUNT_MISMATCH for d in res.differences)
+
+    def test_real_phase3_database_evidence_snapshot_difference(self, default_policy):
+        from execution.evidence_models import DatabaseEvidence, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 2},
+            snapshot_after={"hash": "HASH_A"},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 2},
+            snapshot_after={"hash": "HASH_B"},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-db-snap-diff",
+            reference_db_or_records=ref_db,
+            target_db_or_records=tgt_db,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_db_snap",
+            target_evidence_id="tgt_p3_db_snap",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.DATABASE_MUTATION_MISMATCH for d in res.differences)
+
+    def test_real_phase3_database_evidence_delta_difference(self, default_policy):
+        from execution.evidence_models import DatabaseEvidence, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 1},
+            delta_detected=True,
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 1},
+            delta_detected=False,
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-db-delta-diff",
+            reference_db_or_records=ref_db,
+            target_db_or_records=tgt_db,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_db_delta",
+            target_evidence_id="tgt_p3_db_delta",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+
+    def test_real_phase3_database_evidence_missing_required_field(self, default_policy):
+        from execution.evidence_models import DatabaseEvidence, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 2},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-db-missing-after",
+            reference_db_or_records=ref_db,
+            target_db_or_records=tgt_db,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_db_m",
+            target_evidence_id="tgt_p3_db_m",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    # --- SECTION 81: REAL PHASE 3 FILE EVIDENCE TESTS ---
+    def test_real_phase3_file_evidence_equivalent(self, default_policy):
+        from execution.evidence_models import FileEvidence, FileStateSnapshot, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(
+            configured_paths=["/data/out.txt"],
+            after_state={"/data/out.txt": FileStateSnapshot(path="/data/out.txt", exists=True, size_bytes=100, sha256_hash="H_FS")},
+            created_files=["/data/out.txt"],
+            modified_files=[],
+            deleted_files=[],
+            delta_detected=True,
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_fs = FileEvidence(
+            configured_paths=["/data/out.txt"],
+            after_state={"/data/out.txt": FileStateSnapshot(path="/data/out.txt", exists=True, size_bytes=100, sha256_hash="H_FS")},
+            created_files=["/data/out.txt"],
+            modified_files=[],
+            deleted_files=[],
+            delta_detected=True,
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-fs-eq",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_file=ref_fs,
+            target_file=tgt_fs,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_fs_1",
+            target_evidence_id="tgt_p3_fs_1",
+        )
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+
+    def test_real_phase3_file_evidence_before_after_difference(self, default_policy):
+        from execution.evidence_models import FileEvidence, FileStateSnapshot, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(
+            configured_paths=["/data/out.txt"],
+            after_state={"/data/out.txt": FileStateSnapshot(path="/data/out.txt", exists=True, size_bytes=100, sha256_hash="HASH_A")},
+            created_files=[],
+            modified_files=[],
+            deleted_files=[],
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_fs = FileEvidence(
+            configured_paths=["/data/out.txt"],
+            after_state={"/data/out.txt": FileStateSnapshot(path="/data/out.txt", exists=True, size_bytes=100, sha256_hash="HASH_B")},
+            created_files=[],
+            modified_files=[],
+            deleted_files=[],
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-fs-hash-diff",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_file=ref_fs,
+            target_file=tgt_fs,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_fs_h",
+            target_evidence_id="tgt_p3_fs_h",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.FILESYSTEM_DELTA_MISMATCH for d in res.differences)
+
+    def test_real_phase3_file_evidence_modified_difference(self, default_policy):
+        from execution.evidence_models import FileEvidence, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(
+            modified_files=["a.txt"],
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_fs = FileEvidence(
+            modified_files=[],
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-fs-mod-diff",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_file=ref_fs,
+            target_file=tgt_fs,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_fs_m",
+            target_evidence_id="tgt_p3_fs_m",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+
+    def test_real_phase3_file_evidence_missing_state(self, default_policy):
+        from execution.evidence_models import FileEvidence, FileStateSnapshot, EvidenceCaptureStatus
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(
+            configured_paths=["/data/out.txt"],
+            after_state={"/data/out.txt": FileStateSnapshot(path="/data/out.txt", exists=True, size_bytes=100, sha256_hash="HASH_A")},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_fs = FileEvidence(
+            configured_paths=["/data/out.txt"],
+            after_state={},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate(
+            input_id="in-p3-fs-missing",
+            reference_db_or_records=None,
+            target_db_or_records=None,
+            reference_file=ref_fs,
+            target_file=tgt_fs,
+            policy=default_policy,
+            reference_evidence_id="ref_p3_fs_mis",
+            target_evidence_id="tgt_p3_fs_mis",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert any(d.difference_type == DifferenceType.EVIDENCE_MISSING for d in res.differences)
+
+    # --- SECTION 82: END-TO-END PHASE 3 -> PHASE 4 INTEGRATION TESTS ---
+    def test_real_phase3_e2e_database_integration(self, default_policy):
+        from execution.evidence_models import (
+            DatabaseEvidence,
+            EvidenceBundle,
+            EvidenceManifest,
+            EvidenceRecord,
+            EvidenceType,
+        )
+        session_id = "sess_e2e_db"
+        app_id = "app_e2e"
+
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 2},
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 1},
+            table_row_counts_after={"customers": 1},
+        )
+
+        recs = [
+            EvidenceRecord(evidence_id="e2e_r_db", session_id=session_id, input_id="inp_e2e_db", role="reference", evidence_type=EvidenceType.DATABASE, payload=ref_db.model_dump()),
+            EvidenceRecord(evidence_id="e2e_t_db", session_id=session_id, input_id="inp_e2e_db", role="target", evidence_type=EvidenceType.DATABASE, payload=tgt_db.model_dump()),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_e2e_db",
+            session_id=session_id,
+            correlation_id="c_e2e_db",
+            application_id=app_id,
+            input_set_id="is_e2e_db",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_e2e_db", application_id=app_id, input_set_id="is_e2e_db", input_set_hash="h_e2e_db", records=recs),
+            records=recs,
+        )
+
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=default_policy, dimensions=[BehaviorDimension.STATE])
+
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        inp_res = res.input_results[0]
+        assert inp_res.dimension_results[BehaviorDimension.STATE].verdict == EvaluationVerdict.DIFFERENT
+
+    def test_real_phase3_e2e_file_integration(self, default_policy):
+        from execution.evidence_models import (
+            FileEvidence,
+            FileStateSnapshot,
+            EvidenceBundle,
+            EvidenceManifest,
+            EvidenceRecord,
+            EvidenceType,
+        )
+        session_id = "sess_e2e_fs"
+        app_id = "app_e2e"
+
+        ref_fs = FileEvidence(
+            configured_paths=["/report.pdf"],
+            after_state={"/report.pdf": FileStateSnapshot(path="/report.pdf", exists=True, size_bytes=2048, sha256_hash="HASH_REF")},
+        )
+        tgt_fs = FileEvidence(
+            configured_paths=["/report.pdf"],
+            after_state={"/report.pdf": FileStateSnapshot(path="/report.pdf", exists=True, size_bytes=2048, sha256_hash="HASH_TGT")},
+        )
+
+        recs = [
+            EvidenceRecord(evidence_id="e2e_r_fs", session_id=session_id, input_id="inp_e2e_fs", role="reference", evidence_type=EvidenceType.FILESYSTEM, payload=ref_fs.model_dump()),
+            EvidenceRecord(evidence_id="e2e_t_fs", session_id=session_id, input_id="inp_e2e_fs", role="target", evidence_type=EvidenceType.FILESYSTEM, payload=tgt_fs.model_dump()),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_e2e_fs",
+            session_id=session_id,
+            correlation_id="c_e2e_fs",
+            application_id=app_id,
+            input_set_id="is_e2e_fs",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_e2e_fs", application_id=app_id, input_set_id="is_e2e_fs", input_set_hash="h_e2e_fs", records=recs),
+            records=recs,
+        )
+
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=default_policy, dimensions=[BehaviorDimension.STATE])
+
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        inp_res = res.input_results[0]
+        assert inp_res.dimension_results[BehaviorDimension.STATE].verdict == EvaluationVerdict.DIFFERENT
 
