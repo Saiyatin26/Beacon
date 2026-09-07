@@ -51,6 +51,89 @@ class TestPhase4NoFalseEquivalence:
         return DEFAULT_COMPARISON_POLICY
 
     # 1. DATABASE FALSE-EQUIVALENCE ELIMINATION
+    def test_db_test_a_partial_vs_partial_inconclusive(self, policy):
+        """Test A: Reference = PARTIAL, Target = PARTIAL -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            status=EvidenceCaptureStatus.PARTIAL,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            status=EvidenceCaptureStatus.PARTIAL,
+        )
+        res = evaluator.evaluate("in_db_part_a", reference_db_or_records=ref_db, target_db_or_records=tgt_db, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_db_test_b_captured_vs_partial_inconclusive(self, policy):
+        """Test B: Reference = CAPTURED, Target = PARTIAL -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 5},
+            table_row_counts_after={"customers": 5},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            status=EvidenceCaptureStatus.PARTIAL,
+        )
+        res = evaluator.evaluate("in_db_part_b", reference_db_or_records=ref_db, target_db_or_records=tgt_db, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_db_test_c_partial_vs_captured_inconclusive(self, policy):
+        """Test C: Reference = PARTIAL, Target = CAPTURED -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            status=EvidenceCaptureStatus.PARTIAL,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 5},
+            table_row_counts_after={"customers": 5},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate("in_db_part_c", reference_db_or_records=ref_db, target_db_or_records=tgt_db, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_db_test_d_partial_vs_not_supported_inconclusive(self, policy):
+        """Test D: Reference = PARTIAL, Target = NOT_SUPPORTED -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            status=EvidenceCaptureStatus.PARTIAL,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            status=EvidenceCaptureStatus.NOT_SUPPORTED,
+        )
+        res = evaluator.evaluate("in_db_part_d", reference_db_or_records=ref_db, target_db_or_records=tgt_db, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_db_test_e_partial_with_observed_difference_yields_different(self, policy):
+        """Test E: Reference = PARTIAL, Target = observed difference (row count mismatch) -> DIFFERENT."""
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 5},
+            table_row_counts_after={"customers": 10},
+            status=EvidenceCaptureStatus.PARTIAL,
+        )
+        tgt_db = DatabaseEvidence(
+            configured_tables=["customers"],
+            table_row_counts_before={"customers": 5},
+            table_row_counts_after={"customers": 20},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate("in_db_part_e", reference_db_or_records=ref_db, target_db_or_records=tgt_db, policy=policy)
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.DATABASE_ROW_COUNT_MISMATCH for d in res.differences)
+
     def test_db_missing_row_count_not_equivalent(self, policy):
         evaluator = StateEvaluator()
         ref_db = DatabaseEvidence(
@@ -104,7 +187,75 @@ class TestPhase4NoFalseEquivalence:
         assert res.verdict != EvaluationVerdict.EQUIVALENT
         assert res.verdict == EvaluationVerdict.INCONCLUSIVE
 
+    def test_db_capture_error_and_configuration_error_inconclusive(self, policy):
+        evaluator = StateEvaluator()
+        ref_db = DatabaseEvidence(status=EvidenceCaptureStatus.CONFIGURATION_ERROR)
+        tgt_db = DatabaseEvidence(status=EvidenceCaptureStatus.CAPTURE_ERROR)
+        res = evaluator.evaluate("in_db_err", reference_db_or_records=ref_db, target_db_or_records=tgt_db, policy=policy)
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
     # 2. FILESYSTEM FALSE-EQUIVALENCE ELIMINATION
+    def test_file_test_a_partial_vs_partial_inconclusive(self, policy):
+        """Test A: Reference = PARTIAL, Target = PARTIAL -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(configured_paths=["/tmp/a.txt"], status=EvidenceCaptureStatus.PARTIAL)
+        tgt_fs = FileEvidence(configured_paths=["/tmp/a.txt"], status=EvidenceCaptureStatus.PARTIAL)
+        res = evaluator.evaluate("in_fs_part_a", reference_db_or_records=None, target_db_or_records=None, reference_file=ref_fs, target_file=tgt_fs, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_file_test_b_captured_vs_partial_inconclusive(self, policy):
+        """Test B: Reference = CAPTURED, Target = PARTIAL -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(
+            configured_paths=["/tmp/a.txt"],
+            after_state={"/tmp/a.txt": FileStateSnapshot(path="/tmp/a.txt", exists=True, size_bytes=10, sha256_hash="H_A")},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        tgt_fs = FileEvidence(configured_paths=["/tmp/a.txt"], status=EvidenceCaptureStatus.PARTIAL)
+        res = evaluator.evaluate("in_fs_part_b", reference_db_or_records=None, target_db_or_records=None, reference_file=ref_fs, target_file=tgt_fs, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_file_test_c_partial_vs_captured_inconclusive(self, policy):
+        """Test C: Reference = PARTIAL, Target = CAPTURED -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(configured_paths=["/tmp/a.txt"], status=EvidenceCaptureStatus.PARTIAL)
+        tgt_fs = FileEvidence(
+            configured_paths=["/tmp/a.txt"],
+            after_state={"/tmp/a.txt": FileStateSnapshot(path="/tmp/a.txt", exists=True, size_bytes=10, sha256_hash="H_A")},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate("in_fs_part_c", reference_db_or_records=None, target_db_or_records=None, reference_file=ref_fs, target_file=tgt_fs, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_file_test_d_not_supported_vs_not_supported_inconclusive(self, policy):
+        """Test D: Reference = NOT_SUPPORTED, Target = NOT_SUPPORTED -> INCONCLUSIVE."""
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(status=EvidenceCaptureStatus.NOT_SUPPORTED)
+        tgt_fs = FileEvidence(status=EvidenceCaptureStatus.NOT_SUPPORTED)
+        res = evaluator.evaluate("in_fs_part_d", reference_db_or_records=None, target_db_or_records=None, reference_file=ref_fs, target_file=tgt_fs, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_file_test_e_partial_with_observed_hash_difference_yields_different(self, policy):
+        """Test E: Reference = PARTIAL, Target = observed hash difference -> DIFFERENT."""
+        evaluator = StateEvaluator()
+        ref_fs = FileEvidence(
+            configured_paths=["/tmp/a.txt"],
+            after_state={"/tmp/a.txt": FileStateSnapshot(path="/tmp/a.txt", exists=True, size_bytes=10, sha256_hash="H_A")},
+            status=EvidenceCaptureStatus.PARTIAL,
+        )
+        tgt_fs = FileEvidence(
+            configured_paths=["/tmp/a.txt"],
+            after_state={"/tmp/a.txt": FileStateSnapshot(path="/tmp/a.txt", exists=True, size_bytes=10, sha256_hash="H_B")},
+            status=EvidenceCaptureStatus.CAPTURED,
+        )
+        res = evaluator.evaluate("in_fs_part_e", reference_db_or_records=None, target_db_or_records=None, reference_file=ref_fs, target_file=tgt_fs, policy=policy)
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.FILESYSTEM_DELTA_MISMATCH for d in res.differences)
+
     def test_file_missing_after_hash_not_equivalent(self, policy):
         evaluator = StateEvaluator()
         ref_fs = FileEvidence(
@@ -146,6 +297,14 @@ class TestPhase4NoFalseEquivalence:
         assert res.verdict == EvaluationVerdict.INCONCLUSIVE
 
     # 3. HTTP FALSE-EQUIVALENCE ELIMINATION
+    def test_http_partial_status_not_equivalent(self, policy):
+        evaluator = StateEvaluator()
+        ref_http = {"calls": [{"method": "GET", "url": "/api/users", "status": 200}], "status": EvidenceCaptureStatus.PARTIAL}
+        tgt_http = {"calls": [{"method": "GET", "url": "/api/users", "status": 200}], "status": EvidenceCaptureStatus.PARTIAL}
+        res = evaluator.evaluate("in_http_part", reference_db_or_records=None, target_db_or_records=None, reference_http=ref_http, target_http=tgt_http, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
     def test_http_missing_method_not_equivalent(self, policy):
         evaluator = StateEvaluator()
         ref_http = HttpEvidence(calls=[{"method": "POST", "url": "/api/item", "status": 200}])
@@ -185,6 +344,14 @@ class TestPhase4NoFalseEquivalence:
         ref_tr = TraceEvidence(events=[TraceEvent(event_id="e1", sequence=1, event_type="INIT")])
         tgt_tr = None  # trace missing entirely
         res = evaluator.evaluate("in_wf_1", reference_trace=ref_tr, target_trace=tgt_tr, policy=policy)
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_workflow_partial_status_not_equivalent(self, policy):
+        evaluator = WorkflowEvaluator()
+        ref_tr = {"events": [{"name": "STEP1"}], "status": EvidenceCaptureStatus.PARTIAL}
+        tgt_tr = {"events": [{"name": "STEP1"}], "status": EvidenceCaptureStatus.PARTIAL}
+        res = evaluator.evaluate("in_wf_part", reference_trace=ref_tr, target_trace=tgt_tr, policy=policy)
         assert res.verdict != EvaluationVerdict.EQUIVALENT
         assert res.verdict == EvaluationVerdict.INCONCLUSIVE
 

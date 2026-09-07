@@ -6,6 +6,7 @@ and filtering non-deterministic internal system noise.
 
 from typing import Any, Optional
 
+from ..evidence_status import EvidenceSufficiency
 from ..models import (
     BehaviorDifference,
     BehaviorDimension,
@@ -62,6 +63,30 @@ class WorkflowEvaluator:
                 status=EvaluationVerdict.INCONCLUSIVE,
                 verdict=EvaluationVerdict.INCONCLUSIVE,
                 comparison_method="presence_check",
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                differences=[diff],
+                evidence_references=evidence_refs,
+            )
+
+        if EvidenceSufficiency.is_insufficient(reference_trace) or EvidenceSufficiency.is_insufficient(target_trace):
+            ref_status = EvidenceSufficiency.get_status_str(reference_trace) or "CAPTURED"
+            target_status = EvidenceSufficiency.get_status_str(target_trace) or "CAPTURED"
+            diff = BehaviorDifference(
+                dimension=BehaviorDimension.WORKFLOW,
+                input_id=input_id,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                reference_evidence_id=reference_evidence_id,
+                target_evidence_id=target_evidence_id,
+                reference_value=ref_status,
+                target_value=target_status,
+                comparison_method="trace_capture_status",
+                details={"message": f"Workflow trace capture status is insufficient (ref: {ref_status}, target: {target_status})."},
+            )
+            return DimensionResult(
+                dimension=BehaviorDimension.WORKFLOW,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
+                comparison_method="trace_capture_status",
                 difference_type=DifferenceType.EVIDENCE_MISSING,
                 differences=[diff],
                 evidence_references=evidence_refs,

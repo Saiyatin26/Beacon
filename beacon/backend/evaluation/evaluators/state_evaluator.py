@@ -6,6 +6,7 @@ and outbound HTTP calls recorded in Phase 3 evidence.
 
 from typing import Any, Optional
 
+from ..evidence_status import EvidenceSufficiency
 from ..models import (
     BehaviorDifference,
     BehaviorDimension,
@@ -312,14 +313,10 @@ class StateEvaluator:
 
         _get = self._get
 
-        # 0. Check capture status (e.g. NOT_SUPPORTED, FAILED, UNAVAILABLE, CONFIGURATION_ERROR)
-        ref_status_raw = _get(ref_db, "status", "capture_status", default="CAPTURED")
-        target_status_raw = _get(target_db, "status", "capture_status", default="CAPTURED")
-        ref_status = str(getattr(ref_status_raw, "value", ref_status_raw)).upper()
-        target_status = str(getattr(target_status_raw, "value", target_status_raw)).upper()
-
-        unsupported_terms = ("NOT_SUPPORTED", "NOT_AVAILABLE", "FAILED", "CONFIGURATION_ERROR", "CAPTURE_ERROR")
-        if any(term in ref_status for term in unsupported_terms) or any(term in target_status for term in unsupported_terms):
+        # 0. Check capture status (e.g. PARTIAL, NOT_SUPPORTED, FAILED, UNAVAILABLE, CONFIGURATION_ERROR)
+        if EvidenceSufficiency.is_insufficient(ref_db) or EvidenceSufficiency.is_insufficient(target_db):
+            ref_status = EvidenceSufficiency.get_status_str(ref_db) or "CAPTURED"
+            target_status = EvidenceSufficiency.get_status_str(target_db) or "CAPTURED"
             differences.append(
                 BehaviorDifference(
                     dimension=BehaviorDimension.STATE,
@@ -331,10 +328,9 @@ class StateEvaluator:
                     reference_evidence_id=ref_eid,
                     target_evidence_id=target_eid,
                     comparison_method="db_capture_status",
-                    details={"message": f"Database capture status is not supported/captured (ref: {ref_status}, target: {target_status})."},
+                    details={"message": f"Database capture status is insufficient (ref: {ref_status}, target: {target_status})."},
                 )
             )
-            return
 
         # 1. Check delta_detected flags
         ref_delta = _get(ref_db, "delta_detected")
@@ -709,14 +705,10 @@ class StateEvaluator:
 
         _get = self._get
 
-        # 0. Check capture status (e.g. NOT_SUPPORTED, FAILED, UNAVAILABLE, CONFIGURATION_ERROR)
-        ref_status_raw = _get(ref_file, "status", "capture_status", default="CAPTURED")
-        target_status_raw = _get(target_file, "status", "capture_status", default="CAPTURED")
-        ref_status = str(getattr(ref_status_raw, "value", ref_status_raw)).upper()
-        target_status = str(getattr(target_status_raw, "value", target_status_raw)).upper()
-
-        unsupported_terms = ("NOT_SUPPORTED", "NOT_AVAILABLE", "FAILED", "CONFIGURATION_ERROR", "CAPTURE_ERROR")
-        if any(term in ref_status for term in unsupported_terms) or any(term in target_status for term in unsupported_terms):
+        # 0. Check capture status (e.g. PARTIAL, NOT_SUPPORTED, FAILED, UNAVAILABLE, CONFIGURATION_ERROR)
+        if EvidenceSufficiency.is_insufficient(ref_file) or EvidenceSufficiency.is_insufficient(target_file):
+            ref_status = EvidenceSufficiency.get_status_str(ref_file) or "CAPTURED"
+            target_status = EvidenceSufficiency.get_status_str(target_file) or "CAPTURED"
             differences.append(
                 BehaviorDifference(
                     dimension=BehaviorDimension.STATE,
@@ -728,10 +720,9 @@ class StateEvaluator:
                     reference_evidence_id=ref_eid,
                     target_evidence_id=target_eid,
                     comparison_method="file_capture_status",
-                    details={"message": f"Filesystem capture status is not supported/captured (ref: {ref_status}, target: {target_status})."},
+                    details={"message": f"Filesystem capture status is insufficient (ref: {ref_status}, target: {target_status})."},
                 )
             )
-            return
 
         # 1. Check delta_detected flags
         ref_delta = _get(ref_file, "delta_detected")
@@ -972,6 +963,25 @@ class StateEvaluator:
                 )
             )
             return
+
+        # 0. Check capture status
+        if EvidenceSufficiency.is_insufficient(ref_http) or EvidenceSufficiency.is_insufficient(target_http):
+            ref_status = EvidenceSufficiency.get_status_str(ref_http) or "CAPTURED"
+            target_status = EvidenceSufficiency.get_status_str(target_http) or "CAPTURED"
+            differences.append(
+                BehaviorDifference(
+                    dimension=BehaviorDimension.STATE,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    field_path="http.status",
+                    reference_value=ref_status,
+                    target_value=target_status,
+                    reference_evidence_id=ref_eid,
+                    target_evidence_id=target_eid,
+                    comparison_method="http_capture_status",
+                    details={"message": f"HTTP capture status is insufficient (ref: {ref_status}, target: {target_status})."},
+                )
+            )
 
         def _get_calls(obj: Any) -> list:
             if isinstance(obj, list):

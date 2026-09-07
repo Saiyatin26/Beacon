@@ -514,6 +514,7 @@ class TestEvaluationEngineBundle:
         assert res1.verdict == res2.verdict
         assert res1.summary.total_inputs == res2.summary.total_inputs
         assert res1.summary.total_differences == res2.summary.total_differences
+        assert res1.evaluation_hash == res2.evaluation_hash
 
 
 # ==============================================================================
