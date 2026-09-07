@@ -36,21 +36,33 @@ class CorrelatedInputItem(BaseModel):
 
     reference_output: Optional[OutputEvidence] = None
     target_output: Optional[OutputEvidence] = None
+    reference_output_status: Optional[str] = None
+    target_output_status: Optional[str] = None
 
     reference_error: Optional[ErrorEvidence] = None
     target_error: Optional[ErrorEvidence] = None
+    reference_error_status: Optional[str] = None
+    target_error_status: Optional[str] = None
 
     reference_database: Optional[DatabaseEvidence] = None
     target_database: Optional[DatabaseEvidence] = None
+    reference_database_status: Optional[str] = None
+    target_database_status: Optional[str] = None
 
     reference_file: Optional[FileEvidence] = None
     target_file: Optional[FileEvidence] = None
+    reference_file_status: Optional[str] = None
+    target_file_status: Optional[str] = None
 
     reference_http: Optional[HttpEvidence] = None
     target_http: Optional[HttpEvidence] = None
+    reference_http_status: Optional[str] = None
+    target_http_status: Optional[str] = None
 
     reference_trace: Optional[TraceEvidence] = None
     target_trace: Optional[TraceEvidence] = None
+    reference_trace_status: Optional[str] = None
+    target_trace_status: Optional[str] = None
 
     boundary_category: Optional[str] = None
     is_matched: bool = True
@@ -87,10 +99,11 @@ class EvaluationInputAdapter:
                     logger.error(err)
                     issues.append(err)
 
-            # Check individual record content hashes
+            # Check individual record content hashes (regardless of payload truthiness)
             for rec in bundle.records:
-                if rec.payload and rec.content_hash:
-                    canonical = json.dumps(rec.payload, sort_keys=True, separators=(",", ":"), default=str)
+                if rec.content_hash:
+                    payload_data = rec.payload if rec.payload is not None else {}
+                    canonical = json.dumps(payload_data, sort_keys=True, separators=(",", ":"), default=str)
                     recomputed_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
                     if recomputed_hash != rec.content_hash:
                         rec_err = (
@@ -167,9 +180,13 @@ class EvaluationInputAdapter:
     def _populate_typed_evidence(
         self, item: CorrelatedInputItem, rec: Any, is_reference: bool
     ) -> None:
-        """Parses record payload into strongly typed evidence models where available."""
+        """Parses record payload into strongly typed evidence models where available, preserving capture_status."""
         etype = rec.evidence_type
-        payload = dict(rec.payload)  # work with a copy
+        payload = dict(rec.payload) if rec.payload else {}
+
+        # Extract Phase 3 capture_status
+        status_val = getattr(rec, "capture_status", getattr(rec, "status", None))
+        status_str = str(getattr(status_val, "value", status_val)).upper() if status_val is not None else None
 
         # Handle OutputEvidencePayload field mapping:
         # OutputEvidencePayload uses 'status_code'; OutputEvidence uses 'http_status'
@@ -179,42 +196,77 @@ class EvaluationInputAdapter:
         try:
             if etype == EvidenceType.OUTPUT:
                 out = OutputEvidence(**payload)
+                if status_val is not None:
+                    setattr(out, "capture_status", status_val)
+                    setattr(out, "status", status_val)
                 if is_reference:
                     item.reference_output = out
+                    item.reference_output_status = status_str
                 else:
                     item.target_output = out
+                    item.target_output_status = status_str
             elif etype == EvidenceType.ERROR:
                 err = ErrorEvidence(**payload)
+                if status_val is not None:
+                    setattr(err, "capture_status", status_val)
+                    setattr(err, "status", status_val)
                 if is_reference:
                     item.reference_error = err
+                    item.reference_error_status = status_str
                 else:
                     item.target_error = err
+                    item.target_error_status = status_str
             elif etype == EvidenceType.DATABASE:
+                if "status" not in payload and status_val is not None:
+                    payload["status"] = status_val
                 db = DatabaseEvidence(**payload)
+                if status_val is not None:
+                    setattr(db, "capture_status", status_val)
+                    setattr(db, "status", status_val)
                 if is_reference:
                     item.reference_database = db
+                    item.reference_database_status = status_str
                 else:
                     item.target_database = db
+                    item.target_database_status = status_str
             elif etype == EvidenceType.FILESYSTEM:
+                if "status" not in payload and status_val is not None:
+                    payload["status"] = status_val
                 fs = FileEvidence(**payload)
+                if status_val is not None:
+                    setattr(fs, "capture_status", status_val)
+                    setattr(fs, "status", status_val)
                 if is_reference:
                     item.reference_file = fs
+                    item.reference_file_status = status_str
                 else:
                     item.target_file = fs
+                    item.target_file_status = status_str
             elif etype == EvidenceType.HTTP:
                 http_ev = HttpEvidence(**payload)
+                if status_val is not None:
+                    setattr(http_ev, "capture_status", status_val)
+                    setattr(http_ev, "status", status_val)
                 if is_reference:
                     item.reference_http = http_ev
+                    item.reference_http_status = status_str
                 else:
                     item.target_http = http_ev
+                    item.target_http_status = status_str
             elif etype == EvidenceType.TRACE:
                 tr = TraceEvidence(**payload)
+                if status_val is not None:
+                    setattr(tr, "capture_status", status_val)
+                    setattr(tr, "status", status_val)
                 if is_reference:
                     item.reference_trace = tr
+                    item.reference_trace_status = status_str
                 else:
                     item.target_trace = tr
+                    item.target_trace_status = status_str
         except Exception as exc:
             logger.debug(f"Could not parse typed payload for {etype}: {exc}")
 
 
 evaluation_input_adapter = EvaluationInputAdapter()
+

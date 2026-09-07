@@ -64,6 +64,7 @@ def compute_content_hash(data: Any) -> str:
 
 class OutputEvidence(BaseModel):
     """Execution output facts: canonical & raw output, exit code, stdout/stderr, latency."""
+    model_config = {"extra": "allow"}
     raw_output: Optional[Any] = None
     normalized_output: dict[str, Any] = Field(default_factory=dict)
     stdout: Optional[str] = None
@@ -73,22 +74,26 @@ class OutputEvidence(BaseModel):
     headers: Optional[dict[str, str]] = None
     duration_ms: float = 0.0
     execution_status: str = "SUCCESS"
+    status: EvidenceCaptureStatus = EvidenceCaptureStatus.CAPTURED
     error_message: Optional[str] = None
 
 
 class ErrorEvidence(BaseModel):
     """Failure facts: error category, message, execution phase, and provenance."""
+    model_config = {"extra": "allow"}
     category: str = "APPLICATION_ERROR"
     message: str = ""
     phase: str = "EXECUTION"
     exception_type: Optional[str] = None
     stack_trace: Optional[str] = None
     execution_id: Optional[str] = None
+    status: EvidenceCaptureStatus = EvidenceCaptureStatus.CAPTURED
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class RuntimeEvidence(BaseModel):
     """Operating environment and runtime identification."""
+    model_config = {"extra": "allow"}
     os: str = ""
     architecture: str = ""
     python_version: str = ""
@@ -103,6 +108,7 @@ class RuntimeEvidence(BaseModel):
 
 class LogEvidence(BaseModel):
     """Standard and application log evidence."""
+    model_config = {"extra": "allow"}
     stdout_log: Optional[str] = None
     stderr_log: Optional[str] = None
     application_log: Optional[str] = None
@@ -114,6 +120,7 @@ class LogEvidence(BaseModel):
 
 class TraceEvent(BaseModel):
     """Lightweight lifecycle or invocation event."""
+    model_config = {"extra": "allow"}
     event_id: str
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     sequence: int = 0
@@ -124,7 +131,9 @@ class TraceEvent(BaseModel):
 
 class TraceEvidence(BaseModel):
     """Sequence of timeline events for a run."""
+    model_config = {"extra": "allow"}
     events: list[TraceEvent] = Field(default_factory=list)
+    status: EvidenceCaptureStatus = EvidenceCaptureStatus.CAPTURED
 
 
 class FileStateSnapshot(BaseModel):

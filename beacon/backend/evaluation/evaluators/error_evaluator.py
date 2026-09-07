@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import re
 from typing import Any, Optional, Union
 
+from ..evidence_status import EvidenceSufficiency
 from ..models import (
     BehaviorDifference,
     BehaviorDimension,
@@ -31,6 +32,8 @@ class ErrorEvaluator:
         target_has_error: Optional[bool] = None,
         reference_evidence_id: Optional[str] = None,
         target_evidence_id: Optional[str] = None,
+        reference_status: Optional[Any] = None,
+        target_status: Optional[Any] = None,
     ) -> DimensionResult:
         """Evaluates whether error behavior matches between Reference and Target.
 
@@ -38,6 +41,12 @@ class ErrorEvaluator:
         are inferred from whether reference_error / target_error objects are present.
         """
         err_policy = policy.error_policy
+        evidence_refs = [eid for eid in (reference_evidence_id, target_evidence_id) if eid]
+
+        has_insufficient_status = (
+            EvidenceSufficiency.is_insufficient(reference_status)
+            or EvidenceSufficiency.is_insufficient(target_status)
+        )
 
         # Infer error presence from the objects when not explicitly provided
         if reference_has_error is None:
@@ -47,6 +56,30 @@ class ErrorEvaluator:
 
         # Case 1: Both succeeded without error
         if not reference_has_error and not target_has_error:
+            if has_insufficient_status:
+                ref_st_str = EvidenceSufficiency.get_status_str(reference_status) or "CAPTURED"
+                tgt_st_str = EvidenceSufficiency.get_status_str(target_status) or "CAPTURED"
+                diff = BehaviorDifference(
+                    dimension=BehaviorDimension.ERROR,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    reference_evidence_id=reference_evidence_id,
+                    target_evidence_id=target_evidence_id,
+                    reference_value=ref_st_str,
+                    target_value=tgt_st_str,
+                    comparison_method="error_capture_status",
+                    details={"message": f"Error capture status is insufficient (ref: {ref_st_str}, target: {tgt_st_str})."},
+                )
+                return DimensionResult(
+                    dimension=BehaviorDimension.ERROR,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    comparison_method="error_capture_status",
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    differences=[diff],
+                    evidence_references=evidence_refs,
+                )
+
             return DimensionResult(
                 dimension=BehaviorDimension.ERROR,
                 status=EvaluationVerdict.EQUIVALENT,
@@ -235,6 +268,33 @@ class ErrorEvaluator:
         evidence_refs = [eid for eid in (reference_evidence_id, target_evidence_id) if eid]
 
         if not differences:
+            if has_insufficient_status:
+                ref_st_str = EvidenceSufficiency.get_status_str(reference_status) or "CAPTURED"
+                tgt_st_str = EvidenceSufficiency.get_status_str(target_status) or "CAPTURED"
+                diff = BehaviorDifference(
+                    dimension=BehaviorDimension.ERROR,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    reference_evidence_id=reference_evidence_id,
+                    target_evidence_id=target_evidence_id,
+                    reference_value=ref_st_str,
+                    target_value=tgt_st_str,
+                    comparison_method="error_capture_status",
+                    details={"message": f"Error capture status is insufficient (ref: {ref_st_str}, target: {tgt_st_str})."},
+                )
+                return DimensionResult(
+                    dimension=BehaviorDimension.ERROR,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    reference_value=reference_error,
+                    target_value=target_error,
+                    comparison_method="error_capture_status",
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    differences=[diff],
+                    evidence_references=evidence_refs,
+                    details={"message": "Error attributes match superficially but evidence capture status was insufficient."},
+                )
+
             return DimensionResult(
                 dimension=BehaviorDimension.ERROR,
                 status=EvaluationVerdict.EQUIVALENT,

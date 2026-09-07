@@ -26,9 +26,14 @@ class EvidenceSufficiency:
 
     @classmethod
     def get_status_str(cls, obj: Any) -> Optional[str]:
-        """Safely extracts status string from an evidence model, dictionary, or record."""
+        """Safely extracts status string from an evidence model, dictionary, string, enum, or record."""
         if obj is None:
             return None
+        if isinstance(obj, str):
+            return obj.upper()
+        from enum import Enum
+        if isinstance(obj, Enum):
+            return str(obj.value).upper()
         if hasattr(obj, "status"):
             val = getattr(obj, "status")
             return str(getattr(val, "value", val)).upper()
@@ -39,7 +44,7 @@ class EvidenceSufficiency:
             val = getattr(obj, "log_status")
             return str(getattr(val, "value", val)).upper()
         if isinstance(obj, dict):
-            for k in ("status", "capture_status", "log_status"):
+            for k in ("capture_status", "log_status", "status"):
                 if k in obj and obj[k] is not None:
                     val = obj[k]
                     return str(getattr(val, "value", val)).upper()
@@ -47,22 +52,16 @@ class EvidenceSufficiency:
 
     @classmethod
     def is_sufficient(cls, obj: Any) -> bool:
-        """Returns True if the evidence status is explicitly CAPTURED or unspecified (payload-based)."""
+        """Returns True ONLY if the evidence status is explicitly CAPTURED or unspecified (payload-based)."""
         st = cls.get_status_str(obj)
         if st is None:
             return True
-        for insuff in cls.INSUFFICIENT_STATUSES:
-            if insuff in st:
-                return False
-        return True
+        return "CAPTURED" in st and not any(insuff in st for insuff in cls.INSUFFICIENT_STATUSES)
 
     @classmethod
     def is_insufficient(cls, obj: Any) -> bool:
-        """Returns True if the evidence status is PARTIAL, NOT_SUPPORTED, NOT_AVAILABLE, FAILED, etc."""
+        """Returns True if the evidence status is PARTIAL, NOT_SUPPORTED, FAILED, or ANY non-CAPTURED/unknown status."""
         st = cls.get_status_str(obj)
         if st is None:
             return False
-        for insuff in cls.INSUFFICIENT_STATUSES:
-            if insuff in st:
-                return True
-        return False
+        return not cls.is_sufficient(obj)

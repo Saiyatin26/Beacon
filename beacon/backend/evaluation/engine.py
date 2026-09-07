@@ -16,6 +16,7 @@ from typing import Any, Optional, Union
 # Accept any EvidenceBundle-like object (canonical from evidence_models or
 # the Phase 4 test shim from evidence.py) via duck-typing.
 
+from execution.evidence_models import OutputEvidence
 from .input_adapter import CorrelatedInputItem, evaluation_input_adapter
 from .models import (
     BehaviorDifference,
@@ -240,16 +241,22 @@ class BehavioralEvaluationEngine:
         if BehaviorDimension.OUTPUT in selected_dimensions:
             ref_out = item.reference_output
             target_out = item.target_output
-            ref_out_payload = (
-                ref_out.normalized_output
-                if (ref_out and ref_out.normalized_output is not None)
-                else (ref_out.raw_output if ref_out else None)
-            )
-            target_out_payload = (
-                target_out.normalized_output
-                if (target_out and target_out.normalized_output is not None)
-                else (target_out.raw_output if target_out else None)
-            )
+            ref_out_status = item.reference_output_status or getattr(ref_out, "capture_status", getattr(ref_out, "status", None))
+            target_out_status = item.target_output_status or getattr(target_out, "capture_status", getattr(target_out, "status", None))
+
+            def _extract_payload(out_obj: Optional[OutputEvidence]) -> Any:
+                if out_obj is None:
+                    return None
+                norm = getattr(out_obj, "normalized_output", None)
+                raw = getattr(out_obj, "raw_output", None)
+                if norm is not None and (norm or raw is None):
+                    return norm
+                if raw is not None:
+                    return raw
+                return norm
+
+            ref_out_payload = _extract_payload(ref_out)
+            target_out_payload = _extract_payload(target_out)
 
             res_out = self.output_eval.evaluate(
                 input_id=item.input_id,
@@ -260,6 +267,8 @@ class BehavioralEvaluationEngine:
                 target_evidence_id=target_eid,
                 reference_present=item.reference_output is not None,
                 target_present=item.target_output is not None,
+                reference_status=ref_out_status,
+                target_status=target_out_status,
             )
             dim_results[BehaviorDimension.OUTPUT] = res_out
             input_diffs.extend(res_out.differences)
@@ -304,6 +313,8 @@ class BehavioralEvaluationEngine:
         )
 
         if BehaviorDimension.ERROR in selected_dimensions:
+            ref_err_status = item.reference_error_status or getattr(item.reference_error, "capture_status", getattr(item.reference_error, "status", None))
+            target_err_status = item.target_error_status or getattr(item.target_error, "capture_status", getattr(item.target_error, "status", None))
             res_err = self.error_eval.evaluate(
                 input_id=item.input_id,
                 reference_error=ref_err_obj,
@@ -313,6 +324,8 @@ class BehavioralEvaluationEngine:
                 target_has_error=target_has_err,
                 reference_evidence_id=ref_eid,
                 target_evidence_id=target_eid,
+                reference_status=ref_err_status,
+                target_status=target_err_status,
             )
             dim_results[BehaviorDimension.ERROR] = res_err
             input_diffs.extend(res_err.differences)

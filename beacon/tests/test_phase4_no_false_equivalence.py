@@ -402,3 +402,288 @@ class TestPhase4NoFalseEquivalence:
         inp_res = res.input_results[0]
         for dim in dims:
             assert inp_res.dimension_results[dim].verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # 9. END-TO-END EVIDENCEBUNDLE CAPTURE_STATUS INTEGRATION TESTS
+    def test_e2e_partial_output_yields_inconclusive(self, policy):
+        """Section 16: Ref & Target Output capture_status=PARTIAL -> INCONCLUSIVE."""
+        session_id = "sess_e2e_part_out"
+        app_id = "app_e2e_1"
+        rec_r = EvidenceRecord(
+            evidence_id="r_part_out",
+            session_id=session_id,
+            input_id="in_part_1",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_part_out",
+            session_id=session_id,
+            input_id="in_part_1",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_part_out",
+            session_id=session_id,
+            correlation_id="c_part",
+            application_id=app_id,
+            input_set_id="is_part",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_part", application_id=app_id, input_set_id="is_part", input_set_hash="h_part", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.input_results[0].dimension_results[BehaviorDimension.OUTPUT].verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_e2e_captured_output_matching_yields_equivalent(self, policy):
+        """Section 17: Ref & Target Output capture_status=CAPTURED -> EQUIVALENT."""
+        session_id = "sess_e2e_cap_out"
+        app_id = "app_e2e_2"
+        rec_r = EvidenceRecord(
+            evidence_id="r_cap_out",
+            session_id=session_id,
+            input_id="in_cap_1",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_cap_out",
+            session_id=session_id,
+            input_id="in_cap_1",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_cap_out",
+            session_id=session_id,
+            correlation_id="c_cap",
+            application_id=app_id,
+            input_set_id="is_cap",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_cap", application_id=app_id, input_set_id="is_cap", input_set_hash="h_cap", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+
+    def test_e2e_captured_output_different_yields_different(self, policy):
+        """Section 18: Ref & Target Output capture_status=CAPTURED with different payload -> DIFFERENT."""
+        session_id = "sess_e2e_diff_out"
+        app_id = "app_e2e_3"
+        rec_r = EvidenceRecord(
+            evidence_id="r_diff_out",
+            session_id=session_id,
+            input_id="in_diff_1",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_diff_out",
+            session_id=session_id,
+            input_id="in_diff_1",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 2}, "normalized_output": {"x": 2}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_diff_out",
+            session_id=session_id,
+            correlation_id="c_diff",
+            application_id=app_id,
+            input_set_id="is_diff",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_diff", application_id=app_id, input_set_id="is_diff", input_set_hash="h_diff", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+
+    def test_e2e_partial_vs_captured_output_yields_inconclusive_unless_diff(self, policy):
+        """Section 19: Ref=PARTIAL, Target=CAPTURED."""
+        session_id = "sess_e2e_part_cap"
+        app_id = "app_e2e_4"
+        # Same values -> INCONCLUSIVE
+        rec_r1 = EvidenceRecord(
+            evidence_id="r_pc1",
+            session_id=session_id,
+            input_id="in_pc_1",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        rec_t1 = EvidenceRecord(
+            evidence_id="t_pc1",
+            session_id=session_id,
+            input_id="in_pc_1",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        bundle1 = EvidenceBundle(
+            bundle_id="bnd_pc1",
+            session_id=session_id,
+            correlation_id="c_pc1",
+            application_id=app_id,
+            input_set_id="is_pc1",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_pc1", application_id=app_id, input_set_id="is_pc1", input_set_hash="h_pc1", records=[rec_r1, rec_t1]),
+            records=[rec_r1, rec_t1],
+        )
+        engine = BehavioralEvaluationEngine()
+        res1 = engine.evaluate_bundle(bundle1, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res1.verdict == EvaluationVerdict.INCONCLUSIVE
+
+        # Different values -> DIFFERENT
+        rec_r2 = EvidenceRecord(
+            evidence_id="r_pc2",
+            session_id=session_id,
+            input_id="in_pc_2",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"raw_output": {"x": 1}, "normalized_output": {"x": 1}},
+        )
+        rec_t2 = EvidenceRecord(
+            evidence_id="t_pc2",
+            session_id=session_id,
+            input_id="in_pc_2",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"x": 999}, "normalized_output": {"x": 999}},
+        )
+        bundle2 = EvidenceBundle(
+            bundle_id="bnd_pc2",
+            session_id=session_id,
+            correlation_id="c_pc2",
+            application_id=app_id,
+            input_set_id="is_pc2",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_pc2", application_id=app_id, input_set_id="is_pc2", input_set_hash="h_pc2", records=[rec_r2, rec_t2]),
+            records=[rec_r2, rec_t2],
+        )
+        res2 = engine.evaluate_bundle(bundle2, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res2.verdict == EvaluationVerdict.DIFFERENT
+
+    def test_e2e_partial_error_evidence_yields_inconclusive(self, policy):
+        """Section 20: Error evidence partial/unsupported checks."""
+        session_id = "sess_e2e_err_part"
+        app_id = "app_e2e_5"
+        rec_r = EvidenceRecord(
+            evidence_id="r_err_p",
+            session_id=session_id,
+            input_id="in_err_p",
+            role="reference",
+            evidence_type=EvidenceType.ERROR,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"message": "Failure occurred", "status_code": 500, "category": "DATABASE"},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_err_p",
+            session_id=session_id,
+            input_id="in_err_p",
+            role="target",
+            evidence_type=EvidenceType.ERROR,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"message": "Failure occurred", "status_code": 500, "category": "DATABASE"},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_err_p",
+            session_id=session_id,
+            correlation_id="c_err_p",
+            application_id=app_id,
+            input_set_id="is_err_p",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_err_p", application_id=app_id, input_set_id="is_err_p", input_set_hash="h_err_p", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.ERROR])
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_e2e_unknown_status_fails_closed_inconclusive(self, policy):
+        """Section 11: Unknown/weird status must fail closed."""
+        session_id = "sess_e2e_weird_st"
+        app_id = "app_e2e_6"
+        rec_r = EvidenceRecord(
+            evidence_id="r_weird",
+            session_id=session_id,
+            input_id="in_weird",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            payload={"raw_output": {"data": 123}, "normalized_output": {"data": 123}},
+        )
+        # Manually assign unknown status
+        rec_r.capture_status = "WEIRD_CUSTOM_STATUS"  # type: ignore
+        rec_t = EvidenceRecord(
+            evidence_id="t_weird",
+            session_id=session_id,
+            input_id="in_weird",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            payload={"raw_output": {"data": 123}, "normalized_output": {"data": 123}},
+        )
+        rec_t.capture_status = "WEIRD_CUSTOM_STATUS"  # type: ignore
+        bundle = EvidenceBundle(
+            bundle_id="bnd_weird",
+            session_id=session_id,
+            correlation_id="c_weird",
+            application_id=app_id,
+            input_set_id="is_weird",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_weird", application_id=app_id, input_set_id="is_weird", input_set_hash="h_weird", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res.verdict != EvaluationVerdict.EQUIVALENT
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_e2e_content_hash_tamper_on_empty_payload_detected(self, policy):
+        """Section 31: Content hash verification works even on empty/falsy payloads."""
+        session_id = "sess_e2e_empty_tamper"
+        app_id = "app_e2e_7"
+        rec_r = EvidenceRecord(
+            evidence_id="r_empty_tamp",
+            session_id=session_id,
+            input_id="in_empty_tamp",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            payload={},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_empty_tamp",
+            session_id=session_id,
+            input_id="in_empty_tamp",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            payload={},
+        )
+        # Intentionally tamper target record content_hash
+        rec_t.content_hash = "0000000000000000000000000000000000000000000000000000000000000000"
+        bundle = EvidenceBundle(
+            bundle_id="bnd_empty_tamp",
+            session_id=session_id,
+            correlation_id="c_et",
+            application_id=app_id,
+            input_set_id="is_et",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_et", application_id=app_id, input_set_id="is_et", input_set_hash="h_et", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+        engine = BehavioralEvaluationEngine()
+        res = engine.evaluate_bundle(bundle, policy=policy, dimensions=[BehaviorDimension.OUTPUT])
+        assert res.verdict == EvaluationVerdict.ERROR
+        assert res.metadata["integrity_issues_count"] > 0
+
