@@ -105,8 +105,31 @@ class BoundaryEvaluator:
                 details={"boundary_category": boundary_category},
             )
 
-        # Both had same error/success outcome; now compare output payloads if available
-        if reference_output is not None and target_output is not None:
+        # Case: Both succeeded -- compare outputs if available
+        if not reference_has_error and not target_has_error:
+            if reference_output is None or target_output is None:
+                diff = BehaviorDifference(
+                    dimension=BehaviorDimension.BOUNDARY,
+                    input_id=input_id,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    reference_evidence_id=reference_evidence_id,
+                    target_evidence_id=target_evidence_id,
+                    reference_value={"boundary_category": boundary_category, "output_present": reference_output is not None},
+                    target_value={"boundary_category": boundary_category, "output_present": target_output is not None},
+                    comparison_method="boundary_evidence_presence",
+                    details={"message": f"Boundary condition '{boundary_category}' has insufficient/missing output evidence."},
+                )
+                return DimensionResult(
+                    dimension=BehaviorDimension.BOUNDARY,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    comparison_method="boundary_evidence_presence",
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
+                    differences=[diff],
+                    evidence_references=evidence_refs,
+                    details={"boundary_category": boundary_category},
+                )
+
             from .output_evaluator import OutputEvaluator
             out_ev = OutputEvaluator()
             out_result = out_ev.evaluate(
@@ -118,10 +141,8 @@ class BoundaryEvaluator:
                 target_evidence_id=target_evidence_id,
             )
             if out_result.verdict == EvaluationVerdict.DIFFERENT:
-                # Relabel differences as BOUNDARY_BEHAVIOR_MISMATCH
-                boundary_diffs = []
-                for d in out_result.differences:
-                    boundary_diffs.append(BehaviorDifference(
+                boundary_diffs = [
+                    BehaviorDifference(
                         dimension=BehaviorDimension.BOUNDARY,
                         input_id=d.input_id,
                         difference_type=DifferenceType.BOUNDARY_BEHAVIOR_MISMATCH,
@@ -132,7 +153,9 @@ class BoundaryEvaluator:
                         target_evidence_id=d.target_evidence_id,
                         comparison_method=d.comparison_method,
                         details={**d.details, "boundary_category": boundary_category},
-                    ))
+                    )
+                    for d in out_result.differences
+                ]
                 return DimensionResult(
                     dimension=BehaviorDimension.BOUNDARY,
                     status=EvaluationVerdict.DIFFERENT,
@@ -145,21 +168,101 @@ class BoundaryEvaluator:
                     evidence_references=evidence_refs,
                     details={"boundary_category": boundary_category},
                 )
+            elif out_result.verdict == EvaluationVerdict.INCONCLUSIVE:
+                return DimensionResult(
+                    dimension=BehaviorDimension.BOUNDARY,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    reference_value=reference_output,
+                    target_value=target_output,
+                    comparison_method="boundary_output",
+                    differences=out_result.differences,
+                    evidence_references=evidence_refs,
+                    details={"boundary_category": boundary_category},
+                )
+            else:
+                return DimensionResult(
+                    dimension=BehaviorDimension.BOUNDARY,
+                    status=EvaluationVerdict.EQUIVALENT,
+                    verdict=EvaluationVerdict.EQUIVALENT,
+                    reference_value={"boundary_category": boundary_category},
+                    target_value={"boundary_category": boundary_category},
+                    comparison_method="boundary_output",
+                    evidence_references=evidence_refs,
+                    details={
+                        "boundary_category": boundary_category,
+                        "message": f"Both implementations handled boundary condition '{boundary_category}' equivalently.",
+                    },
+                )
 
-        # Both handled boundary consistently
-        return DimensionResult(
-            dimension=BehaviorDimension.BOUNDARY,
-            status=EvaluationVerdict.EQUIVALENT,
-            verdict=EvaluationVerdict.EQUIVALENT,
-            reference_value={"boundary_category": boundary_category},
-            target_value={"boundary_category": boundary_category},
-            comparison_method="boundary_outcome",
-            evidence_references=evidence_refs,
-            details={
-                "boundary_category": boundary_category,
-                "message": f"Both implementations handled boundary condition '{boundary_category}' consistently.",
-            },
-        )
+        # Case: Both produced errors -- compare error behavior
+        if reference_has_error and target_has_error:
+            from .error_evaluator import ErrorEvaluator
+            err_ev = ErrorEvaluator()
+            err_result = err_ev.evaluate(
+                input_id=input_id,
+                reference_error=reference_error,
+                target_error=target_error,
+                policy=policy,
+                reference_has_error=True,
+                target_has_error=True,
+                reference_evidence_id=reference_evidence_id,
+                target_evidence_id=target_evidence_id,
+            )
+            if err_result.verdict == EvaluationVerdict.DIFFERENT:
+                boundary_diffs = [
+                    BehaviorDifference(
+                        dimension=BehaviorDimension.BOUNDARY,
+                        input_id=d.input_id,
+                        difference_type=DifferenceType.BOUNDARY_BEHAVIOR_MISMATCH,
+                        field_path=d.field_path,
+                        reference_value=d.reference_value,
+                        target_value=d.target_value,
+                        reference_evidence_id=d.reference_evidence_id,
+                        target_evidence_id=d.target_evidence_id,
+                        comparison_method=d.comparison_method,
+                        details={**d.details, "boundary_category": boundary_category},
+                    )
+                    for d in err_result.differences
+                ]
+                return DimensionResult(
+                    dimension=BehaviorDimension.BOUNDARY,
+                    status=EvaluationVerdict.DIFFERENT,
+                    verdict=EvaluationVerdict.DIFFERENT,
+                    reference_value=reference_error,
+                    target_value=target_error,
+                    comparison_method="boundary_error",
+                    difference_type=DifferenceType.BOUNDARY_BEHAVIOR_MISMATCH,
+                    differences=boundary_diffs,
+                    evidence_references=evidence_refs,
+                    details={"boundary_category": boundary_category},
+                )
+            elif err_result.verdict == EvaluationVerdict.INCONCLUSIVE:
+                return DimensionResult(
+                    dimension=BehaviorDimension.BOUNDARY,
+                    status=EvaluationVerdict.INCONCLUSIVE,
+                    verdict=EvaluationVerdict.INCONCLUSIVE,
+                    reference_value=reference_error,
+                    target_value=target_error,
+                    comparison_method="boundary_error",
+                    differences=err_result.differences,
+                    evidence_references=evidence_refs,
+                    details={"boundary_category": boundary_category},
+                )
+            else:
+                return DimensionResult(
+                    dimension=BehaviorDimension.BOUNDARY,
+                    status=EvaluationVerdict.EQUIVALENT,
+                    verdict=EvaluationVerdict.EQUIVALENT,
+                    reference_value={"boundary_category": boundary_category},
+                    target_value={"boundary_category": boundary_category},
+                    comparison_method="boundary_error",
+                    evidence_references=evidence_refs,
+                    details={
+                        "boundary_category": boundary_category,
+                        "message": f"Both implementations produced equivalent error behaviors on boundary '{boundary_category}'.",
+                    },
+                )
 
 
 boundary_evaluator = BoundaryEvaluator()

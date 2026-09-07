@@ -96,6 +96,7 @@ class BehavioralEvaluationEngine:
             all_differences=all_differences,
             integrity_issues=integrity_issues,
             total_items=len(correlated_items),
+            selected_dimensions=selected_dimensions,
         )
 
         res = EvaluationResult(
@@ -120,7 +121,7 @@ class BehavioralEvaluationEngine:
         )
 
         # Compute deterministic evaluation hash
-        res.evaluation_hash = self._compute_evaluation_hash(res)
+        res.evaluation_hash = self._compute_evaluation_hash(res, selected_dimensions=selected_dimensions)
         return res
 
     def _evaluate_correlated_input(
@@ -137,7 +138,7 @@ class BehavioralEvaluationEngine:
         ref_eid = item.reference_records[0].evidence_id if item.reference_records else None
         target_eid = item.target_records[0].evidence_id if item.target_records else None
 
-        # Fail closed if target or reference is completely missing
+        # When target or reference is completely missing -> INCONCLUSIVE
         if item.has_missing_target:
             diff = BehaviorDifference(
                 dimension=BehaviorDimension.OUTPUT,
@@ -151,8 +152,8 @@ class BehavioralEvaluationEngine:
             input_diffs.append(diff)
             dim_results[BehaviorDimension.OUTPUT] = DimensionResult(
                 dimension=BehaviorDimension.OUTPUT,
-                status=EvaluationVerdict.DIFFERENT,
-                verdict=EvaluationVerdict.DIFFERENT,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
                 comparison_method="execution_presence",
                 difference_type=DifferenceType.EVIDENCE_MISSING,
                 differences=[diff],
@@ -160,8 +161,8 @@ class BehavioralEvaluationEngine:
             )
             return InputEvaluationResult(
                 input_id=item.input_id,
-                verdict=EvaluationVerdict.DIFFERENT,
-                status=EvaluationVerdict.DIFFERENT,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
+                status=EvaluationVerdict.INCONCLUSIVE,
                 dimension_results=dim_results,
                 differences=input_diffs,
                 boundary_category=item.boundary_category,
@@ -227,22 +228,49 @@ class BehavioralEvaluationEngine:
             input_diffs.extend(res_out.differences)
 
         # Evaluate 2: ERROR
-        if BehaviorDimension.ERROR in selected_dimensions:
-            ref_has_err = bool(item.reference_error) or (
-                bool(item.reference_output) and getattr(item.reference_output, "exit_code", 0) != 0
-            ) or (
-                bool(item.reference_output) and getattr(item.reference_output, "status_code", 200) >= 400
-            )
-            target_has_err = bool(item.target_error) or (
-                bool(item.target_output) and getattr(item.target_output, "exit_code", 0) != 0
-            ) or (
-                bool(item.target_output) and getattr(item.target_output, "status_code", 200) >= 400
-            )
+        # Extract observable error info from ErrorEvidence or OutputEvidence (status_code, exit_code, stderr)
+        ref_err_obj = item.reference_error
+        if ref_err_obj is None and item.reference_output:
+            out = item.reference_output
+            status_code = getattr(out, "status_code", None) or getattr(out, "http_status", None)
+            exit_code = getattr(out, "exit_code", None)
+            stderr = getattr(out, "stderr", None)
+            if (exit_code is not None and exit_code != 0) or (status_code is not None and status_code >= 400):
+                ref_err_obj = {
+                    "status_code": status_code,
+                    "exit_code": exit_code,
+                    "message": stderr,
+                }
 
+        target_err_obj = item.target_error
+        if target_err_obj is None and item.target_output:
+            out = item.target_output
+            status_code = getattr(out, "status_code", None) or getattr(out, "http_status", None)
+            exit_code = getattr(out, "exit_code", None)
+            stderr = getattr(out, "stderr", None)
+            if (exit_code is not None and exit_code != 0) or (status_code is not None and status_code >= 400):
+                target_err_obj = {
+                    "status_code": status_code,
+                    "exit_code": exit_code,
+                    "message": stderr,
+                }
+
+        ref_has_err = bool(ref_err_obj) or (
+            bool(item.reference_output) and getattr(item.reference_output, "exit_code", None) not in (0, None)
+        ) or (
+            bool(item.reference_output) and (getattr(item.reference_output, "status_code", None) or getattr(item.reference_output, "http_status", None) or 200) >= 400
+        )
+        target_has_err = bool(target_err_obj) or (
+            bool(item.target_output) and getattr(item.target_output, "exit_code", None) not in (0, None)
+        ) or (
+            bool(item.target_output) and (getattr(item.target_output, "status_code", None) or getattr(item.target_output, "http_status", None) or 200) >= 400
+        )
+
+        if BehaviorDimension.ERROR in selected_dimensions:
             res_err = self.error_eval.evaluate(
                 input_id=item.input_id,
-                reference_error=item.reference_error,
-                target_error=item.target_error,
+                reference_error=ref_err_obj,
+                target_error=target_err_obj,
                 policy=policy,
                 reference_has_error=ref_has_err,
                 target_has_error=target_has_err,
@@ -254,8 +282,6 @@ class BehavioralEvaluationEngine:
 
         # Evaluate 3: BOUNDARY
         if BehaviorDimension.BOUNDARY in selected_dimensions:
-            ref_has_err = bool(item.reference_error)
-            target_has_err = bool(item.target_error)
             res_boundary = self.boundary_eval.evaluate(
                 input_id=item.input_id,
                 boundary_category=item.boundary_category,
@@ -263,6 +289,8 @@ class BehavioralEvaluationEngine:
                 target_has_error=target_has_err,
                 reference_output=item.reference_output,
                 target_output=item.target_output,
+                reference_error=ref_err_obj,
+                target_error=target_err_obj,
                 policy=policy,
                 reference_evidence_id=ref_eid,
                 target_evidence_id=target_eid,
@@ -345,6 +373,7 @@ class BehavioralEvaluationEngine:
         all_differences: list[BehaviorDifference],
         integrity_issues: list[str],
         total_items: int,
+        selected_dimensions: Optional[list[BehaviorDimension]] = None,
     ) -> EvaluationSummary:
         """Computes summary metrics, counts, and rollups across all input evaluations."""
         equiv_count = sum(1 for r in input_results if r.verdict == EvaluationVerdict.EQUIVALENT)
@@ -358,10 +387,14 @@ class BehavioralEvaluationEngine:
             overall_verdict = EvaluationVerdict.ERROR
         elif diff_count > 0:
             overall_verdict = EvaluationVerdict.DIFFERENT
-        elif err_count > 0 or inconcl_count > 0:
+        elif err_count > 0:
+            overall_verdict = EvaluationVerdict.ERROR
+        elif inconcl_count > 0:
             overall_verdict = EvaluationVerdict.INCONCLUSIVE
         elif equiv_count > 0 and (equiv_count + na_count) == len(input_results):
             overall_verdict = EvaluationVerdict.EQUIVALENT
+        elif na_count == len(input_results) and len(input_results) > 0:
+            overall_verdict = EvaluationVerdict.NOT_APPLICABLE
         elif not input_results:
             overall_verdict = EvaluationVerdict.NOT_APPLICABLE
         else:
@@ -369,31 +402,43 @@ class BehavioralEvaluationEngine:
 
         # Dimension breakdown summaries
         dim_summaries: dict[BehaviorDimension, DimensionEvaluationSummary] = {}
+        target_dims = selected_dimensions or list(BehaviorDimension)
         for dim in BehaviorDimension:
-            dim_results = [r.dimension_results[dim] for r in input_results if dim in r.dimension_results]
-            d_equiv = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.EQUIVALENT)
-            d_diff = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.DIFFERENT)
-            d_inconcl = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.INCONCLUSIVE)
-            d_na = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.NOT_APPLICABLE)
+            if dim in target_dims:
+                dim_results = [r.dimension_results[dim] for r in input_results if dim in r.dimension_results]
+                d_equiv = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.EQUIVALENT)
+                d_diff = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.DIFFERENT)
+                d_inconcl = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.INCONCLUSIVE)
+                d_na = sum(1 for dr in dim_results if dr.verdict == EvaluationVerdict.NOT_APPLICABLE)
 
-            if d_diff > 0:
-                dim_verdict = EvaluationVerdict.DIFFERENT
-            elif d_inconcl > 0:
-                dim_verdict = EvaluationVerdict.INCONCLUSIVE
-            elif d_equiv > 0:
-                dim_verdict = EvaluationVerdict.EQUIVALENT
+                if d_diff > 0:
+                    dim_verdict = EvaluationVerdict.DIFFERENT
+                elif d_inconcl > 0:
+                    dim_verdict = EvaluationVerdict.INCONCLUSIVE
+                elif d_equiv > 0:
+                    dim_verdict = EvaluationVerdict.EQUIVALENT
+                else:
+                    dim_verdict = EvaluationVerdict.NOT_APPLICABLE
+
+                dim_summaries[dim] = DimensionEvaluationSummary(
+                    dimension=dim,
+                    total_evaluated=len(dim_results),
+                    equivalent_count=d_equiv,
+                    different_count=d_diff,
+                    inconclusive_count=d_inconcl,
+                    not_applicable_count=d_na,
+                    overall_verdict=dim_verdict,
+                )
             else:
-                dim_verdict = EvaluationVerdict.NOT_APPLICABLE
-
-            dim_summaries[dim] = DimensionEvaluationSummary(
-                dimension=dim,
-                total_evaluated=len(dim_results),
-                equivalent_count=d_equiv,
-                different_count=d_diff,
-                inconclusive_count=d_inconcl,
-                not_applicable_count=d_na,
-                overall_verdict=dim_verdict,
-            )
+                dim_summaries[dim] = DimensionEvaluationSummary(
+                    dimension=dim,
+                    total_evaluated=0,
+                    equivalent_count=0,
+                    different_count=0,
+                    inconclusive_count=0,
+                    not_applicable_count=0,
+                    overall_verdict=EvaluationVerdict.NOT_APPLICABLE,
+                )
 
         # Difference counts
         diff_by_type: dict[str, int] = {}
@@ -422,21 +467,73 @@ class BehavioralEvaluationEngine:
             coverage_ratio=coverage,
         )
 
-    def _compute_evaluation_hash(self, result: EvaluationResult) -> str:
-        """Computes deterministic SHA-256 fingerprint over canonical representation."""
+    def _compute_evaluation_hash(
+        self,
+        result: EvaluationResult,
+        selected_dimensions: Optional[list[BehaviorDimension]] = None,
+    ) -> str:
+        """Computes deterministic SHA-256 fingerprint over canonical evaluation content."""
+        canonical_diffs = []
+        for d in result.differences:
+            canonical_diffs.append({
+                "dimension": d.dimension.value if hasattr(d.dimension, "value") else str(d.dimension),
+                "input_id": d.input_id,
+                "difference_type": d.difference_type.value if hasattr(d.difference_type, "value") else str(d.difference_type),
+                "field_path": d.field_path,
+                "reference_value": d.reference_value,
+                "target_value": d.target_value,
+                "reference_evidence_id": d.reference_evidence_id,
+                "target_evidence_id": d.target_evidence_id,
+                "comparison_method": d.comparison_method,
+                "details": d.details,
+            })
+        canonical_diffs.sort(key=lambda x: (x["input_id"], x["dimension"], x["difference_type"], str(x["field_path"])))
+
+        canonical_inputs = []
+        for inp in result.input_results:
+            dim_res_canonical = {}
+            for k, dr in inp.dimension_results.items():
+                k_str = k.value if hasattr(k, "value") else str(k)
+                dim_res_canonical[k_str] = {
+                    "verdict": dr.verdict.value if hasattr(dr.verdict, "value") else str(dr.verdict),
+                    "comparison_method": dr.comparison_method,
+                    "difference_type": dr.difference_type.value if hasattr(dr.difference_type, "value") and dr.difference_type else (str(dr.difference_type) if dr.difference_type else None),
+                }
+            canonical_inputs.append({
+                "input_id": inp.input_id,
+                "verdict": inp.verdict.value if hasattr(inp.verdict, "value") else str(inp.verdict),
+                "boundary_category": inp.boundary_category,
+                "dimensions": dim_res_canonical,
+            })
+        canonical_inputs.sort(key=lambda x: x["input_id"])
+
+        dim_names = [d.value if hasattr(d, "value") else str(d) for d in (selected_dimensions or list(BehaviorDimension))]
+        dim_names.sort()
+
         canonical_dict = {
-            "evaluation_id": result.evaluation_id,
-            "bundle_id": result.bundle_id,
-            "application_id": result.application_id,
-            "verdict": result.verdict.value,
+            "bundle_id": result.bundle_id or "",
+            "application_id": result.application_id or "",
+            "bundle_hash": result.bundle_hash or "",
             "policy_id": result.policy_id,
             "policy_hash": result.policy_hash,
-            "total_differences": result.summary.total_differences,
-            "differences_count": len(result.differences),
-            "bundle_hash": result.bundle_hash,
+            "selected_dimensions": dim_names,
+            "verdict": result.verdict.value if hasattr(result.verdict, "value") else str(result.verdict),
+            "summary": {
+                "total_inputs": result.summary.total_inputs,
+                "evaluated_inputs": result.summary.evaluated_inputs,
+                "equivalent_inputs": result.summary.equivalent_inputs,
+                "different_inputs": result.summary.different_inputs,
+                "inconclusive_inputs": result.summary.inconclusive_inputs,
+                "error_inputs": result.summary.error_inputs,
+                "not_applicable_inputs": result.summary.not_applicable_inputs,
+                "overall_verdict": result.summary.overall_verdict.value if hasattr(result.summary.overall_verdict, "value") else str(result.summary.overall_verdict),
+                "total_differences": result.summary.total_differences,
+            },
+            "inputs": canonical_inputs,
+            "differences": canonical_diffs,
         }
-        canonical = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"), default=str)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        canonical_str = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(canonical_str.encode("utf-8")).hexdigest()
 
 
 behavioral_evaluation_engine = BehavioralEvaluationEngine()

@@ -548,3 +548,491 @@ class TestEvaluationAPIRouter:
             json={"execution_session_id": "sess_non_existent_xyz"},
         )
         assert resp.status_code in (400, 404)
+
+
+# ==============================================================================
+# 9. Phase 4 Comprehensive Remediation & Correctness Verification (31 Scenarios)
+# ==============================================================================
+
+class TestPhase4RemediationCorrectness:
+    """Explicit tests for all 31 Phase 4 correctness requirements."""
+
+    # --- MISSING EVIDENCE (1-5) ---
+
+    def test_1_ref_output_exists_target_output_missing_is_inconclusive(self, default_policy):
+        evaluator = OutputEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-miss-1",
+            reference_payload={"result": 42},
+            target_payload=None,
+            policy=default_policy,
+            reference_evidence_id="ref_out_1",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.status == EvaluationVerdict.INCONCLUSIVE
+
+    def test_2_target_output_exists_ref_output_missing_is_inconclusive(self, default_policy):
+        evaluator = OutputEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-miss-2",
+            reference_payload=None,
+            target_payload={"result": 42},
+            policy=default_policy,
+            target_evidence_id="tgt_out_2",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.status == EvaluationVerdict.INCONCLUSIVE
+
+    def test_3_ref_workflow_exists_target_workflow_missing_is_inconclusive(self, default_policy):
+        evaluator = WorkflowEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-miss-3",
+            reference_trace={"events": ["auth", "process", "done"]},
+            target_trace=None,
+            policy=default_policy,
+            reference_evidence_id="ref_tr_3",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.status == EvaluationVerdict.INCONCLUSIVE
+
+    def test_4_ref_state_exists_target_state_missing_is_inconclusive(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-miss-4",
+            reference_db_or_records={"table": "orders", "operation": "INSERT", "row_count": 1},
+            target_db_or_records=None,
+            policy=default_policy,
+            reference_evidence_id="ref_st_4",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.status == EvaluationVerdict.INCONCLUSIVE
+
+    def test_5_boundary_metadata_exists_required_evidence_missing_is_inconclusive(self, default_policy):
+        evaluator = BoundaryEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-miss-5",
+            boundary_category="MAX_INTEGER",
+            reference_output={"value": 2147483647},
+            target_output=None,
+            policy=default_policy,
+            reference_evidence_id="ref_bnd_5",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+        assert res.status == EvaluationVerdict.INCONCLUSIVE
+
+    # --- ERROR (6-9) ---
+
+    def test_6_ref_http_400_vs_target_http_500_is_different(self, default_policy):
+        evaluator = ErrorEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-err-6",
+            reference_error={"status_code": 400, "message": "Bad request format"},
+            target_error={"status_code": 500, "message": "Internal server crash"},
+            policy=default_policy,
+            reference_has_error=True,
+            target_has_error=True,
+            reference_evidence_id="ref_e_6",
+            target_evidence_id="tgt_e_6",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.ERROR_STATUS_MISMATCH for d in res.differences)
+
+    def test_7_ref_exit_code_1_vs_target_exit_code_2_is_different(self, default_policy):
+        evaluator = ErrorEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-err-7",
+            reference_error={"exit_code": 1, "message": "General error"},
+            target_error={"exit_code": 2, "message": "Misuse of shell builtin"},
+            policy=default_policy,
+            reference_has_error=True,
+            target_has_error=True,
+            reference_evidence_id="ref_e_7",
+            target_evidence_id="tgt_e_7",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.ERROR_STATUS_MISMATCH for d in res.differences)
+
+    def test_8_ref_success_vs_target_error_is_different(self, default_policy):
+        evaluator = ErrorEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-err-8",
+            reference_error=None,
+            target_error={"status_code": 500, "message": "Crash"},
+            policy=default_policy,
+            reference_has_error=False,
+            target_has_error=True,
+            reference_evidence_id="ref_e_8",
+            target_evidence_id="tgt_e_8",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.SUCCESS_ERROR_MISMATCH for d in res.differences)
+
+    def test_9_both_error_insufficient_evidence_is_inconclusive(self, default_policy):
+        evaluator = ErrorEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-err-9",
+            reference_error=None,
+            target_error=None,
+            policy=default_policy,
+            reference_has_error=True,
+            target_has_error=True,
+            reference_evidence_id="ref_e_9",
+            target_evidence_id="tgt_e_9",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # --- BOUNDARY (10-12) ---
+
+    def test_10_same_boundary_equivalent_outputs_is_equivalent(self, default_policy):
+        evaluator = BoundaryEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-bnd-10",
+            boundary_category="EMPTY_STRING",
+            reference_output={"valid": False, "count": 0},
+            target_output={"valid": False, "count": 0},
+            policy=default_policy,
+            reference_evidence_id="ref_b_10",
+            target_evidence_id="tgt_b_10",
+        )
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+
+    def test_11_same_boundary_different_outputs_is_different(self, default_policy):
+        evaluator = BoundaryEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-bnd-11",
+            boundary_category="ZERO_DIVISOR",
+            reference_output={"result": "error_handled"},
+            target_output={"result": "infinity"},
+            policy=default_policy,
+            reference_evidence_id="ref_b_11",
+            target_evidence_id="tgt_b_11",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.BOUNDARY_BEHAVIOR_MISMATCH for d in res.differences)
+
+    def test_12_no_boundary_metadata_is_not_applicable(self, default_policy):
+        evaluator = BoundaryEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-bnd-12",
+            boundary_category=None,
+            reference_output={"result": 10},
+            target_output={"result": 10},
+            policy=default_policy,
+        )
+        assert res.verdict == EvaluationVerdict.NOT_APPLICABLE
+
+    # --- STATE (13-15) ---
+
+    def test_13_equivalent_db_evidence_is_equivalent(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-st-13",
+            reference_db_or_records={"table": "users", "operation": "UPDATE", "row_count": 1},
+            target_db_or_records={"table": "users", "operation": "UPDATE", "row_count": 1},
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_st_13",
+            target_evidence_id="tgt_st_13",
+        )
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+
+    def test_14_different_db_evidence_is_different(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-st-14",
+            reference_db_or_records={"table": "users", "operation": "INSERT", "row_count": 1},
+            target_db_or_records={"table": "users", "operation": "DELETE", "row_count": 1},
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_st_14",
+            target_evidence_id="tgt_st_14",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.DATABASE_MUTATION_MISMATCH for d in res.differences)
+
+    def test_15_missing_target_db_evidence_is_inconclusive(self, default_policy):
+        evaluator = StateEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-st-15",
+            reference_db_or_records={"table": "users", "operation": "UPDATE", "row_count": 1},
+            target_db_or_records=None,
+            policy_or_file=default_policy,
+            reference_evidence_id="ref_st_15",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # --- WORKFLOW (16-18) ---
+
+    def test_16_same_observable_sequence_is_equivalent(self, default_policy):
+        evaluator = WorkflowEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-wf-16",
+            reference_trace={"events": ["stage_parse", "stage_validate", "stage_commit"]},
+            target_trace={"events": ["stage_parse", "stage_validate", "stage_commit"]},
+            policy=default_policy,
+            reference_evidence_id="ref_wf_16",
+            target_evidence_id="tgt_wf_16",
+        )
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+
+    def test_17_different_observable_sequence_is_different(self, default_policy):
+        evaluator = WorkflowEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-wf-17",
+            reference_trace={"events": ["stage_validate", "stage_commit"]},
+            target_trace={"events": ["stage_commit", "stage_validate"]},
+            policy=default_policy,
+            reference_evidence_id="ref_wf_17",
+            target_evidence_id="tgt_wf_17",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+
+    def test_18_missing_target_trace_is_inconclusive(self, default_policy):
+        evaluator = WorkflowEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-wf-18",
+            reference_trace={"events": ["stage_validate", "stage_commit"]},
+            target_trace=None,
+            policy=default_policy,
+            reference_evidence_id="ref_wf_18",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # --- NONFUNCTIONAL (19-22) ---
+
+    def test_19_disabled_nonfunctional_policy_is_not_applicable(self):
+        policy = resolve_comparison_policy("default_v2")
+        evaluator = NonFunctionalEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-nf-19",
+            reference_duration_ms=100.0,
+            target_duration_ms=500.0,
+            policy=policy,
+        )
+        assert res.verdict == EvaluationVerdict.NOT_APPLICABLE
+
+    def test_20_enabled_within_fixed_threshold_is_equivalent(self):
+        policy = ComparisonPolicy(
+            policy_id="nf_policy",
+            max_latency_ratio=2.5,
+        )
+        evaluator = NonFunctionalEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-nf-20",
+            reference_duration_ms=100.0,
+            target_duration_ms=150.0,
+            policy=policy,
+        )
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+
+    def test_21_enabled_threshold_exceeded_is_different(self):
+        policy = ComparisonPolicy(
+            policy_id="nf_policy",
+            max_latency_ratio=1.5,
+        )
+        evaluator = NonFunctionalEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-nf-21",
+            reference_duration_ms=100.0,
+            target_duration_ms=300.0,
+            policy=policy,
+            reference_evidence_id="ref_nf_21",
+            target_evidence_id="tgt_nf_21",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert any(d.difference_type == DifferenceType.NONFUNCTIONAL_THRESHOLD_EXCEEDED for d in res.differences)
+
+    def test_22_enabled_missing_metric_is_inconclusive(self):
+        policy = ComparisonPolicy(
+            policy_id="nf_policy",
+            max_latency_ratio=2.0,
+        )
+        evaluator = NonFunctionalEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-nf-22",
+            reference_duration_ms=100.0,
+            target_duration_ms=None,
+            policy=policy,
+            reference_evidence_id="ref_nf_22",
+        )
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    # --- AGGREGATION (23-27) ---
+
+    def test_23_any_different_yields_overall_different(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        # Create bundle with 2 inputs: one equivalent, one different
+        session_id = "sess_agg_23"
+        app_id = "app_agg"
+        r_out1 = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+        t_out1 = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+        r_out2 = OutputEvidencePayload(status_code=200, raw_output={"val": 10}, normalized_output={"val": 10})
+        t_out2 = OutputEvidencePayload(status_code=200, raw_output={"val": 99}, normalized_output={"val": 99})
+
+        recs = [
+            EvidenceRecord(evidence_id="r1", session_id=session_id, input_id="in-1", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r_out1.model_dump()),
+            EvidenceRecord(evidence_id="t1", session_id=session_id, input_id="in-1", role=AdapterRole.TARGET, evidence_type=EvidenceType.OUTPUT, payload=t_out1.model_dump()),
+            EvidenceRecord(evidence_id="r2", session_id=session_id, input_id="in-2", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r_out2.model_dump()),
+            EvidenceRecord(evidence_id="t2", session_id=session_id, input_id="in-2", role=AdapterRole.TARGET, evidence_type=EvidenceType.OUTPUT, payload=t_out2.model_dump()),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_agg_23",
+            session_id=session_id,
+            application_id=app_id,
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c23", application_id=app_id, input_set_id="is23", input_set_hash="h23", records=recs),
+            records=recs,
+        )
+        res = engine.evaluate_bundle(bundle, policy=default_policy)
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+
+    def test_24_no_different_with_inconclusive_yields_overall_inconclusive(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        # Input 1: equivalent, Input 2: target missing (inconclusive)
+        session_id = "sess_agg_24"
+        app_id = "app_agg"
+        r_out1 = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+        t_out1 = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+        r_out2 = OutputEvidencePayload(status_code=200, raw_output={"val": 10}, normalized_output={"val": 10})
+
+        recs = [
+            EvidenceRecord(evidence_id="r1", session_id=session_id, input_id="in-1", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r_out1.model_dump()),
+            EvidenceRecord(evidence_id="t1", session_id=session_id, input_id="in-1", role=AdapterRole.TARGET, evidence_type=EvidenceType.OUTPUT, payload=t_out1.model_dump()),
+            EvidenceRecord(evidence_id="r2", session_id=session_id, input_id="in-2", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r_out2.model_dump()),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_agg_24",
+            session_id=session_id,
+            application_id=app_id,
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c24", application_id=app_id, input_set_id="is24", input_set_hash="h24", records=recs),
+            records=recs,
+        )
+        res = engine.evaluate_bundle(bundle, policy=default_policy)
+        assert res.verdict == EvaluationVerdict.INCONCLUSIVE
+
+    def test_25_all_required_dimensions_equivalent_yields_overall_equivalent(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        session_id = "sess_agg_25"
+        app_id = "app_agg"
+        r_out = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+        t_out = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+
+        recs = [
+            EvidenceRecord(evidence_id="r1", session_id=session_id, input_id="in-1", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r_out.model_dump()),
+            EvidenceRecord(evidence_id="t1", session_id=session_id, input_id="in-1", role=AdapterRole.TARGET, evidence_type=EvidenceType.OUTPUT, payload=t_out.model_dump()),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_agg_25",
+            session_id=session_id,
+            application_id=app_id,
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c25", application_id=app_id, input_set_id="is25", input_set_hash="h25", records=recs),
+            records=recs,
+        )
+        res = engine.evaluate_bundle(bundle, policy=default_policy)
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+
+    def test_26_not_applicable_dimensions_do_not_falsely_fail_evaluation(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        # Bundle with only output evidence (other 4 dimensions return NOT_APPLICABLE)
+        bundle = create_sample_bundle(tamper=False, include_difference=False)
+        res = engine.evaluate_bundle(bundle, policy=default_policy)
+        assert res.verdict == EvaluationVerdict.EQUIVALENT
+        # Verify NOT_APPLICABLE dimensions exist but overall verdict is EQUIVALENT
+        assert res.summary.dimension_summaries[BehaviorDimension.STATE].overall_verdict == EvaluationVerdict.NOT_APPLICABLE
+        assert res.summary.dimension_summaries[BehaviorDimension.WORKFLOW].overall_verdict == EvaluationVerdict.NOT_APPLICABLE
+
+    def test_27_unselected_dimensions_do_not_affect_overall_verdict(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        # Given matching outputs but mismatched trace in evidence
+        session_id = "sess_agg_27"
+        app_id = "app_agg"
+        r_out = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+        t_out = OutputEvidencePayload(status_code=200, raw_output={"val": 1}, normalized_output={"val": 1})
+        r_tr = TraceEvidencePayload(call_sequence=["A", "B"])
+        t_tr = TraceEvidencePayload(call_sequence=["B", "A"])  # differing trace
+
+        recs = [
+            EvidenceRecord(evidence_id="r1", session_id=session_id, input_id="in-1", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r_out.model_dump()),
+            EvidenceRecord(evidence_id="t1", session_id=session_id, input_id="in-1", role=AdapterRole.TARGET, evidence_type=EvidenceType.OUTPUT, payload=t_out.model_dump()),
+            EvidenceRecord(evidence_id="r2", session_id=session_id, input_id="in-1", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.TRACE, payload=r_tr.model_dump()),
+            EvidenceRecord(evidence_id="t2", session_id=session_id, input_id="in-1", role=AdapterRole.TARGET, evidence_type=EvidenceType.TRACE, payload=t_tr.model_dump()),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_agg_27",
+            session_id=session_id,
+            application_id=app_id,
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c27", application_id=app_id, input_set_id="is27", input_set_hash="h27", records=recs),
+            records=recs,
+        )
+        # When evaluating with ONLY OUTPUT dimension selected, workflow mismatch is ignored
+        res_output_only = engine.evaluate_bundle(
+            bundle=bundle,
+            policy=default_policy,
+            dimensions=[BehaviorDimension.OUTPUT],
+        )
+        assert res_output_only.verdict == EvaluationVerdict.EQUIVALENT
+
+    # --- DETERMINISM (28-30) ---
+
+    def test_28_evaluate_exact_same_bundle_twice_same_evaluation_hash(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        bundle = create_sample_bundle(tamper=False, include_difference=False)
+
+        res1 = engine.evaluate_bundle(bundle=bundle, policy=default_policy)
+        res2 = engine.evaluate_bundle(bundle=bundle, policy=default_policy)
+        assert res1.evaluation_hash == res2.evaluation_hash
+
+    def test_29_same_policy_twice_same_policy_hash(self):
+        p1 = ComparisonPolicy(policy_id="test_hash", float_tolerance=0.01, ignore_keys=["z", "a"])
+        p2 = ComparisonPolicy(policy_id="test_hash", float_tolerance=0.01, ignore_keys=["a", "z"])
+        assert p1.compute_policy_hash() == p2.compute_policy_hash()
+
+    def test_30_equivalent_evidence_ordering_produces_stable_evaluation(self, default_policy):
+        engine = BehavioralEvaluationEngine()
+        session_id = "sess_det_30"
+        app_id = "app_det"
+        r1 = OutputEvidencePayload(status_code=200, raw_output={"v": 1}, normalized_output={"v": 1})
+        t1 = OutputEvidencePayload(status_code=200, raw_output={"v": 1}, normalized_output={"v": 1})
+        r2 = OutputEvidencePayload(status_code=200, raw_output={"v": 2}, normalized_output={"v": 2})
+        t2 = OutputEvidencePayload(status_code=200, raw_output={"v": 2}, normalized_output={"v": 2})
+
+        rec_r1 = EvidenceRecord(evidence_id="r1", session_id=session_id, input_id="in-01", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r1.model_dump())
+        rec_t1 = EvidenceRecord(evidence_id="t1", session_id=session_id, input_id="in-01", role=AdapterRole.TARGET, evidence_type=EvidenceType.OUTPUT, payload=t1.model_dump())
+        rec_r2 = EvidenceRecord(evidence_id="r2", session_id=session_id, input_id="in-02", role=AdapterRole.REFERENCE, evidence_type=EvidenceType.OUTPUT, payload=r2.model_dump())
+        rec_t2 = EvidenceRecord(evidence_id="t2", session_id=session_id, input_id="in-02", role=AdapterRole.TARGET, evidence_type=EvidenceType.OUTPUT, payload=t2.model_dump())
+
+        bundle_order1 = EvidenceBundle(
+            bundle_id="bnd_det_30",
+            session_id=session_id,
+            application_id=app_id,
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c30", application_id=app_id, input_set_id="is30", input_set_hash="h30", records=[rec_r1, rec_t1, rec_r2, rec_t2]),
+            records=[rec_r1, rec_t1, rec_r2, rec_t2],
+        )
+        bundle_order2 = EvidenceBundle(
+            bundle_id="bnd_det_30",
+            session_id=session_id,
+            application_id=app_id,
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c30", application_id=app_id, input_set_id="is30", input_set_hash="h30", records=[rec_t2, rec_r1, rec_t1, rec_r2]),
+            records=[rec_t2, rec_r1, rec_t1, rec_r2],
+        )
+        res1 = engine.evaluate_bundle(bundle_order1, policy=default_policy)
+        res2 = engine.evaluate_bundle(bundle_order2, policy=default_policy)
+        assert res1.verdict == res2.verdict
+        assert res1.evaluation_hash == res2.evaluation_hash
+
+    # --- TRACEABILITY (31) ---
+
+    def test_31_all_detected_behavioral_differences_contain_evidence_ids(self, default_policy):
+        evaluator = OutputEvaluator()
+        res = evaluator.evaluate(
+            input_id="in-tr-31",
+            reference_payload={"status": "A"},
+            target_payload={"status": "B"},
+            policy=default_policy,
+            reference_evidence_id="ref_trace_31",
+            target_evidence_id="tgt_trace_31",
+        )
+        assert res.verdict == EvaluationVerdict.DIFFERENT
+        assert len(res.differences) > 0
+        for diff in res.differences:
+            assert diff.reference_evidence_id == "ref_trace_31"
+            assert diff.target_evidence_id == "tgt_trace_31"
+            assert diff.input_id == "in-tr-31"
+

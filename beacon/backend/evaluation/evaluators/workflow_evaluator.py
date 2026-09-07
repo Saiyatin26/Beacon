@@ -45,7 +45,7 @@ class WorkflowEvaluator:
             diff = BehaviorDifference(
                 dimension=BehaviorDimension.WORKFLOW,
                 input_id=input_id,
-                difference_type=DifferenceType.WORKFLOW_SEQUENCE_MISMATCH,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
                 reference_evidence_id=reference_evidence_id,
                 target_evidence_id=target_evidence_id,
                 reference_value=bool(reference_trace),
@@ -59,10 +59,10 @@ class WorkflowEvaluator:
             )
             return DimensionResult(
                 dimension=BehaviorDimension.WORKFLOW,
-                status=EvaluationVerdict.DIFFERENT,
-                verdict=EvaluationVerdict.DIFFERENT,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
                 comparison_method="presence_check",
-                difference_type=DifferenceType.WORKFLOW_SEQUENCE_MISMATCH,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
                 differences=[diff],
                 evidence_references=evidence_refs,
             )
@@ -134,16 +134,28 @@ class WorkflowEvaluator:
         )
 
     def _extract_events(self, trace_obj: Any, filter_internal: bool) -> list[str]:
+        def _get(obj: Any, *keys: str) -> Any:
+            if isinstance(obj, dict):
+                for k in keys:
+                    if k in obj and obj[k] is not None:
+                        return obj[k]
+            for k in keys:
+                if hasattr(obj, k):
+                    v = getattr(obj, k)
+                    if v is not None:
+                        return v
+            return None
+
         # Support TraceEvidencePayload.call_sequence as a direct string list
-        call_seq = getattr(trace_obj, "call_sequence", None)
+        call_seq = _get(trace_obj, "call_sequence")
         if call_seq is not None and isinstance(call_seq, list):
             if all(isinstance(e, str) for e in call_seq):
                 return list(call_seq)
 
         raw_events = (
-            getattr(trace_obj, "events", None)
-            or getattr(trace_obj, "spans", None)
-            or getattr(trace_obj, "stages", None)
+            _get(trace_obj, "events")
+            or _get(trace_obj, "spans")
+            or _get(trace_obj, "stages")
             or []
         )
 

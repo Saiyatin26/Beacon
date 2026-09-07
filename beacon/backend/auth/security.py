@@ -142,14 +142,23 @@ def create_access_token(
         for m in memberships:
             membership_dict[m.project_id] = m.role.value if hasattr(m.role, "value") else str(m.role)
 
+    if isinstance(user, dict):
+        user_id = user.get("user_id") or user.get("sub", "admin")
+        username = user.get("username") or user.get("sub", "admin")
+        is_sys_admin = bool(user.get("is_system_admin") or user.get("role") == "admin" or user.get("is_admin"))
+    else:
+        user_id = user.user_id
+        username = user.username
+        is_sys_admin = bool(user.is_system_admin)
+
     header = {
         "alg": "HS256",
         "typ": "JWT",
     }
     payload = {
-        "sub": user.user_id,
-        "username": user.username,
-        "is_system_admin": bool(user.is_system_admin),
+        "sub": user_id,
+        "username": username,
+        "is_system_admin": is_sys_admin,
         "jti": jti,
         "memberships": membership_dict,
         "iat": int(now.timestamp()),

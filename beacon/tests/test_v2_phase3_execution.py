@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "backend"))
+sys.path.append(str(ROOT))
 
 from api.main import app
 from auth import create_access_token

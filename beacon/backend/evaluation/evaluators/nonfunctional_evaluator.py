@@ -60,11 +60,25 @@ class NonfunctionalEvaluator:
         evidence_refs = [eid for eid in (reference_evidence_id, target_evidence_id) if eid]
 
         if reference_duration_ms is None or target_duration_ms is None:
+            diff = BehaviorDifference(
+                dimension=BehaviorDimension.NONFUNCTIONAL,
+                input_id=input_id,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                reference_evidence_id=reference_evidence_id,
+                target_evidence_id=target_evidence_id,
+                reference_value={"duration_ms": reference_duration_ms},
+                target_value={"duration_ms": target_duration_ms},
+                comparison_method="missing_duration",
+                details={"message": "Execution duration metrics not available for both implementations."},
+            )
             return DimensionResult(
                 dimension=BehaviorDimension.NONFUNCTIONAL,
-                status=EvaluationVerdict.NOT_APPLICABLE,
-                verdict=EvaluationVerdict.NOT_APPLICABLE,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
                 comparison_method="missing_duration",
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                differences=[diff],
+                evidence_references=evidence_refs,
                 details={"message": "Execution duration metrics not available for both implementations."},
             )
 

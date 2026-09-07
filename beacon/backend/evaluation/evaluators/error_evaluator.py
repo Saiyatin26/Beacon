@@ -87,8 +87,8 @@ class ErrorEvaluator:
         # Case 3: Both produced errors — compare attributes
         differences: list[BehaviorDifference] = []
 
-        ref_status = self._get_attr(reference_error, ["status_code", "exit_code", "status"])
-        target_status = self._get_attr(target_error, ["status_code", "exit_code", "status"])
+        ref_status = self._get_attr(reference_error, ["status_code", "exit_code", "status", "http_status"])
+        target_status = self._get_attr(target_error, ["status_code", "exit_code", "status", "http_status"])
 
         ref_code = self._get_attr(reference_error, ["error_code", "code", "type"])
         target_code = self._get_attr(target_error, ["error_code", "code", "type"])
@@ -98,6 +98,64 @@ class ErrorEvaluator:
 
         ref_msg = self._get_attr(reference_error, ["message", "error_message", "error", "stderr"])
         target_msg = self._get_attr(target_error, ["message", "error_message", "error", "stderr"])
+
+        has_any_ref_info = any(v is not None for v in (ref_status, ref_code, ref_category, ref_msg))
+        has_any_target_info = any(v is not None for v in (target_status, target_code, target_category, target_msg))
+
+        # If both produced errors but neither has detailed error evidence
+        if not has_any_ref_info and not has_any_target_info:
+            diff = BehaviorDifference(
+                dimension=BehaviorDimension.ERROR,
+                input_id=input_id,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                reference_evidence_id=reference_evidence_id,
+                target_evidence_id=target_evidence_id,
+                reference_value=reference_error,
+                target_value=target_error,
+                comparison_method="insufficient_error_evidence",
+                details={"message": "Both implementations produced errors, but detailed error evidence is unavailable."},
+            )
+            return DimensionResult(
+                dimension=BehaviorDimension.ERROR,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
+                reference_value=reference_error,
+                target_value=target_error,
+                comparison_method="insufficient_error_evidence",
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                differences=[diff],
+                evidence_references=[eid for eid in (reference_evidence_id, target_evidence_id) if eid],
+                details={"message": "Insufficient error evidence to establish error equivalence."},
+            )
+
+        # If one has error details and the other has none
+        if has_any_ref_info != has_any_target_info:
+            diff = BehaviorDifference(
+                dimension=BehaviorDimension.ERROR,
+                input_id=input_id,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                reference_evidence_id=reference_evidence_id,
+                target_evidence_id=target_evidence_id,
+                reference_value=reference_error,
+                target_value=target_error,
+                comparison_method="error_presence",
+                details={
+                    "message": "Detailed error evidence present for one implementation but absent for the other.",
+                    "reference_has_details": has_any_ref_info,
+                    "target_has_details": has_any_target_info,
+                },
+            )
+            return DimensionResult(
+                dimension=BehaviorDimension.ERROR,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
+                reference_value=reference_error,
+                target_value=target_error,
+                comparison_method="error_presence",
+                difference_type=DifferenceType.EVIDENCE_MISSING,
+                differences=[diff],
+                evidence_references=[eid for eid in (reference_evidence_id, target_evidence_id) if eid],
+            )
 
         # Compare status/exit code
         if err_policy.compare_status and (ref_status is not None or target_status is not None):

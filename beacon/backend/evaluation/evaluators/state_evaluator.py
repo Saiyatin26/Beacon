@@ -89,8 +89,14 @@ class StateEvaluator:
         """Evaluates state from lists of EvidenceRecord objects."""
         from execution.evidence_models import EvidenceType
 
-        ref_db = self._extract_db_from_records(ref_records)
-        target_db = self._extract_db_from_records(target_records)
+        ref_db = self._extract_payload_by_type(ref_records, EvidenceType.DATABASE)
+        target_db = self._extract_payload_by_type(target_records, EvidenceType.DATABASE)
+
+        ref_file = self._extract_payload_by_type(ref_records, EvidenceType.FILESYSTEM)
+        target_file = self._extract_payload_by_type(target_records, EvidenceType.FILESYSTEM)
+
+        ref_http = self._extract_payload_by_type(ref_records, EvidenceType.HTTP)
+        target_http = self._extract_payload_by_type(target_records, EvidenceType.HTTP)
 
         ref_eid = ref_records[0].evidence_id if ref_records else None
         target_eid = target_records[0].evidence_id if target_records else None
@@ -99,25 +105,28 @@ class StateEvaluator:
             input_id=input_id,
             reference_db=ref_db,
             target_db=target_db,
-            reference_file=None,
-            target_file=None,
-            reference_http=None,
-            target_http=None,
+            reference_file=ref_file,
+            target_file=target_file,
+            reference_http=ref_http,
+            target_http=target_http,
             policy=policy,
             reference_evidence_id=ref_eid,
             target_evidence_id=target_eid,
         )
 
-    def _extract_db_from_records(self, records: list) -> Optional[Any]:
-        """Extracts DB evidence payload dict from a list of EvidenceRecord objects."""
+    def _extract_payload_by_type(self, records: list, etype: Any) -> Optional[Any]:
+        """Extracts payload dict from a list of EvidenceRecord objects matching evidence_type."""
         try:
-            from execution.evidence_models import EvidenceType
             for rec in records:
-                if rec.evidence_type == EvidenceType.DATABASE:
-                    return rec.payload
+                if getattr(rec, "evidence_type", None) == etype:
+                    return getattr(rec, "payload", rec)
         except Exception:
             pass
         return None
+
+    def _extract_db_from_records(self, records: list) -> Optional[Any]:
+        from execution.evidence_models import EvidenceType
+        return self._extract_payload_by_type(records, EvidenceType.DATABASE)
 
     def _evaluate_typed(
         self,
@@ -149,29 +158,29 @@ class StateEvaluator:
                 details={"message": "No state or side-effect evidence recorded for either implementation."},
             )
 
-        # If one implementation mutated state and the other did not
+        # If one implementation recorded state/side-effects while the other has none -> INCONCLUSIVE
         if has_ref_state != has_target_state:
             diff = BehaviorDifference(
                 dimension=BehaviorDimension.STATE,
                 input_id=input_id,
-                difference_type=DifferenceType.STATE_DELTA_MISMATCH,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
                 reference_evidence_id=reference_evidence_id,
                 target_evidence_id=target_evidence_id,
                 reference_value={"has_state": has_ref_state},
                 target_value={"has_state": has_target_state},
                 comparison_method="presence_check",
                 details={
-                    "message": "One implementation recorded state/side-effects while the other recorded none.",
+                    "message": "State/side-effect evidence present on one side but absent on the other.",
                     "reference_has_state": has_ref_state,
                     "target_has_state": has_target_state,
                 },
             )
             return DimensionResult(
                 dimension=BehaviorDimension.STATE,
-                status=EvaluationVerdict.DIFFERENT,
-                verdict=EvaluationVerdict.DIFFERENT,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
                 comparison_method="presence_check",
-                difference_type=DifferenceType.STATE_DELTA_MISMATCH,
+                difference_type=DifferenceType.EVIDENCE_MISSING,
                 differences=[diff],
                 evidence_references=evidence_refs,
             )
@@ -248,7 +257,7 @@ class StateEvaluator:
                 BehaviorDifference(
                     dimension=BehaviorDimension.STATE,
                     input_id=input_id,
-                    difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                    difference_type=DifferenceType.EVIDENCE_MISSING,
                     field_path="database",
                     reference_value=bool(ref_db),
                     target_value=bool(target_db),
@@ -272,9 +281,11 @@ class StateEvaluator:
                     return v
             return default
 
-        # Compare single-table payloads ({"table": "...", "row_count": ...})
+        # Compare single-table payloads ({"table": "...", "operation": "...", "row_count": ...})
         ref_table = _get(ref_db, "table")
         target_table = _get(target_db, "table")
+        ref_op = _get(ref_db, "operation", "op", "action")
+        target_op = _get(target_db, "operation", "op", "action")
 
         if ref_table is not None or target_table is not None:
             # Single-table comparison mode
@@ -294,6 +305,23 @@ class StateEvaluator:
                 )
                 return
 
+            if ref_op is not None and target_op is not None:
+                if str(ref_op).upper() != str(target_op).upper():
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                            field_path="database.operation",
+                            reference_value=ref_op,
+                            target_value=target_op,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="db_operation",
+                            details={"ref_operation": ref_op, "target_operation": target_op},
+                        )
+                    )
+
             ref_row_count = _get(ref_db, "row_count", "rows_affected", "rows")
             target_row_count = _get(target_db, "row_count", "rows_affected", "rows")
 
@@ -310,6 +338,24 @@ class StateEvaluator:
                             reference_evidence_id=ref_eid,
                             target_evidence_id=target_eid,
                             comparison_method="table_row_count",
+                        )
+                    )
+
+            ref_data = _get(ref_db, "records", "data", "rows_data")
+            target_data = _get(target_db, "records", "data", "rows_data")
+            if ref_data is not None and target_data is not None:
+                if ref_data != target_data:
+                    differences.append(
+                        BehaviorDifference(
+                            dimension=BehaviorDimension.STATE,
+                            input_id=input_id,
+                            difference_type=DifferenceType.DATABASE_MUTATION_MISMATCH,
+                            field_path=f"database.tables.{ref_table or target_table}.records",
+                            reference_value=ref_data,
+                            target_value=target_data,
+                            reference_evidence_id=ref_eid,
+                            target_evidence_id=target_eid,
+                            comparison_method="db_records",
                         )
                     )
             return

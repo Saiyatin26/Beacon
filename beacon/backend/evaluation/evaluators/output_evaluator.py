@@ -92,8 +92,8 @@ class OutputEvaluator:
             )
             return DimensionResult(
                 dimension=BehaviorDimension.OUTPUT,
-                status=EvaluationVerdict.DIFFERENT,
-                verdict=EvaluationVerdict.DIFFERENT,
+                status=EvaluationVerdict.INCONCLUSIVE,
+                verdict=EvaluationVerdict.INCONCLUSIVE,
                 reference_value=reference_payload,
                 target_value=target_payload,
                 comparison_method="presence_check",
@@ -105,7 +105,7 @@ class OutputEvaluator:
         # Case 3: Both outputs present -- perform deep structural comparison
         differences: list[BehaviorDifference] = []
         self._compare_nodes(
-            path="$",
+            path="",
             ref=reference_payload,
             target=target_payload,
             input_id=input_id,
@@ -168,7 +168,7 @@ class OutputEvaluator:
             target = target.raw_output
 
         # Skip ignored fields
-        if path.split(".")[-1] in policy.ignored_fields:
+        if path and path.split(".")[-1] in policy.ignored_fields:
             return
 
         # 1. Type Mismatch Check
@@ -178,13 +178,13 @@ class OutputEvaluator:
                     dimension=BehaviorDimension.OUTPUT,
                     input_id=input_id,
                     difference_type=DifferenceType.NULL_VS_MISSING_MISMATCH,
-                    field_path=path,
+                    field_path=path or "$",
                     reference_value=ref,
                     target_value=target,
                     reference_evidence_id=ref_eid,
                     target_evidence_id=target_eid,
                     comparison_method="type_check",
-                    details={"message": f"Field '{path}' is null in reference but not null in target."},
+                    details={"message": f"Field '{path or '$'}' is null in reference but not null in target."},
                 )
             )
             return
@@ -195,13 +195,13 @@ class OutputEvaluator:
                     dimension=BehaviorDimension.OUTPUT,
                     input_id=input_id,
                     difference_type=DifferenceType.NULL_VS_MISSING_MISMATCH,
-                    field_path=path,
+                    field_path=path or "$",
                     reference_value=ref,
                     target_value=target,
                     reference_evidence_id=ref_eid,
-                    target_evidence_id=target_eid,
+                    target_evidence_id=target_evidence_id,
                     comparison_method="type_check",
-                    details={"message": f"Field '{path}' is not null in reference but null in target."},
+                    details={"message": f"Field '{path or '$'}' is not null in reference but null in target."},
                 )
             )
             return
@@ -219,7 +219,7 @@ class OutputEvaluator:
                     dimension=BehaviorDimension.OUTPUT,
                     input_id=input_id,
                     difference_type=DifferenceType.TYPE_MISMATCH,
-                    field_path=path,
+                    field_path=path or "$",
                     reference_value=ref,
                     target_value=target,
                     reference_evidence_id=ref_eid,
@@ -243,7 +243,7 @@ class OutputEvaluator:
             for key in sorted(missing_in_target):
                 if key in policy.ignored_fields:
                     continue
-                subpath = f"{path}.{key}" if path != "$" else f"$.{key}"
+                subpath = f"{path}.{key}" if path else key
                 differences.append(
                     BehaviorDifference(
                         dimension=BehaviorDimension.OUTPUT,
@@ -264,7 +264,7 @@ class OutputEvaluator:
             for key in sorted(extra_in_target):
                 if key in policy.ignored_fields or policy.ignore_extra_fields:
                     continue
-                subpath = f"{path}.{key}" if path != "$" else f"$.{key}"
+                subpath = f"{path}.{key}" if path else key
                 differences.append(
                     BehaviorDifference(
                         dimension=BehaviorDimension.OUTPUT,
@@ -283,7 +283,7 @@ class OutputEvaluator:
             # Common keys recursive check
             common_keys = ref_keys & target_keys
             for key in sorted(common_keys):
-                subpath = f"{path}.{key}" if path != "$" else f"$.{key}"
+                subpath = f"{path}.{key}" if path else key
                 self._compare_nodes(
                     path=subpath,
                     ref=ref[key],
@@ -304,7 +304,7 @@ class OutputEvaluator:
                         dimension=BehaviorDimension.OUTPUT,
                         input_id=input_id,
                         difference_type=DifferenceType.ARRAY_LENGTH_MISMATCH,
-                        field_path=path,
+                        field_path=path or "$",
                         reference_value=ref,
                         target_value=target,
                         reference_evidence_id=ref_eid,
@@ -320,7 +320,7 @@ class OutputEvaluator:
 
             if policy.arrays == "ordered":
                 for idx, (ref_item, target_item) in enumerate(zip(ref, target)):
-                    subpath = f"{path}[{idx}]"
+                    subpath = f"{path}[{idx}]" if path else f"[{idx}]"
                     self._compare_nodes(
                         path=subpath,
                         ref=ref_item,
@@ -338,7 +338,7 @@ class OutputEvaluator:
                 ref_sorted = sorted(ref, key=lambda x: json.dumps(x, sort_keys=True, default=str))
                 target_sorted = sorted(target, key=lambda x: json.dumps(x, sort_keys=True, default=str))
                 for idx, (ref_item, target_item) in enumerate(zip(ref_sorted, target_sorted)):
-                    subpath = f"{path}[{idx}]"
+                    subpath = f"{path}[{idx}]" if path else f"[{idx}]"
                     self._compare_nodes(
                         path=subpath,
                         ref=ref_item,
@@ -368,7 +368,7 @@ class OutputEvaluator:
                             dimension=BehaviorDimension.OUTPUT,
                             input_id=input_id,
                             difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
-                            field_path=path,
+                            field_path=path or "$",
                             reference_value=ref,
                             target_value=target,
                             reference_evidence_id=ref_eid,
@@ -385,7 +385,7 @@ class OutputEvaluator:
                             dimension=BehaviorDimension.OUTPUT,
                             input_id=input_id,
                             difference_type=DifferenceType.NUMERIC_TOLERANCE_EXCEEDED,
-                            field_path=path,
+                            field_path=path or "$",
                             reference_value=ref,
                             target_value=target,
                             reference_evidence_id=ref_eid,
@@ -407,7 +407,7 @@ class OutputEvaluator:
                             dimension=BehaviorDimension.OUTPUT,
                             input_id=input_id,
                             difference_type=DifferenceType.NUMERIC_TOLERANCE_EXCEEDED,
-                            field_path=path,
+                            field_path=path or "$",
                             reference_value=ref,
                             target_value=target,
                             reference_evidence_id=ref_eid,
@@ -439,7 +439,7 @@ class OutputEvaluator:
                         dimension=BehaviorDimension.OUTPUT,
                         input_id=input_id,
                         difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
-                        field_path=path,
+                        field_path=path or "$",
                         reference_value=ref,
                         target_value=target,
                         reference_evidence_id=ref_eid,
@@ -456,7 +456,7 @@ class OutputEvaluator:
                     dimension=BehaviorDimension.OUTPUT,
                     input_id=input_id,
                     difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
-                    field_path=path,
+                    field_path=path or "$",
                     reference_value=ref,
                     target_value=target,
                     reference_evidence_id=ref_eid,
