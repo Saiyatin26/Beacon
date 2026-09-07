@@ -1,0 +1,221 @@
+"""BEACON V2 — Phase 4 Evaluation Input Adapter.
+
+Extracts, correlates, validates cryptographic integrity, and normalizes Phase 3
+evidence records and bundles for consumption by dimension evaluators.
+"""
+
+from datetime import datetime, timezone
+import hashlib
+import json
+import logging
+from typing import Any, Optional, Union
+from pydantic import BaseModel, Field
+
+from execution.evidence_models import (
+    DatabaseEvidence,
+    ErrorEvidence,
+    EvidenceType,
+    FileEvidence,
+    HttpEvidence,
+    LogEvidence,
+    OutputEvidence,
+    TraceEvidence,
+    compute_content_hash,
+)
+# Accept any EvidenceBundle/EvidenceRecord-like objects via duck-typing.
+# The shim in execution.evidence and canonical execution.evidence_models both work.
+
+logger = logging.getLogger("beacon.evaluation.input_adapter")
+
+
+class CorrelatedInputItem(BaseModel):
+    """Holds correlated Reference and Target evidence records for a specific canonical input_id."""
+    input_id: str
+    reference_records: list[Any] = Field(default_factory=list)
+    target_records: list[Any] = Field(default_factory=list)
+
+    reference_output: Optional[OutputEvidence] = None
+    target_output: Optional[OutputEvidence] = None
+
+    reference_error: Optional[ErrorEvidence] = None
+    target_error: Optional[ErrorEvidence] = None
+
+    reference_database: Optional[DatabaseEvidence] = None
+    target_database: Optional[DatabaseEvidence] = None
+
+    reference_file: Optional[FileEvidence] = None
+    target_file: Optional[FileEvidence] = None
+
+    reference_http: Optional[HttpEvidence] = None
+    target_http: Optional[HttpEvidence] = None
+
+    reference_trace: Optional[TraceEvidence] = None
+    target_trace: Optional[TraceEvidence] = None
+
+    boundary_category: Optional[str] = None
+    is_matched: bool = True
+    has_missing_target: bool = False
+    is_extra_target: bool = False
+    integrity_valid: bool = True
+    integrity_error: Optional[str] = None
+
+
+class EvaluationInputAdapter:
+    """Adapts and correlates Phase 3 EvidenceBundle records by input_id and role."""
+
+    def adapt_bundle(
+        self,
+        bundle: Any,
+        verify_integrity: bool = True,
+    ) -> tuple[list[CorrelatedInputItem], list[str]]:
+        """Correlates evidence records into matched input pairs, verifying tamper-evidence if requested.
+
+        Returns:
+            tuple of (list of CorrelatedInputItem, list of error/warning messages)
+        """
+        issues: list[str] = []
+
+        # 1. Cryptographic Manifest & Bundle Integrity Verification
+        if verify_integrity:
+            if bundle.manifest:
+                recomputed_bundle_hash = bundle.manifest.compute_bundle_hash()
+                if bundle.bundle_hash and bundle.bundle_hash != recomputed_bundle_hash:
+                    err = (
+                        f"TAMPER DETECTED in bundle '{bundle.bundle_id}'! "
+                        f"Expected: {bundle.bundle_hash}, Recomputed: {recomputed_bundle_hash}"
+                    )
+                    logger.error(err)
+                    issues.append(err)
+
+            # Check individual record content hashes
+            for rec in bundle.records:
+                if rec.payload and rec.content_hash:
+                    canonical = json.dumps(rec.payload, sort_keys=True, separators=(",", ":"), default=str)
+                    recomputed_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+                    if recomputed_hash != rec.content_hash:
+                        rec_err = (
+                            f"TAMPER DETECTED: Content hash mismatch for record '{rec.evidence_id}' "
+                            f"(input: {rec.input_id}, role: {rec.role})!"
+                        )
+                        logger.error(rec_err)
+                        issues.append(rec_err)
+
+        # 2. Segregate records by input_id and role
+        input_groups: dict[str, dict[str, list[EvidenceRecord]]] = {}
+
+        for rec in bundle.records:
+            inp_id = rec.input_id or "global"
+            if inp_id not in input_groups:
+                input_groups[inp_id] = {"reference": [], "target": []}
+
+            role_norm = "reference" if rec.role in ("reference", "legacy") else "target"
+            input_groups[inp_id][role_norm].append(rec)
+
+        correlated_items: list[CorrelatedInputItem] = []
+
+        for inp_id, roles in input_groups.items():
+            # Skip global/session-level unassociated items from per-input correlation
+            if inp_id == "global":
+                continue
+
+            ref_recs = roles["reference"]
+            target_recs = roles["target"]
+
+            item = CorrelatedInputItem(
+                input_id=inp_id,
+                reference_records=ref_recs,
+                target_records=target_recs,
+            )
+
+            # Check if any record in this input has an integrity failure reported in issues
+            if any(f"(input: {inp_id}" in issue for issue in issues):
+                item.integrity_valid = False
+                item.integrity_error = "Record tamper detected for this input"
+
+            # Check matching status
+            if ref_recs and not target_recs:
+                item.is_matched = False
+                item.has_missing_target = True
+            elif target_recs and not ref_recs:
+                item.is_matched = False
+                item.is_extra_target = True
+
+            # Populate typed evidence views
+            for rec in ref_recs:
+                self._populate_typed_evidence(item, rec, is_reference=True)
+
+            for rec in target_recs:
+                self._populate_typed_evidence(item, rec, is_reference=False)
+
+            # Detect boundary category from provenance or metadata
+            for rec in ref_recs + target_recs:
+                category = (
+                    rec.metadata.get("boundary_category")
+                    or rec.provenance.get("boundary_category")
+                    or rec.metadata.get("boundary_type")
+                    or rec.metadata.get("origin")
+                )
+                if category and category not in ("diverse_sampling", "standard", "normal"):
+                    item.boundary_category = str(category)
+                    break
+
+            correlated_items.append(item)
+
+        # Sort by input_id for deterministic order
+        correlated_items.sort(key=lambda x: x.input_id)
+        return correlated_items, issues
+
+    def _populate_typed_evidence(
+        self, item: CorrelatedInputItem, rec: Any, is_reference: bool
+    ) -> None:
+        """Parses record payload into strongly typed evidence models where available."""
+        etype = rec.evidence_type
+        payload = dict(rec.payload)  # work with a copy
+
+        # Handle OutputEvidencePayload field mapping:
+        # OutputEvidencePayload uses 'status_code'; OutputEvidence uses 'http_status'
+        if etype == EvidenceType.OUTPUT and "status_code" in payload and "http_status" not in payload:
+            payload["http_status"] = payload.pop("status_code")
+
+        try:
+            if etype == EvidenceType.OUTPUT:
+                out = OutputEvidence(**payload)
+                if is_reference:
+                    item.reference_output = out
+                else:
+                    item.target_output = out
+            elif etype == EvidenceType.ERROR:
+                err = ErrorEvidence(**payload)
+                if is_reference:
+                    item.reference_error = err
+                else:
+                    item.target_error = err
+            elif etype == EvidenceType.DATABASE:
+                db = DatabaseEvidence(**payload)
+                if is_reference:
+                    item.reference_database = db
+                else:
+                    item.target_database = db
+            elif etype == EvidenceType.FILESYSTEM:
+                fs = FileEvidence(**payload)
+                if is_reference:
+                    item.reference_file = fs
+                else:
+                    item.target_file = fs
+            elif etype == EvidenceType.HTTP:
+                http_ev = HttpEvidence(**payload)
+                if is_reference:
+                    item.reference_http = http_ev
+                else:
+                    item.target_http = http_ev
+            elif etype == EvidenceType.TRACE:
+                tr = TraceEvidence(**payload)
+                if is_reference:
+                    item.reference_trace = tr
+                else:
+                    item.target_trace = tr
+        except Exception as exc:
+            logger.debug(f"Could not parse typed payload for {etype}: {exc}")
+
+
+evaluation_input_adapter = EvaluationInputAdapter()

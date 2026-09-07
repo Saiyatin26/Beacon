@@ -210,6 +210,10 @@ app.include_router(adapter_router)
 from api.paired_router import paired_router
 app.include_router(paired_router)
 
+# Phase 4 (V2) Behavioral Equivalence Evaluation Routes
+from api.evaluation_router import evaluation_router
+app.include_router(evaluation_router)
+
 
 
 
