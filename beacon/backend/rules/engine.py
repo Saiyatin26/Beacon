@@ -644,7 +644,7 @@ class ControlledAssessmentEngine:
         Strictly enforces:
         - Model defaults (e.g. delta_detected=False, changed=False) without snapshots or mutation proof are insufficient.
         - Single row_count (e.g. row_count=0 or 10) without before/after state cannot prove NO_STATE_CHANGE or STATE_CHANGE.
-        - SELECT queries alone cannot prove state mutation or no state mutation.
+        - Query statements alone (SELECT, UPDATE, INSERT, DELETE) without before/after state or confirmed persistent mutation records (e.g. affected_rows > 0) cannot prove state change or no state change.
         """
         captured, cap_reason = self.is_state_evidence_captured(item, is_reference)
         if not captured:
@@ -673,10 +673,11 @@ class ControlledAssessmentEngine:
                 getattr(db, "table_row_counts_before", None)
                 and getattr(db, "table_row_counts_after", None)
             )
-            # 3. Mutation queries / records
-            queries = getattr(db, "queries", []) or []
-            has_mutation_queries = any(_is_mutation_query(q) for q in queries)
-            has_mutation_records = bool(hasattr(db, "records") and db.records)
+            # 3. Confirmed persistent mutation records (e.g. affected_rows > 0 or explicit mutation records)
+            has_confirmed_mutation = bool(
+                (hasattr(db, "records") and db.records)
+                or (getattr(db, "affected_rows", None) is not None and getattr(db, "affected_rows") > 0)
+            )
 
             if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
                 # To prove NO_STATE_CHANGE, we MUST have before/after snapshots or before/after row count snapshots
@@ -685,11 +686,11 @@ class ControlledAssessmentEngine:
                 else:
                     db_reasons.append("lacks before/after database snapshots or row-count deltas required to prove NO_STATE_CHANGE")
             elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
-                # To prove STATE_CHANGE, we can have before/after snapshots, before/after row counts, or explicit mutation queries/records
-                if has_snapshots or has_row_count_snapshots or has_mutation_queries or has_mutation_records:
+                # To prove STATE_CHANGE, we MUST have before/after snapshots, before/after row counts, or confirmed persistent mutation records
+                if has_snapshots or has_row_count_snapshots or has_confirmed_mutation:
                     has_db_sufficient = True
                 else:
-                    db_reasons.append("lacks before/after database snapshots or mutation queries/records required to prove STATE_CHANGE")
+                    db_reasons.append("lacks before/after database snapshots or confirmed persistent mutation records required to prove STATE_CHANGE")
             else:
                 has_db_sufficient = True
 
@@ -700,15 +701,16 @@ class ControlledAssessmentEngine:
                 if isinstance(p, dict):
                     has_raw_snapshots = ("snapshot_before" in p and "snapshot_after" in p and p["snapshot_before"] is not None and p["snapshot_after"] is not None)
                     has_raw_counts = bool(p.get("table_row_counts_before") and p.get("table_row_counts_after"))
-                    raw_queries = p.get("queries", []) if isinstance(p.get("queries"), list) else []
-                    has_raw_mut_queries = any(_is_mutation_query(q) for q in raw_queries)
-                    has_raw_mut_records = bool(p.get("records"))
+                    has_raw_confirmed_mutation = bool(
+                        p.get("records")
+                        or (p.get("affected_rows") is not None and isinstance(p.get("affected_rows"), (int, float)) and p.get("affected_rows") > 0)
+                    )
 
                     if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
                         if has_raw_snapshots or has_raw_counts:
                             has_db_sufficient = True
                     elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
-                        if has_raw_snapshots or has_raw_counts or has_raw_mut_queries or has_raw_mut_records:
+                        if has_raw_snapshots or has_raw_counts or has_raw_confirmed_mutation:
                             has_db_sufficient = True
 
         # ----------------------------------------------------
@@ -773,7 +775,13 @@ class ControlledAssessmentEngine:
     def determine_observed_state_behavior(
         self, item: Any, is_reference: bool
     ) -> tuple[str, dict[str, Any]]:
-        """Determines observed state behavior ('CHANGE', 'NO_CHANGE', or 'UNKNOWN') from observational evidence."""
+        """Determines observed state behavior ('CHANGE', 'NO_CHANGE', or 'UNKNOWN') from observational evidence.
+
+        Authoritative precedence:
+        1. Explicit before/after state snapshots (DB and Filesystem)
+        2. Explicit before/after row count snapshots
+        3. Confirmed persistent mutation records (e.g. affected_rows > 0 or mutation records)
+        """
         recs = item.reference_records if is_reference else item.target_records
         db = item.reference_database if is_reference else item.target_database
         fs = item.reference_file if is_reference else item.target_file
@@ -782,7 +790,7 @@ class ControlledAssessmentEngine:
         has_comparison = False
         details: dict[str, Any] = {}
 
-        # 1. Database comparison
+        # 1. Database comparison (Snapshots have highest precedence)
         if db is not None:
             b_snap = getattr(db, "snapshot_before", None)
             a_snap = getattr(db, "snapshot_after", None)
@@ -791,29 +799,25 @@ class ControlledAssessmentEngine:
                 if b_snap != a_snap:
                     state_mutated = True
                     details["db_snapshot_diff"] = True
+                else:
+                    details["db_snapshot_equal"] = True
 
-            rc_b = getattr(db, "table_row_counts_before", {})
-            rc_a = getattr(db, "table_row_counts_after", {})
-            if rc_b and rc_a:
+            elif getattr(db, "table_row_counts_before", None) and getattr(db, "table_row_counts_after", None):
+                rc_b = getattr(db, "table_row_counts_before", {})
+                rc_a = getattr(db, "table_row_counts_after", {})
                 has_comparison = True
                 if rc_b != rc_a:
                     state_mutated = True
                     details["db_row_count_diff"] = True
+                else:
+                    details["db_row_count_equal"] = True
 
-            queries = getattr(db, "queries", []) or []
-            for q in queries:
-                if _is_mutation_query(q):
-                    state_mutated = True
-                    has_comparison = True
-                    details["db_mutation_query"] = q
-                    break
-
-            if hasattr(db, "records") and db.records:
+            elif (hasattr(db, "records") and db.records) or (getattr(db, "affected_rows", None) is not None and getattr(db, "affected_rows") > 0):
                 state_mutated = True
                 has_comparison = True
-                details["db_mutation_records"] = True
+                details["db_confirmed_mutation"] = True
 
-        # Check raw database records
+        # Check raw database records if not already evaluated from adapted model
         for r in recs:
             if getattr(r, "evidence_type", None) == EvidenceType.DATABASE and isinstance(r.payload, dict):
                 p = r.payload
@@ -822,40 +826,33 @@ class ControlledAssessmentEngine:
                     if p["snapshot_before"] != p["snapshot_after"]:
                         state_mutated = True
                         details["raw_db_snapshot_diff"] = True
-                if "table_row_counts_before" in p and "table_row_counts_after" in p and p["table_row_counts_before"] and p["table_row_counts_after"]:
+                    else:
+                        details["raw_db_snapshot_equal"] = True
+                elif "table_row_counts_before" in p and "table_row_counts_after" in p and p["table_row_counts_before"] and p["table_row_counts_after"]:
                     has_comparison = True
                     if p["table_row_counts_before"] != p["table_row_counts_after"]:
                         state_mutated = True
                         details["raw_db_row_count_diff"] = True
-                raw_queries = p.get("queries", []) if isinstance(p.get("queries"), list) else []
-                for q in raw_queries:
-                    if _is_mutation_query(q):
-                        state_mutated = True
-                        has_comparison = True
-                        details["raw_db_mutation_query"] = q
-                        break
-                if p.get("records"):
+                    else:
+                        details["raw_db_row_count_equal"] = True
+                elif p.get("records") or (p.get("affected_rows") is not None and isinstance(p.get("affected_rows"), (int, float)) and p.get("affected_rows") > 0):
                     state_mutated = True
                     has_comparison = True
-                    details["raw_db_records"] = True
+                    details["raw_db_confirmed_mutation"] = True
 
         # 2. Filesystem comparison
         if fs is not None:
-            if getattr(fs, "created_files", None) or getattr(fs, "modified_files", None) or getattr(fs, "deleted_files", None):
-                state_mutated = True
-                has_comparison = True
-                details["fs_file_mutations"] = True
-
             b_fs = getattr(fs, "before_state", {})
             a_fs = getattr(fs, "after_state", {})
             if b_fs is not None and a_fs is not None and (b_fs or a_fs):
                 has_comparison = True
                 all_paths = set(b_fs.keys()) | set(a_fs.keys())
+                fs_diff = False
                 for path in all_paths:
                     bs = b_fs.get(path)
                     as_ = a_fs.get(path)
                     if bs is None or as_ is None:
-                        state_mutated = True
+                        fs_diff = True
                         details["fs_path_missing"] = path
                         break
                     bh = getattr(bs, "sha256_hash", None) or (bs.get("sha256_hash") if isinstance(bs, dict) else None)
@@ -865,18 +862,23 @@ class ControlledAssessmentEngine:
                     bsz = getattr(bs, "size_bytes", 0) if not isinstance(bs, dict) else bs.get("size_bytes", 0)
                     asz = getattr(as_, "size_bytes", 0) if not isinstance(as_, dict) else as_.get("size_bytes", 0)
                     if be != ae or bh != ah or bsz != asz:
-                        state_mutated = True
+                        fs_diff = True
                         details["fs_file_diff"] = path
                         break
+                if fs_diff:
+                    state_mutated = True
+                else:
+                    details["fs_snapshot_equal"] = True
+
+            elif getattr(fs, "created_files", None) or getattr(fs, "modified_files", None) or getattr(fs, "deleted_files", None):
+                state_mutated = True
+                has_comparison = True
+                details["fs_file_mutations"] = True
 
         # Check raw filesystem records
         for r in recs:
             if getattr(r, "evidence_type", None) == EvidenceType.FILESYSTEM and isinstance(r.payload, dict):
                 p = r.payload
-                if ("created_files" in p and p["created_files"]) or ("modified_files" in p and p["modified_files"]) or ("deleted_files" in p and p["deleted_files"]):
-                    state_mutated = True
-                    has_comparison = True
-                    details["raw_fs_file_mutations"] = True
                 if "before_state" in p and "after_state" in p and (p["before_state"] or p["after_state"]):
                     has_comparison = True
                     b_raw = p["before_state"]
@@ -884,6 +886,12 @@ class ControlledAssessmentEngine:
                     if b_raw != a_raw:
                         state_mutated = True
                         details["raw_fs_snapshot_diff"] = True
+                    else:
+                        details["raw_fs_snapshot_equal"] = True
+                elif ("created_files" in p and p["created_files"]) or ("modified_files" in p and p["modified_files"]) or ("deleted_files" in p and p["deleted_files"]):
+                    state_mutated = True
+                    has_comparison = True
+                    details["raw_fs_file_mutations"] = True
 
         if not has_comparison:
             return "UNKNOWN", details

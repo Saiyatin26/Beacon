@@ -2014,43 +2014,244 @@ class TestPhase5ControlledModeAssessment:
         res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
         assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
 
-    # 39. MUTATION QUERY YIELDS STATE_CHANGE PASS (Section 11, 30)
-    def test_mutation_query_yields_state_change_pass(self):
-        """Explicit state-mutating UPDATE statement proves STATE_CHANGE as PASS."""
-        session_id = "sess_p5_mut_q"
-        app_id = "app_p5_mut_q"
+    # 39. MANDATORY QUERY PRECEDENCE TEST 1: UPDATE QUERY WITH EQUAL SNAPSHOTS YIELDS NO_STATE_CHANGE PASS (Section 16, 40)
+    def test_query_precedence_test_1_update_query_with_equal_snapshots_yields_no_state_change_pass(self):
+        """When an UPDATE query was executed but before/after snapshots are equal (e.g. 0 rows affected or no-op), NO_STATE_CHANGE evaluates to PASS."""
+        session_id = "sess_p5_qp1"
+        app_id = "app_p5_qp1"
+
+        snap_a = {"accounts": {"42": {"balance": 100}}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_qp1",
+            session_id=session_id,
+            input_id="inp_qp1",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={
+                "queries": ["UPDATE accounts SET balance = balance - 0 WHERE id = 42"],
+                "snapshot_before": snap_a,
+                "snapshot_after": snap_a,
+            },
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_qp1",
+            session_id=session_id,
+            input_id="inp_qp1",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={
+                "queries": ["UPDATE accounts SET balance = balance - 0 WHERE id = 42"],
+                "snapshot_before": snap_a,
+                "snapshot_after": snap_a,
+            },
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_qp1",
+            session_id=session_id,
+            correlation_id="c_p5_qp1",
+            application_id=app_id,
+            input_set_id="is_p5_qp1",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_qp1", application_id=app_id, input_set_id="is_p5_qp1", input_set_hash="h_qp1", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-QP1-NO-CHANGE",
+            name="No State Change Precedence",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 39B. MANDATORY QUERY PRECEDENCE TEST 2: UPDATE QUERY WITH DIFFERENT SNAPSHOTS YIELDS STATE_CHANGE PASS (Section 16, 40)
+    def test_query_precedence_test_2_update_query_with_different_snapshots_yields_state_change_pass(self):
+        """When an UPDATE query was executed and before/after snapshots differ, STATE_CHANGE evaluates to PASS."""
+        session_id = "sess_p5_qp2"
+        app_id = "app_p5_qp2"
+
+        snap_a = {"accounts": {"42": {"balance": 100}}}
+        snap_b = {"accounts": {"42": {"balance": 50}}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_qp2",
+            session_id=session_id,
+            input_id="inp_qp2",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={
+                "queries": ["UPDATE accounts SET balance = balance - 50 WHERE id = 42"],
+                "snapshot_before": snap_a,
+                "snapshot_after": snap_b,
+            },
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_qp2",
+            session_id=session_id,
+            input_id="inp_qp2",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={
+                "queries": ["UPDATE accounts SET balance = balance - 50 WHERE id = 42"],
+                "snapshot_before": snap_a,
+                "snapshot_after": snap_b,
+            },
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_qp2",
+            session_id=session_id,
+            correlation_id="c_p5_qp2",
+            application_id=app_id,
+            input_set_id="is_p5_qp2",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_qp2", application_id=app_id, input_set_id="is_p5_qp2", input_set_hash="h_qp2", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-QP2-CHANGE",
+            name="State Change Confirmed",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 39C. MANDATORY QUERY PRECEDENCE TEST 3: UPDATE QUERY ALONE WITHOUT CONFIRMATION YIELDS INCONCLUSIVE (Section 4, 38, 40)
+    def test_query_precedence_test_3_update_query_alone_without_snapshots_or_confirmation_yields_inconclusive(self):
+        """UPDATE query without snapshots or confirmed mutation records does not prove STATE_CHANGE and yields INCONCLUSIVE."""
+        session_id = "sess_p5_qp3"
+        app_id = "app_p5_qp3"
 
         rec_r = EvidenceRecord(
-            evidence_id="r_mut_q",
+            evidence_id="r_qp3",
             session_id=session_id,
-            input_id="inp_mut_q",
+            input_id="inp_qp3",
             role="reference",
             evidence_type=EvidenceType.DATABASE,
             capture_status=EvidenceCaptureStatus.CAPTURED,
             payload={"queries": ["UPDATE accounts SET balance = balance - 100 WHERE id = 42"]},
         )
         rec_t = EvidenceRecord(
-            evidence_id="t_mut_q",
+            evidence_id="t_qp3",
             session_id=session_id,
-            input_id="inp_mut_q",
+            input_id="inp_qp3",
             role="target",
             evidence_type=EvidenceType.DATABASE,
             capture_status=EvidenceCaptureStatus.CAPTURED,
             payload={"queries": ["UPDATE accounts SET balance = balance - 100 WHERE id = 42"]},
         )
         bundle = EvidenceBundle(
-            bundle_id="bnd_p5_mut_q",
+            bundle_id="bnd_p5_qp3",
             session_id=session_id,
-            correlation_id="c_p5_mutq",
+            correlation_id="c_p5_qp3",
             application_id=app_id,
-            input_set_id="is_p5_mutq",
-            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_mutq", application_id=app_id, input_set_id="is_p5_mutq", input_set_hash="h_mutq", records=[rec_r, rec_t]),
+            input_set_id="is_p5_qp3",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_qp3", application_id=app_id, input_set_id="is_p5_qp3", input_set_hash="h_qp3", records=[rec_r, rec_t]),
             records=[rec_r, rec_t],
         )
 
         rule = BusinessRule(
-            rule_id="RULE-MUT-CHANGE",
-            name="Mutation Query Required",
+            rule_id="RULE-QP3-CHANGE",
+            name="State Change Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 39D. UPDATE WITH ZERO AFFECTED ROWS YIELDS INCONCLUSIVE FOR STATE_CHANGE (Section 13)
+    def test_update_query_with_zero_affected_rows_yields_inconclusive_for_state_change(self):
+        """UPDATE query with affected_rows=0 (e.g. condition matched 0 rows) yields INCONCLUSIVE for STATE_CHANGE."""
+        session_id = "sess_p5_aff0"
+        app_id = "app_p5_aff0"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_aff0",
+            session_id=session_id,
+            input_id="inp_aff0",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = 0 WHERE id = 99999"], "affected_rows": 0},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_aff0",
+            session_id=session_id,
+            input_id="inp_aff0",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = 0 WHERE id = 99999"], "affected_rows": 0},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_aff0",
+            session_id=session_id,
+            correlation_id="c_p5_aff0",
+            application_id=app_id,
+            input_set_id="is_p5_aff0",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_aff0", application_id=app_id, input_set_id="is_p5_aff0", input_set_hash="h_aff0", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-AFF0-CHANGE",
+            name="State Change Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 39E. CONFIRMED MUTATION RECORDS (AFFECTED ROWS > 0) YIELDS STATE_CHANGE PASS (Section 14)
+    def test_confirmed_mutation_records_yields_state_change_pass(self):
+        """Confirmed persistent mutation records (with affected_rows=1) prove STATE_CHANGE as PASS."""
+        session_id = "sess_p5_aff1"
+        app_id = "app_p5_aff1"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_aff1",
+            session_id=session_id,
+            input_id="inp_aff1",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = 50 WHERE id = 42"], "affected_rows": 1, "records": [{"id": 42, "balance": 50}]},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_aff1",
+            session_id=session_id,
+            input_id="inp_aff1",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = 50 WHERE id = 42"], "affected_rows": 1, "records": [{"id": 42, "balance": 50}]},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_aff1",
+            session_id=session_id,
+            correlation_id="c_p5_aff1",
+            application_id=app_id,
+            input_set_id="is_p5_aff1",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_aff1", application_id=app_id, input_set_id="is_p5_aff1", input_set_hash="h_aff1", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-AFF1-CHANGE",
+            name="Confirmed Mutation Required",
             condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
             expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
         )
