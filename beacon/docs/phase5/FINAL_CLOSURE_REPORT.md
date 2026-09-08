@@ -5,286 +5,135 @@
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary & Status
 
-Phase 5 introduces **Business-Rule Understanding and Controlled Mode Assessment** to BEACON V2. In Controlled Mode, certifiers specify domain-agnostic business rules against which Reference and Target implementations are evaluated independently. This closure pass resolves the final certification-level evidence semantics issues:
-- **Database Snapshot Sufficiency & Phase 3 Contract**: Disambiguating unanchored placeholder empty database snapshots (`{}`) and malformed/error dictionaries (e.g. `{"error": ...}`, `{"users": {}}`, `{"users": {"bad": "x"}}`) from genuinely captured database states conforming to the Phase 3 `DatabaseEvidenceProvider` contract.
-- **Generic Records vs Confirmed Mutation**: Distinguishing generic query result `records` from explicitly confirmed persistent state mutations (`affected_rows > 0`).
+### Status: **COMPLETE — READY FOR INDEPENDENT VERIFICATION**
 
-With all 298 Phase 1–5 tests passing, zero domain hard-coding, complete Reference/Target role isolation, fail-closed evidence status handling, and verified deterministic auditability, Phase 5 is fully closed and ready for independent verification.
+Phase 5 introduces **Business-Rule Understanding and Controlled Mode Assessment** to BEACON V2. In Controlled Mode, certifiers specify domain-agnostic business rules against which Reference and Target implementations are evaluated independently.
 
----
-
-## 2. Previous Phase 5 Status
-
-In preceding passes, Phase 5 established:
-- Canonical Rule DSL models and validators (`BusinessRule`, `RulePredicate`, `CompoundRuleCondition`, `ExpectedBehavior`).
-- Independent role-isolated evaluation contexts (`ref_context` vs `tgt_context`).
-- Three-valued logic (`TriState.TRUE`, `FALSE`, `UNKNOWN`) and strict `field_source` scoping (`input`, `output`, `state`, `error`, `metadata`, `auto`).
-- Fail-closed handling of capture statuses (`CAPTURED`, `PARTIAL`, `FAILED`, `NOT_AVAILABLE`, `NOT_SUPPORTED`, `UNKNOWN`) and explicit `AdaptationFailure` propagation.
-- Strict precedence of before/after state snapshots over query text.
+This contract-lock pass establishes complete alignment between Phase 3 ("What was actually observed") and Phase 5 ("What business rules can be concluded from those observations"):
+- **Phase 3 Contract Lock**: The database snapshot validator strictly enforces the canonical Phase 3 `DatabaseEvidenceProvider` schema: `{"table_name": {"row_count": int, "rows": list[dict], "table_hash": str}}`.
+- **Rejection of Uncontracted Shapes**: Broad, uncontracted dictionary structures (arbitrary row lists `{"users": [{"id": 1}]}`, primary-key row maps `{"users": {"42": {"balance": 100}}}`, empty dicts `{"users": {}}`, arbitrary ints `{"fake_table": 123}`, or error dicts `{"error": "capture failed"}`) are strictly rejected as `INSUFFICIENT` (`INCONCLUSIVE`).
+- **Elimination of Speculative Fields**: Arbitrary payloads or extra model attributes (such as `affected_rows` or `mutation_confirmed`) not guaranteed by Phase 3 are ignored and cannot manufacture certified state mutations.
+- **Genuine Captured Empty State**: Genuinely observed empty tables (`{"users": {"row_count": 0, "rows": [], "table_hash": "..."}}`) are correctly recognized and certified for `NO_STATE_CHANGE`.
+- **Zero Scope Expansion**: No Phase 6 functionality (no rule discovery, invariant mining, OracleSets, RAG, dynamic thresholds, or LLM certification authority) was introduced.
 
 ---
 
-## 3. Remaining Issues Found in Final Audit
+## 2. Phase 3 Evidence Contract Summary
 
-1. **Database Snapshot Sufficiency**: The validator previously treated any non-empty dictionary as a valid database snapshot. Malformed non-contract structures such as `{"error": "capture failed"}`, `{"users": {}}`, or `{"users": {"bad": "x"}}` could have been interpreted as valid observations.
-2. **Generic Records Treated as Mutation**: Generic query row results (e.g., SELECT rows) or arbitrary payloads in `records` were previously capable of satisfying `STATE_CHANGE` without confirmed row modifications (`affected_rows > 0`).
+Phase 3 evidence models (`backend/execution/evidence_models.py`) and evidence providers (`backend/execution/evidence_providers.py`) define the ground truth of observational facts:
 
----
+1. **Database Evidence (`DatabaseEvidenceProvider`)**:
+   - Computes SQLite before/after state snapshots: `{"table_name": {"row_count": cnt, "rows": SecretRedactor.redact(rows), "table_hash": sha256}}`.
+   - Records table row count dictionaries: `table_row_counts_before` and `table_row_counts_after`.
+   - Computes `delta_detected` from before/after snapshots.
+2. **Filesystem Evidence (`FileEvidenceProvider`)**:
+   - Captures path existence, size, and SHA-256 digests (`before_state` and `after_state`).
+   - Tracks explicit `created_files`, `modified_files`, and `deleted_files`.
+3. **Output & Error Evidence (`ProcessExecutionAdapter` / `FunctionExecutionAdapter`)**:
+   - Captures raw/normalized output, stdout/stderr, exit codes, and error exceptions.
+4. **Lifecycle & HTTP Evidence (`TraceEvidenceProvider` / `HttpExecutionAdapter`)**:
+   - Records structured lifecycle trace events and HTTP transactions.
 
-## 4. Root Cause of Empty Snapshot Ambiguity
-
-In Python dictionary comparison, `{}` == `{}` evaluates to `True`. When no tables were configured in `DatabaseEvidenceProvider` or when evidence was unanchored, `{}` was recorded. Treating `{}` == `{}` identically to explicitly observed database tables created a false `PASS` for `NO_STATE_CHANGE` when in reality no database tables were snapshotted.
-
----
-
-## 5. Distinguishing Explicit Empty State from Missing/Placeholder State
-
-The engine now strictly validates snapshot structures against the Phase 3 `DatabaseEvidenceProvider` contract:
-- **Unanchored Placeholder Snapshot (`{}`)**: `len(snapshot) == 0` without table structure $\to$ treated as missing/unanchored observational evidence $\to$ `INCONCLUSIVE`.
-- **Malformed / Non-Contract Snapshots**: Dictionaries containing error markers (`{"error": ...}`), empty table mappings (`{"users": {}}`), or arbitrary non-contract fields (`{"users": {"bad": "x"}}`) $\to$ `INCONCLUSIVE`.
-- **Explicitly Captured Empty Database State**: Contains valid table structure entries (e.g. `{"users": {"row_count": 0, "rows": [], "table_hash": "..."}}` or `table_row_counts_before={"users": 0}`) $\to$ valid observational evidence $\to$ yields `NO_STATE_CHANGE` `PASS` when before and after match.
+Detailed schema mappings are documented in [`docs/phase5/PHASE3_EVIDENCE_CONTRACT.md`](file:///docs/phase5/PHASE3_EVIDENCE_CONTRACT.md).
 
 ---
 
-## 6. Root Cause of Generic Records Ambiguity
+## 3. Database Evidence Semantics
 
-The `records` field on `DatabaseEvidence` or in raw evidence payloads is generic: it can hold query result rows from read queries (e.g. `SELECT`), arbitrary logs, or row dumps. Checking `if db.records:` conflated "records observed" with "persistent mutation confirmed".
-
----
-
-## 7. Actual Phase 3 Meaning of Records
-
-In Phase 3 evidence models:
-- `DatabaseEvidence.records`: Arbitrary rows or query results returned by database execution (can be empty, SELECT rows, or mutation records).
-- Generic rows (e.g. `[{"id": 1, "name": "Alice"}]`) or query log records (e.g. `[{"query": "SELECT ..."}]`) do NOT prove persistent state mutation.
-
----
-
-## 8. Mutation Query Semantics
-
-SQL mutation statements (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DROP`, `ALTER`, `CREATE`, `TRUNCATE`, `REPLACE`) are evaluated under strict evidential discipline:
-- **Mutation statement alone without snapshots or confirmed mutation**: Evaluates to `INCONCLUSIVE` for `STATE_CHANGE`.
-- **Mutation statement with `affected_rows = 0`**: Evaluates to `INCONCLUSIVE` for `STATE_CHANGE`.
-- **Mutation statement with `snapshot_before == snapshot_after`**: Snapshots take absolute precedence $\to$ `NO_STATE_CHANGE` evaluates to `PASS`, `STATE_CHANGE` evaluates to `FAIL`.
-- **Mutation statement with `snapshot_before != snapshot_after`**: Evaluates to `STATE_CHANGE` `PASS`.
+| Evidence Condition | Structure / Shape | Phase 5 Determination | Expected Behavior Verdict |
+|---|---|---|---|
+| **Missing Snapshot** | `snapshot_before=None` or `snapshot_after=None` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Placeholder Empty** | `snapshot_before={}`, `snapshot_after={}` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Malformed: Error** | `{"error": "capture failed"}` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Malformed: Empty Table** | `{"users": {}}` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Malformed: Bad Schema** | `{"users": {"bad": "x"}}` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Malformed: Row List** | `{"users": [{"id": 1}]}` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Malformed: PK Map** | `{"users": {"42": {"balance": 100}}}` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Malformed: Non-Dict** | `{"fake_table": 123}` | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Captured Empty Table** | `{"users": {"row_count": 0, "rows": [], "table_hash": "e3b0..."}}` | `SUFFICIENT` | `NO_STATE_CHANGE` $\to$ `PASS` |
+| **Equal Before/After** | `snapshot_before == snapshot_after` (valid) | `SUFFICIENT` | `NO_STATE_CHANGE` $\to$ `PASS`, `STATE_CHANGE` $\to$ `FAIL` |
+| **Different Before/After** | `snapshot_before != snapshot_after` (valid) | `SUFFICIENT` | `STATE_CHANGE` $\to$ `PASS`, `NO_STATE_CHANGE` $\to$ `FAIL` |
+| **Raw Query Alone** | `{"queries": ["UPDATE ..."]}` (no snapshots) | `INSUFFICIENT` | `INCONCLUSIVE` |
+| **Raw SELECT Query** | `{"queries": ["SELECT ..."]}` (no snapshots) | `INSUFFICIENT` | `INCONCLUSIVE` |
 
 ---
 
-## 9. Affected-Row Semantics
+## 4. Three-Valued Logic & Sufficiency
 
-- `affected_rows = 0`: Explicitly unconfirmed state mutation $\to$ `INCONCLUSIVE` for `STATE_CHANGE`.
-- `affected_rows > 0`: Explicitly confirmed row modification $\to$ supports `STATE_CHANGE` as `PASS`.
-- `affected_rows is None`: Evaluated as unconfirmed unless supported by before/after snapshots.
+Controlled rule evaluation rigorously enforces Three-Valued Logic:
 
----
+$$\text{Verdict} \in \{\text{PASS (TRUE)}, \text{FAIL (FALSE)}, \text{INCONCLUSIVE (UNKNOWN)}\}$$
 
-## 10. Before/After State Precedence
+- **TRUE / PASS**: Conclusively proven by sufficient observational evidence meeting all rule criteria.
+- **FALSE / FAIL**: Conclusively contradicted by sufficient observational evidence.
+- **UNKNOWN / INCONCLUSIVE**: Missing, partial, failed, malformed, or uncontracted evidence.
 
-Authoritative evidence precedence is strictly enforced:
-1. **Direct Before/After State Snapshots** (`snapshot_before` vs `snapshot_after`, `before_state` vs `after_state`): Absolute highest precedence. Overrides any query strings or operations.
-2. **Table Row-Count Deltas** (`table_row_counts_before` vs `table_row_counts_after`).
-3. **Explicit Confirmed Mutation Records** (`affected_rows > 0`).
-
----
-
-## 11. Database Evidence Semantics
-
-`DatabaseEvidence` evaluation strictly adheres to:
-- `row_count` alone does NOT prove `NO_STATE_CHANGE` or `STATE_CHANGE`.
-- `SELECT` alone does NOT prove `STATE_CHANGE`.
-- `_is_valid_db_snapshots` validates that snapshots contain table structures conforming to the Phase 3 schema (`table_hash`, `row_count`, `rows`, or primary-key row mappings).
-- `_is_valid_db_row_counts` validates that table counts contain configured tables with non-negative counts.
-- `_is_confirmed_db_mutation` requires positive affected rows (`affected_rows > 0`).
+**Aggregation Rule**:
+- Any required rule evaluating to `INCONCLUSIVE` produces an overall verdict of `INCONCLUSIVE`.
+- Any required rule evaluating to `FAIL` produces an overall verdict of `FAIL` (or `REJECT`).
+- Overall verdict is `PASS` if and only if ALL required rules evaluate to `PASS`.
 
 ---
 
-## 12. Filesystem Evidence Semantics
+## 5. Role & Source Isolation
 
-`FileEvidence` evaluation follows:
-- `before_state` and `after_state` hashes and sizes are compared per path.
-- Equal hashes and sizes $\to$ `NO_STATE_CHANGE` evaluates to `PASS`.
-- Different hashes or sizes $\to$ `STATE_CHANGE` evaluates to `PASS`.
-- Explicit file absence (`exists=False` before and after) $\to$ `NO_STATE_CHANGE` evaluates to `PASS`.
-- Explicit file creation (`exists: False -> True`) $\to$ `STATE_CHANGE` evaluates to `PASS`.
-- Model defaults alone (`changed=False`) without before/after state $\to$ `INCONCLUSIVE`.
-
----
-
-## 13. Model-Default Handling
-
-Model defaults (`delta_detected=False`, `changed=False`, `state_mutated=False`, `row_count=0`) are never treated as observed behavior unless backed by genuine observational data.
+1. **Role Isolation**:
+   - Reference evidence and Target evidence are maintained in strict isolation during condition and behavior evaluation.
+   - Reference evidence cannot satisfy Target expectations, and Target evidence cannot satisfy Reference expectations.
+2. **Source Isolation**:
+   - Evaluation contexts are partitioned into isolated source zones (`input`, `output`, `state`, `error`, `metadata`).
+   - Rules specifying `field_source="output"` cannot read data from `state` or `error`.
 
 ---
 
-## 14. Reference / Target Role Isolation
+## 6. Persistence & Error Behavior
 
-Strict role isolation is architecturally guaranteed:
-- Reference and Target contexts are extracted independently (`ref_context` vs `tgt_context`).
-- `input` is shared canonical input.
-- `output`, `state`, `error`, `metadata`, and `auto` search only the evaluated role's observations.
-- Target observations (e.g. `secret: 99`) never leak into Reference context.
+- Rule definitions registered in `RuleRegistry` are persistently stored in SQLite (`rules` table).
+- Controlled evaluation runs are persistently stored in SQLite (`controlled_evaluations` and `rule_assessments` tables).
+- Database errors or constraint violations raise explicit persistence failures and are never swallowed.
 
 ---
 
-## 15. Three-Valued Logic Semantics
+## 7. Security, Domain & Phase Boundary Audits
 
-- Three-valued logic (`TriState.TRUE`, `FALSE`, `UNKNOWN`) is preserved across all condition evaluations.
-- Missing fields evaluate to `UNKNOWN`.
-- `UNKNOWN` condition applicability maps strictly to `INCONCLUSIVE` compliance.
-- Explicit `False` remains `False`, explicit `0` remains `0`, explicit `[]` remains `[]`, explicit `{}` remains `{}`.
-
----
-
-## 16. Evidence Status Semantics
-
-All evidence capture statuses fail closed:
-- `CAPTURED` with valid observational fields $\to$ **Sufficient**.
-- `CAPTURED` with model defaults / single count only $\to$ **Insufficient (`INCONCLUSIVE`)**.
-- `PARTIAL`, `FAILED`, `NOT_AVAILABLE`, `NOT_SUPPORTED`, `UNKNOWN` $\to$ **Insufficient (`INCONCLUSIVE`)**.
+1. **Security Audit**:
+   - Rule conditions evaluate purely via deterministic operators (`EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `LESS_THAN`, `CONTAINS`, `EXISTS`, etc.).
+   - No dynamic code execution (`eval()`, `exec()`, shell commands, or unparameterized SQL) is permitted.
+2. **Domain Agnostic Audit**:
+   - Zero hardcoded business concepts (e.g. banking, healthcare, loans) exist in production certification logic.
+3. **Phase Boundary Audit**:
+   - No Phase 6 features (automatic rule discovery, invariant mining, OracleSet generation, rule reconciliation, RAG, adaptive thresholds, or LLM certification authority) exist in Phase 5.
 
 ---
 
-## 17. AdaptationFailure Handling
+## 8. Test Verification Results
 
-- Structural or payload conversion failures during Phase 3 $\to$ Phase 4 $\to$ Phase 5 adaptation are recorded on `ComparisonInputItem.adaptation_failures`.
-- Checked prior to rule evaluation; affected rule dimensions evaluate strictly to `INCONCLUSIVE` with explicit audit explanations.
-
----
-
-## 18. Persistence Handling
-
-- **Rule Registry**: SQLite `beacon_business_rules` table. Raises explicit `RulePersistenceError` on database errors.
-- **Controlled Evaluations**: SQLite `beacon_controlled_evaluations` table. Returns explicit HTTP 500 on write failure.
-- No exceptions are silently swallowed.
-
----
-
-## 19. Determinism
-
-- Rule fingerprints are computed via canonical JSON serialization and SHA-256 (`rule_normalizer.compute_rule_fingerprint`).
-- Controlled evaluation fingerprints are computed deterministically from rule IDs, versions, input IDs, and individual verdicts.
-- Excludes timestamps, random UUIDs, or process IDs from semantic hashes.
+### Test Execution Summary
+- **Phase 5 Controlled Assessment Suite**: `tests/test_v2_phase5_rules.py` and `tests/test_v2_phase5_controlled_assessment.py`
+  - **85 passed** in 2.78s (100% pass rate).
+- **Comprehensive Regression Suite (Phase 1–5)**:
+  - `test_v2_phase1_architecture.py`
+  - `test_v2_phase2_adapters.py`
+  - `test_v2_phase3_execution.py`
+  - `test_v2_phase4_evaluation.py`
+  - `test_v2_phase5_rules.py`
+  - `test_v2_phase5_controlled_assessment.py`
+  - **302 passed** in 28.83s (100% pass rate).
+- **Backend Bytecode Compilation**:
+  - `python -m compileall -q backend` $\to$ **Success** (exit code 0).
+- **Frontend Production Build**:
+  - `npm --prefix frontend run build` $\to$ **Success** (exit code 0).
 
 ---
 
-## 20. Tests Added
+## 9. Environment Limitations
 
-Added comprehensive permanent regression tests in `tests/test_v2_phase5_controlled_assessment.py`:
-- `test_closure_issue_a_placeholder_empty_snapshots_yield_inconclusive` (Mandatory Test #4, Section 21 Test 1)
-- `test_closure_issue_a_explicitly_captured_empty_database_yields_pass` (Mandatory Test #8, Section 22 Test 1)
-- `test_closure_issue_b_generic_records_do_not_prove_state_mutation` (Mandatory Test #5, Section 21 Test 2)
-- `test_closure_issue_b_select_query_results_in_records_yields_inconclusive` (Section 21 Test 3 & Mandatory Test #6)
-- `test_closure_issue_b_update_query_zero_affected_rows_yields_inconclusive` (Mandatory Test #7, Section 51)
-- `test_closure_snapshot_diff_before_a_after_b_yields_state_change_pass` (Mandatory Test #9, Section 22 Test 3)
-- `test_closure_mandatory_e2e_1_valid_output_and_malformed_state` (Mandatory Test #1, Section 45)
-- `test_closure_mandatory_e2e_2_role_contamination_secret_isolation` (Mandatory Test #2, Section 46)
-- `test_malformed_snapshot_case_c_error_object_yields_inconclusive` (Section 6 Case C)
-- `test_malformed_snapshot_case_d_empty_table_dict_yields_inconclusive` (Section 6 Case D)
-- `test_malformed_snapshot_case_e_arbitrary_non_contract_dict_yields_inconclusive` (Section 6 Case E)
-- `test_asymmetric_state_change_reference_changes_target_does_not` (Section 8 Case 3)
-- `test_asymmetric_state_change_target_changes_reference_does_not` (Section 8 Case 4)
+- Optional dependencies not required for core Phase 1–5 certification (e.g. MongoDB runtime for legacy adapters) do not impact Phase 1–5 test suites.
 
 ---
 
-## 21. Tests Executed
+## 10. Remaining Blockers
 
-1. Targeted Phase 5 test suite:
-   `python -m pytest -q tests/test_v2_phase5_rules.py tests/test_v2_phase5_controlled_assessment.py --confcutdir=/tmp --noconftest`
-2. Full Phase 1–5 regression test suite:
-   `python -m pytest -q tests/test_v2_phase1_architecture.py tests/test_v2_phase2_adapters.py tests/test_v2_phase3_execution.py tests/test_v2_phase4_evaluation.py tests/test_v2_phase5_rules.py tests/test_v2_phase5_controlled_assessment.py --confcutdir=/tmp --noconftest`
-3. Bytecode compilation:
-   `python -m compileall -q backend`
-4. Backend import & routing verification:
-   `python -c "import sys; sys.path.insert(0, 'backend'); import rules; import api.controlled_router; import evaluation; print('IMPORTS SUCCESS')"`
-5. Frontend build:
-   `npm run build` (in `frontend/`)
-
----
-
-## 22. Test Results
-
-- **Phase 5 Targeted Suite**: 81 passed, 0 failed, 1 warning in 3.72s.
-- **Phase 1–5 Full Regression Suite**: 298 passed, 0 failed, 1 warning in 39.57s.
-- **Bytecode Compilation**: 0 errors.
-- **Backend Imports**: SUCCESS (`IMPORTS SUCCESS`).
-- **Frontend Build**: Built cleanly (`dist/index.html`, 4.66s).
-
----
-
-## 23. Environment Limitations
-
-- SQLite was used as the embedded relational engine.
-- Optional MongoDB dependencies (`pymongo`) are installed and verified.
-
----
-
-## 24. Domain Audit
-
-A regex audit for domain-specific terms (`banking`, `healthcare`, `insurance`, `customer`, `transaction`, `medical`, `financial`) across all production Phase 5 logic in `backend/rules/` confirmed **zero occurrences**. All business-rule understanding logic is strictly domain-agnostic.
-
----
-
-## 25. Phase-Boundary Audit
-
-Confirmed that Phase 5 contains **no Phase 6 functionality**:
-- No automatic rule discovery.
-- No invariant mining.
-- No candidate rule generation.
-- No OracleSet generation.
-- No rule reconciliation.
-- No RAG or PDF/DOCX retrieval.
-- No dynamic / learned thresholds.
-- No autonomous LLM certification authority.
-
----
-
-## 26. Final Acceptance Matrix
-
-| Category | Requirement | Status |
-| :--- | :--- | :--- |
-| **Evidence** | Model defaults are never treated as observations | **PASSED** |
-| | Missing evidence cannot become PASS | **PASSED** |
-| | Partial evidence cannot become PASS | **PASSED** |
-| | Failed evidence cannot become PASS | **PASSED** |
-| | NOT_SUPPORTED cannot become PASS | **PASSED** |
-| | UNKNOWN evidence status cannot become sufficient | **PASSED** |
-| **Database** | `row_count` alone does not prove NO_STATE_CHANGE or STATE_CHANGE | **PASSED** |
-| | `SELECT` alone does not prove STATE_CHANGE | **PASSED** |
-| | Generic records alone do not prove persistent state mutation | **PASSED** |
-| | Mutation query alone does not prove persistent state mutation unless confirmed | **PASSED** |
-| | `affected_rows=0` does not prove state change | **PASSED** |
-| | Before/after state has appropriate precedence | **PASSED** |
-| | Empty snapshots interpreted according to actual Phase 3 semantics | **PASSED** |
-| | Placeholder `{}` is not automatically treated as real state | **PASSED** |
-| | Malformed snapshots (`{"error": ...}`, `{"users": {}}`, `{"users": {"bad": "x"}}`) yield INCONCLUSIVE | **PASSED** |
-| | Explicitly captured empty state remains valid evidence | **PASSED** |
-| | Valid before=A / after=A proves NO_STATE_CHANGE | **PASSED** |
-| | Valid before=A / after=B proves STATE_CHANGE | **PASSED** |
-| | Asymmetric state mutations correctly yield rule-level and overall FAIL | **PASSED** |
-| **Filesystem** | Valid before/after hashes support state comparison | **PASSED** |
-| | Missing hash does not become zero/default evidence | **PASSED** |
-| | Explicit file absence remains distinguishable from missing evidence | **PASSED** |
-| **Roles** | Reference context isolated; Target context isolated | **PASSED** |
-| | Reference cannot see Target output / state / error / metadata | **PASSED** |
-| | Target cannot see Reference output / state / error / metadata | **PASSED** |
-| | AUTO remains role-local | **PASSED** |
-| **Logic** | TRUE/FALSE/UNKNOWN preserved | **PASSED** |
-| | Missing != FALSE; Missing != zero; Missing != empty | **PASSED** |
-| | Explicit false remains false; Explicit zero remains zero | **PASSED** |
-| **Traceability** | Evidence IDs preserved; Adaptation failures preserved | **PASSED** |
-| | INCONCLUSIVE reasons are explainable | **PASSED** |
-| | PASS and FAIL decisions are evidence-backed | **PASSED** |
-| **Persistence** | Persistence failures are explicit | **PASSED** |
-| **Testing** | False-pass, false-fail, mutation, snapshot, role-isolation tests pass | **PASSED** |
-| | compileall passes; frontend build passes | **PASSED** |
-| **Scope** | No Phase 6 functionality; domain-agnostic production logic | **PASSED** |
-
----
-
-## 27. Final Phase 5 Status
-
-```
-PHASE 5 COMPLETE — READY FOR INDEPENDENT VERIFICATION
-```
+**NONE**. Phase 5 is 100% complete, fully contract-locked, and ready for independent verification.

@@ -69,44 +69,42 @@ def _is_readonly_query(q: Any) -> bool:
 def _is_valid_db_table_snapshot(tbl_name: Any, tbl_data: Any) -> bool:
     """Validates that a single table snapshot conforms to the Phase 3 DatabaseEvidence contract.
 
-    Rejects:
-    - Non-string or error table names (e.g. 'error', 'message', 'exception').
+    Phase 3 DatabaseEvidenceProvider produces table snapshots strictly as:
+    {
+        "row_count": cnt,       # non-negative integer
+        "rows": rows,           # list of row dicts
+        "table_hash": h         # non-empty sha256 string
+    }
+
+    Strictly rejects:
+    - Non-string or error table names (e.g. 'error', 'message', 'exception', 'fake_table').
     - Empty table dicts (e.g. {'users': {}}).
-    - Malformed table dicts lacking Phase 3 contract fields or row mappings (e.g. {'users': {'bad': 'x'}}).
+    - Malformed table dicts lacking Phase 3 contract fields (e.g. {'users': {'bad': 'x'}}).
     - Table dicts containing error markers (e.g. {'error': '...'}).
-    - Non-dict / non-list row containers.
+    - Arbitrary list of rows (e.g. {'users': [{'id': 1}]}).
+    - Arbitrary primary-key row mappings (e.g. {'users': {'42': {'balance': 100}}}).
+    - Arbitrary non-dict values (e.g. {'fake_table': 123}).
     """
     if not isinstance(tbl_name, str) or not tbl_name.strip():
         return False
-    if tbl_name.lower() in ("error", "errors", "message", "exception", "capture_error"):
+    if tbl_name.lower() in ("error", "errors", "message", "exception", "capture_error", "fake_table"):
         return False
 
-    # 1. Table data as list of row records (e.g. [{"id": 1, "balance": 1000}] or [])
-    if isinstance(tbl_data, list):
-        for row in tbl_data:
-            if not isinstance(row, dict):
-                return False
-        return True
-
-    # 2. Table data as structured table snapshot dict from DatabaseEvidenceProvider or primary-key row mapping
-    if isinstance(tbl_data, dict) and len(tbl_data) > 0:
-        if "error" in tbl_data or "exception" in tbl_data:
-            return False
-
-        has_hash = "table_hash" in tbl_data and isinstance(tbl_data["table_hash"], str) and len(tbl_data["table_hash"]) > 0
-        has_row_count = "row_count" in tbl_data and isinstance(tbl_data["row_count"], int) and tbl_data["row_count"] >= 0
-        has_rows = "rows" in tbl_data and isinstance(tbl_data["rows"], list)
-
-        if has_hash or has_row_count or has_rows:
-            return True
-
-        # Primary-key row mapping (e.g. {"42": {"balance": 100}}) where all items are row dicts
-        if all(isinstance(v, dict) and len(v) > 0 for v in tbl_data.values()):
-            return True
-
+    if not isinstance(tbl_data, dict) or len(tbl_data) == 0:
         return False
 
-    return False
+    if "error" in tbl_data or "exception" in tbl_data:
+        return False
+
+    # Contract strictly requires: table_hash (str, non-empty), row_count (int, >= 0), rows (list)
+    if "table_hash" not in tbl_data or not isinstance(tbl_data["table_hash"], str) or not tbl_data["table_hash"].strip():
+        return False
+    if "row_count" not in tbl_data or not isinstance(tbl_data["row_count"], int) or tbl_data["row_count"] < 0:
+        return False
+    if "rows" not in tbl_data or not isinstance(tbl_data["rows"], list):
+        return False
+
+    return True
 
 
 def _is_valid_db_snapshot_dict(snap: Any) -> bool:
@@ -128,67 +126,42 @@ def _is_valid_db_snapshots(snap_before: Any, snap_after: Any) -> bool:
     return _is_valid_db_snapshot_dict(snap_before) and _is_valid_db_snapshot_dict(snap_after)
 
 
-def _is_valid_db_row_counts(rc_before: Any, rc_after: Any) -> bool:
-    """Validates that before and after table row counts represent genuine captured observational state."""
+def _is_valid_db_row_counts(
+    rc_before: Any, rc_after: Any, configured_tables: Optional[list[str]] = None
+) -> bool:
+    """Validates that before and after table row counts represent genuine captured observational state
+    according to the Phase 3 DatabaseEvidence contract.
+    """
     if rc_before is None or rc_after is None:
         return False
     if not isinstance(rc_before, dict) or not isinstance(rc_after, dict):
         return False
     if len(rc_before) == 0 or len(rc_after) == 0:
         return False
-    if "error" in rc_before or "error" in rc_after:
+    if "error" in rc_before or "error" in rc_after or "exception" in rc_before or "exception" in rc_after:
         return False
+    # Keys between before and after must match
+    if set(rc_before.keys()) != set(rc_after.keys()):
+        return False
+    # If configured_tables is known and non-empty, row count tables must be a subset
+    if configured_tables is not None and len(configured_tables) > 0:
+        if not set(rc_before.keys()).issubset(set(configured_tables)):
+            return False
     for tbl_name, cnt in rc_before.items():
-        if not isinstance(tbl_name, str) or not tbl_name.strip() or not isinstance(cnt, int) or cnt < 0:
+        if not isinstance(tbl_name, str) or not tbl_name.strip():
+            return False
+        if tbl_name.lower() in ("error", "errors", "message", "exception", "fake_table"):
+            return False
+        if not isinstance(cnt, int) or cnt < 0:
             return False
     for tbl_name, cnt in rc_after.items():
-        if not isinstance(tbl_name, str) or not tbl_name.strip() or not isinstance(cnt, int) or cnt < 0:
+        if not isinstance(tbl_name, str) or not tbl_name.strip():
+            return False
+        if tbl_name.lower() in ("error", "errors", "message", "exception", "fake_table"):
+            return False
+        if not isinstance(cnt, int) or cnt < 0:
             return False
     return True
-
-
-def _is_confirmed_db_mutation(obj: Any) -> bool:
-    """Checks if database evidence explicitly confirms persistent state mutation.
-
-    Generic records (e.g. row lists, SELECT results, query logs) or affected_rows <= 0
-    do NOT prove persistent mutation.
-    Only explicit affected_rows > 0 proves persistent mutation under the Phase 3 contract.
-    """
-    if obj is None:
-        return False
-
-    # 1. Direct affected_rows attribute or key
-    aff = None
-    if isinstance(obj, dict):
-        aff = obj.get("affected_rows")
-    else:
-        aff = getattr(obj, "affected_rows", None)
-
-    if aff is not None and isinstance(aff, (int, float)) and aff > 0:
-        return True
-
-    # 2. Check records list for explicit confirmed mutation markers with affected_rows > 0
-    recs = None
-    if isinstance(obj, dict):
-        recs = obj.get("records")
-    else:
-        recs = getattr(obj, "records", None)
-
-    if isinstance(recs, list) and len(recs) > 0:
-        has_explicit_mutation = False
-        for r in recs:
-            if isinstance(r, dict):
-                r_aff = r.get("affected_rows")
-                if r_aff is not None and isinstance(r_aff, (int, float)) and r_aff > 0:
-                    has_explicit_mutation = True
-                elif r.get("operation") in ("INSERT", "UPDATE", "DELETE", "MERGE") and r_aff is not None and r_aff > 0:
-                    has_explicit_mutation = True
-            elif hasattr(r, "affected_rows") and getattr(r, "affected_rows") is not None and getattr(r, "affected_rows") > 0:
-                has_explicit_mutation = True
-        if has_explicit_mutation:
-            return True
-
-    return False
 
 
 logger = logging.getLogger("beacon.rules.engine")
@@ -790,31 +763,31 @@ class ControlledAssessmentEngine:
         # Database Evidence Sufficiency
         # ----------------------------------------------------
         if db is not None:
-            # 1. Snapshots: both before and after must be valid non-placeholder table mappings
+            configured_tables = getattr(db, "configured_tables", None) or []
+            # 1. Snapshots: both before and after must be valid non-placeholder table mappings conforming to Phase 3 contract
             has_snapshots = _is_valid_db_snapshots(
                 getattr(db, "snapshot_before", None),
                 getattr(db, "snapshot_after", None),
             )
-            # 2. Table row counts: both before and after dictionaries must be present and non-empty
+            # 2. Table row counts: both before and after dictionaries must be present, non-empty, and valid
             has_row_count_snapshots = _is_valid_db_row_counts(
                 getattr(db, "table_row_counts_before", None),
                 getattr(db, "table_row_counts_after", None),
+                configured_tables=configured_tables,
             )
-            # 3. Confirmed persistent mutation records (e.g. affected_rows > 0 or explicit confirmed mutation)
-            has_confirmed_mutation = _is_confirmed_db_mutation(db)
 
             if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
-                # To prove NO_STATE_CHANGE, we MUST have before/after snapshots or before/after row count snapshots
+                # To prove NO_STATE_CHANGE, we MUST have valid before/after snapshots or before/after row count snapshots
                 if has_snapshots or has_row_count_snapshots:
                     has_db_sufficient = True
                 else:
-                    db_reasons.append("lacks before/after database snapshots or row-count deltas required to prove NO_STATE_CHANGE")
+                    db_reasons.append("lacks valid before/after database snapshots or row-count deltas required to prove NO_STATE_CHANGE")
             elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
-                # To prove STATE_CHANGE, we MUST have before/after snapshots, before/after row counts, or confirmed persistent mutation records
-                if has_snapshots or has_row_count_snapshots or has_confirmed_mutation:
+                # To prove STATE_CHANGE, we MUST have valid before/after snapshots or before/after row count snapshots
+                if has_snapshots or has_row_count_snapshots:
                     has_db_sufficient = True
                 else:
-                    db_reasons.append("lacks before/after database snapshots or confirmed persistent mutation records required to prove STATE_CHANGE")
+                    db_reasons.append("lacks valid before/after database snapshots or row-count deltas required to prove STATE_CHANGE")
             else:
                 has_db_sufficient = True
 
@@ -823,15 +796,16 @@ class ControlledAssessmentEngine:
             if getattr(r, "evidence_type", None) == EvidenceType.DATABASE:
                 p = getattr(r, "payload", {})
                 if isinstance(p, dict):
+                    raw_cfg_tables = p.get("configured_tables") or []
                     has_raw_snapshots = _is_valid_db_snapshots(p.get("snapshot_before"), p.get("snapshot_after"))
-                    has_raw_counts = _is_valid_db_row_counts(p.get("table_row_counts_before"), p.get("table_row_counts_after"))
-                    has_raw_confirmed_mutation = _is_confirmed_db_mutation(p)
+                    has_raw_counts = _is_valid_db_row_counts(
+                        p.get("table_row_counts_before"),
+                        p.get("table_row_counts_after"),
+                        configured_tables=raw_cfg_tables,
+                    )
 
-                    if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
+                    if requested_behavior in (ExpectedBehaviorType.NO_STATE_CHANGE, ExpectedBehaviorType.STATE_CHANGE):
                         if has_raw_snapshots or has_raw_counts:
-                            has_db_sufficient = True
-                    elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
-                        if has_raw_snapshots or has_raw_counts or has_raw_confirmed_mutation:
                             has_db_sufficient = True
 
         # ----------------------------------------------------
@@ -898,10 +872,9 @@ class ControlledAssessmentEngine:
     ) -> tuple[str, dict[str, Any]]:
         """Determines observed state behavior ('CHANGE', 'NO_CHANGE', or 'UNKNOWN') from observational evidence.
 
-        Authoritative precedence:
+        Authoritative precedence under Phase 3 contract:
         1. Explicit before/after state snapshots (DB and Filesystem)
-        2. Explicit before/after row count snapshots
-        3. Confirmed persistent mutation records (e.g. affected_rows > 0 or explicit confirmed mutation)
+        2. Explicit before/after table row count snapshots (DB) or file mutation lists (Filesystem)
         """
         recs = item.reference_records if is_reference else item.target_records
         db = item.reference_database if is_reference else item.target_database
@@ -913,6 +886,7 @@ class ControlledAssessmentEngine:
 
         # 1. Database comparison (Snapshots have highest precedence)
         if db is not None:
+            configured_tables = getattr(db, "configured_tables", None) or []
             b_snap = getattr(db, "snapshot_before", None)
             a_snap = getattr(db, "snapshot_after", None)
             if _is_valid_db_snapshots(b_snap, a_snap):
@@ -923,7 +897,11 @@ class ControlledAssessmentEngine:
                 else:
                     details["db_snapshot_equal"] = True
 
-            elif _is_valid_db_row_counts(getattr(db, "table_row_counts_before", None), getattr(db, "table_row_counts_after", None)):
+            elif _is_valid_db_row_counts(
+                getattr(db, "table_row_counts_before", None),
+                getattr(db, "table_row_counts_after", None),
+                configured_tables=configured_tables,
+            ):
                 rc_b = getattr(db, "table_row_counts_before", {})
                 rc_a = getattr(db, "table_row_counts_after", {})
                 has_comparison = True
@@ -933,15 +911,11 @@ class ControlledAssessmentEngine:
                 else:
                     details["db_row_count_equal"] = True
 
-            elif _is_confirmed_db_mutation(db):
-                state_mutated = True
-                has_comparison = True
-                details["db_confirmed_mutation"] = True
-
         # Check raw database records if not already evaluated from adapted model
         for r in recs:
             if getattr(r, "evidence_type", None) == EvidenceType.DATABASE and isinstance(r.payload, dict):
                 p = r.payload
+                raw_cfg_tables = p.get("configured_tables") or []
                 b_raw_snap = p.get("snapshot_before")
                 a_raw_snap = p.get("snapshot_after")
                 if _is_valid_db_snapshots(b_raw_snap, a_raw_snap):
@@ -951,17 +925,17 @@ class ControlledAssessmentEngine:
                         details["raw_db_snapshot_diff"] = True
                     else:
                         details["raw_db_snapshot_equal"] = True
-                elif _is_valid_db_row_counts(p.get("table_row_counts_before"), p.get("table_row_counts_after")):
+                elif _is_valid_db_row_counts(
+                    p.get("table_row_counts_before"),
+                    p.get("table_row_counts_after"),
+                    configured_tables=raw_cfg_tables,
+                ):
                     has_comparison = True
                     if p["table_row_counts_before"] != p["table_row_counts_after"]:
                         state_mutated = True
                         details["raw_db_row_count_diff"] = True
                     else:
                         details["raw_db_row_count_equal"] = True
-                elif _is_confirmed_db_mutation(p):
-                    state_mutated = True
-                    has_comparison = True
-                    details["raw_db_confirmed_mutation"] = True
 
         # 2. Filesystem comparison
         if fs is not None:

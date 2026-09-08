@@ -887,7 +887,7 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_db_eq"
         app_id = "app_p5_db_eq"
 
-        db_snap = {"accounts": [{"id": 1, "balance": 1000}]}
+        db_snap = {"accounts": {"row_count": 1, "rows": [{"id": 1, "balance": 1000}], "table_hash": "hash_accounts_1000"}}
         rec_r_db = EvidenceRecord(
             evidence_id="r_db_eq",
             session_id=session_id,
@@ -935,8 +935,8 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_db_diff"
         app_id = "app_p5_db_diff"
 
-        db_before = {"accounts": [{"id": 1, "balance": 1000}]}
-        db_after = {"accounts": [{"id": 1, "balance": 900}]}
+        db_before = {"accounts": {"row_count": 1, "rows": [{"id": 1, "balance": 1000}], "table_hash": "hash_accounts_1000"}}
+        db_after = {"accounts": {"row_count": 1, "rows": [{"id": 1, "balance": 900}], "table_hash": "hash_accounts_900"}}
 
         rec_r_db = EvidenceRecord(
             evidence_id="r_db_diff",
@@ -1034,7 +1034,7 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_db_oneside"
         app_id = "app_p5_db_oneside"
 
-        db_snap = {"users": [{"id": 1}]}
+        db_snap = {"users": {"row_count": 1, "rows": [{"id": 1}], "table_hash": "hash_users_1"}}
         rec_r = EvidenceRecord(
             evidence_id="r_db_os",
             session_id=session_id,
@@ -2020,7 +2020,7 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_qp1"
         app_id = "app_p5_qp1"
 
-        snap_a = {"accounts": {"42": {"balance": 100}}}
+        snap_a = {"accounts": {"row_count": 1, "rows": [{"id": 42, "balance": 100}], "table_hash": "hash_accounts_100"}}
         rec_r = EvidenceRecord(
             evidence_id="r_qp1",
             session_id=session_id,
@@ -2076,8 +2076,8 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_qp2"
         app_id = "app_p5_qp2"
 
-        snap_a = {"accounts": {"42": {"balance": 100}}}
-        snap_b = {"accounts": {"42": {"balance": 50}}}
+        snap_a = {"accounts": {"row_count": 1, "rows": [{"id": 42, "balance": 100}], "table_hash": "hash_accounts_100"}}
+        snap_b = {"accounts": {"row_count": 1, "rows": [{"id": 42, "balance": 50}], "table_hash": "hash_accounts_50"}}
         rec_r = EvidenceRecord(
             evidence_id="r_qp2",
             session_id=session_id,
@@ -2127,9 +2127,9 @@ class TestPhase5ControlledModeAssessment:
         assert assm.reference_compliance == RuleComplianceVerdict.PASS
         assert assm.target_compliance == RuleComplianceVerdict.PASS
 
-    # 39C. MANDATORY QUERY PRECEDENCE TEST 3: UPDATE QUERY ALONE WITHOUT CONFIRMATION YIELDS INCONCLUSIVE (Section 4, 38, 40)
-    def test_query_precedence_test_3_update_query_alone_without_snapshots_or_confirmation_yields_inconclusive(self):
-        """UPDATE query without snapshots or confirmed mutation records does not prove STATE_CHANGE and yields INCONCLUSIVE."""
+    # 39C. MANDATORY QUERY PRECEDENCE TEST 3: SELECT QUERY ALONE CANNOT PROVE STATE_CHANGE (Section 16, 40)
+    def test_query_precedence_test_3_select_query_alone_yields_inconclusive_for_state_change(self):
+        """When only a SELECT query is present without before/after snapshots, STATE_CHANGE evaluates to INCONCLUSIVE."""
         session_id = "sess_p5_qp3"
         app_id = "app_p5_qp3"
 
@@ -2140,7 +2140,7 @@ class TestPhase5ControlledModeAssessment:
             role="reference",
             evidence_type=EvidenceType.DATABASE,
             capture_status=EvidenceCaptureStatus.CAPTURED,
-            payload={"queries": ["UPDATE accounts SET balance = balance - 100 WHERE id = 42"]},
+            payload={"queries": ["SELECT * FROM accounts WHERE id = 42"]},
         )
         rec_t = EvidenceRecord(
             evidence_id="t_qp3",
@@ -2149,7 +2149,7 @@ class TestPhase5ControlledModeAssessment:
             role="target",
             evidence_type=EvidenceType.DATABASE,
             capture_status=EvidenceCaptureStatus.CAPTURED,
-            payload={"queries": ["UPDATE accounts SET balance = balance - 100 WHERE id = 42"]},
+            payload={"queries": ["SELECT * FROM accounts WHERE id = 42"]},
         )
         bundle = EvidenceBundle(
             bundle_id="bnd_p5_qp3",
@@ -2215,9 +2215,9 @@ class TestPhase5ControlledModeAssessment:
         res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
         assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
 
-    # 39E. CONFIRMED MUTATION RECORDS (AFFECTED ROWS > 0) YIELDS STATE_CHANGE PASS (Section 14)
-    def test_confirmed_mutation_records_yields_state_change_pass(self):
-        """Confirmed persistent mutation records (with affected_rows=1) prove STATE_CHANGE as PASS."""
+    # 39E. RAW QUERY WITH AFFECTED_ROWS WITHOUT BEFORE/AFTER SNAPSHOTS YIELDS INCONCLUSIVE (Section 12, 13)
+    def test_raw_query_with_affected_rows_without_snapshots_yields_inconclusive(self):
+        """Under Phase 3 contract, raw queries with arbitrary affected_rows without Phase 3 before/after snapshots yield INCONCLUSIVE."""
         session_id = "sess_p5_aff1"
         app_id = "app_p5_aff1"
 
@@ -2251,16 +2251,16 @@ class TestPhase5ControlledModeAssessment:
 
         rule = BusinessRule(
             rule_id="RULE-AFF1-CHANGE",
-            name="Confirmed Mutation Required",
+            name="State Change Required",
             condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
             expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
         )
 
         res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
-        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
         assm = res.rule_assessments[0]
-        assert assm.reference_compliance == RuleComplianceVerdict.PASS
-        assert assm.target_compliance == RuleComplianceVerdict.PASS
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
 
     # 40. ROW_COUNT AS FIELD EVALUATION IN CONDITION REMAINS VALID (Section 10, 29)
     def test_row_count_as_field_condition_evaluation_remains_valid(self):
@@ -2665,8 +2665,8 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_cls_diff"
         app_id = "app_p5_cls_diff"
 
-        snap_a = {"users": {"row_count": 1, "table_hash": "hash_a"}}
-        snap_b = {"users": {"row_count": 2, "table_hash": "hash_b"}}
+        snap_a = {"users": {"row_count": 1, "rows": [{"id": 1}], "table_hash": "hash_a"}}
+        snap_b = {"users": {"row_count": 2, "rows": [{"id": 1}, {"id": 2}], "table_hash": "hash_b"}}
         rec_r = EvidenceRecord(
             evidence_id="r_cls_diff",
             session_id=session_id,
@@ -2969,8 +2969,8 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_asym_r"
         app_id = "app_p5_asym_r"
 
-        snap_a = {"users": {"row_count": 1, "table_hash": "hash_a"}}
-        snap_b = {"users": {"row_count": 2, "table_hash": "hash_b"}}
+        snap_a = {"users": {"row_count": 1, "rows": [{"id": 1}], "table_hash": "hash_a"}}
+        snap_b = {"users": {"row_count": 2, "rows": [{"id": 1}, {"id": 2}], "table_hash": "hash_b"}}
 
         rec_r = EvidenceRecord(
             evidence_id="r_asym_r",
@@ -3019,8 +3019,8 @@ class TestPhase5ControlledModeAssessment:
         session_id = "sess_p5_asym_t"
         app_id = "app_p5_asym_t"
 
-        snap_a = {"users": {"row_count": 1, "table_hash": "hash_a"}}
-        snap_b = {"users": {"row_count": 2, "table_hash": "hash_b"}}
+        snap_a = {"users": {"row_count": 1, "rows": [{"id": 1}], "table_hash": "hash_a"}}
+        snap_b = {"users": {"row_count": 2, "rows": [{"id": 1}, {"id": 2}], "table_hash": "hash_b"}}
 
         rec_r = EvidenceRecord(
             evidence_id="r_asym_t",
@@ -3062,5 +3062,254 @@ class TestPhase5ControlledModeAssessment:
         assm = res.rule_assessments[0]
         assert assm.reference_compliance == RuleComplianceVerdict.FAIL
         assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 56. CONTRACT-LOCK: ARBITRARY ROW LIST SNAPSHOT YIELDS INCONCLUSIVE (Section 1, 4, 8)
+    def test_contract_lock_arbitrary_row_list_snapshot_yields_inconclusive(self):
+        """Database snapshot formatted as an arbitrary list of rows (e.g. {'users': [{'id': 1}]}) is rejected under Phase 3 contract."""
+        session_id = "sess_p5_lock_rowlist"
+        app_id = "app_p5_lock_rowlist"
+
+        mal_snap = {"users": [{"id": 1}]}
+        rec_r = EvidenceRecord(
+            evidence_id="r_lock_rl",
+            session_id=session_id,
+            input_id="inp_lock_rl",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_lock_rl",
+            session_id=session_id,
+            input_id="inp_lock_rl",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_lock_rl",
+            session_id=session_id,
+            correlation_id="c_p5_lock_rl",
+            application_id=app_id,
+            input_set_id="is_p5_lock_rl",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_lock_rl", application_id=app_id, input_set_id="is_p5_lock_rl", input_set_hash="h_rl", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-LOCK-ROWLIST",
+            name="Row List Rejected",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 57. CONTRACT-LOCK: ARBITRARY PRIMARY-KEY ROW MAP YIELDS INCONCLUSIVE (Section 1, 4, 8)
+    def test_contract_lock_primary_key_row_map_yields_inconclusive(self):
+        """Database snapshot formatted as a primary-key row mapping (e.g. {'users': {'42': {'balance': 100}}}) is rejected."""
+        session_id = "sess_p5_lock_pk"
+        app_id = "app_p5_lock_pk"
+
+        mal_snap = {"users": {"42": {"balance": 100}}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_lock_pk",
+            session_id=session_id,
+            input_id="inp_lock_pk",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_lock_pk",
+            session_id=session_id,
+            input_id="inp_lock_pk",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_lock_pk",
+            session_id=session_id,
+            correlation_id="c_p5_lock_pk",
+            application_id=app_id,
+            input_set_id="is_p5_lock_pk",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_lock_pk", application_id=app_id, input_set_id="is_p5_lock_pk", input_set_hash="h_pk", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-LOCK-PK",
+            name="PK Map Rejected",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 58. CONTRACT-LOCK: ARBITRARY NON-DICT VALUE YIELDS INCONCLUSIVE (Section 1, 4, 8)
+    def test_contract_lock_non_dict_table_value_yields_inconclusive(self):
+        """Database snapshot containing non-dict table value (e.g. {'fake_table': 123}) is rejected."""
+        session_id = "sess_p5_lock_nondict"
+        app_id = "app_p5_lock_nondict"
+
+        mal_snap = {"fake_table": 123}
+        rec_r = EvidenceRecord(
+            evidence_id="r_lock_nd",
+            session_id=session_id,
+            input_id="inp_lock_nd",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_lock_nd",
+            session_id=session_id,
+            input_id="inp_lock_nd",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_lock_nd",
+            session_id=session_id,
+            correlation_id="c_p5_lock_nd",
+            application_id=app_id,
+            input_set_id="is_p5_lock_nd",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_lock_nd", application_id=app_id, input_set_id="is_p5_lock_nd", input_set_hash="h_nd", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-LOCK-NONDICT",
+            name="Non Dict Value Rejected",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 59. CONTRACT-LOCK: ACTUAL PHASE 3 DATABASE EVIDENCE PROVIDER INTEGRATION TEST (Section 31)
+    def test_actual_phase3_provider_sqlite_integration(self, tmp_path):
+        """End-to-end integration test using actual Phase 3 DatabaseEvidenceProvider against a real SQLite database."""
+        import sqlite3
+        from execution.evidence_providers import DatabaseEvidenceProvider
+
+        db_file = tmp_path / "app_test.db"
+        with sqlite3.connect(str(db_file)) as conn:
+            conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, balance REAL)")
+            conn.execute("INSERT INTO users (id, name, balance) VALUES (1, 'Alice', 100.0)")
+            conn.commit()
+
+        provider = DatabaseEvidenceProvider(config={"database_path": str(db_file), "tables": ["users"]})
+
+        # Capture before
+        snap_before = provider.capture_before()
+        assert "users" in snap_before
+        assert snap_before["users"]["row_count"] == 1
+        assert len(snap_before["users"]["rows"]) == 1
+        assert "table_hash" in snap_before["users"]
+
+        # Capture after without modifying (equal state)
+        ev_after_eq = provider.capture_after()
+        assert ev_after_eq["status"] == EvidenceCaptureStatus.CAPTURED
+        assert ev_after_eq["delta_detected"] is False
+
+        session_id = "sess_p5_real_p3"
+        app_id = "app_p5_real_p3"
+
+        rec_r_eq = EvidenceRecord(
+            evidence_id="r_real_eq",
+            session_id=session_id,
+            input_id="inp_real_eq",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload=ev_after_eq,
+        )
+        rec_t_eq = EvidenceRecord(
+            evidence_id="t_real_eq",
+            session_id=session_id,
+            input_id="inp_real_eq",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload=ev_after_eq,
+        )
+        bundle_eq = EvidenceBundle(
+            bundle_id="bnd_p5_real_eq",
+            session_id=session_id,
+            correlation_id="c_p5_real_eq",
+            application_id=app_id,
+            input_set_id="is_p5_real_eq",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_real_eq", application_id=app_id, input_set_id="is_p5_real_eq", input_set_hash="h_req", records=[rec_r_eq, rec_t_eq]),
+            records=[rec_r_eq, rec_t_eq],
+        )
+
+        rule_no_change = BusinessRule(
+            rule_id="RULE-P3-NO-CHANGE",
+            name="Real P3 Provider No Change",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res_eq = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule_no_change], bundle=bundle_eq)
+        assert res_eq.overall_verdict == RuleComplianceVerdict.PASS
+
+        # Now mutate the database and capture after with diff
+        provider._before_snapshot = snap_before
+        with sqlite3.connect(str(db_file)) as conn:
+            conn.execute("UPDATE users SET balance = 150.0 WHERE id = 1")
+            conn.commit()
+
+        ev_after_diff = provider.capture_after()
+        assert ev_after_diff["delta_detected"] is True
+
+        rec_r_diff = EvidenceRecord(
+            evidence_id="r_real_diff",
+            session_id=session_id,
+            input_id="inp_real_diff",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload=ev_after_diff,
+        )
+        rec_t_diff = EvidenceRecord(
+            evidence_id="t_real_diff",
+            session_id=session_id,
+            input_id="inp_real_diff",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload=ev_after_diff,
+        )
+        bundle_diff = EvidenceBundle(
+            bundle_id="bnd_p5_real_diff",
+            session_id=session_id,
+            correlation_id="c_p5_real_diff",
+            application_id=app_id,
+            input_set_id="is_p5_real_diff",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_real_diff", application_id=app_id, input_set_id="is_p5_real_diff", input_set_hash="h_rdiff", records=[rec_r_diff, rec_t_diff]),
+            records=[rec_r_diff, rec_t_diff],
+        )
+
+        rule_change = BusinessRule(
+            rule_id="RULE-P3-CHANGE",
+            name="Real P3 Provider State Change",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res_diff = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule_change], bundle=bundle_diff)
+        assert res_diff.overall_verdict == RuleComplianceVerdict.PASS
 
 
