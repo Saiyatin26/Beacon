@@ -1165,9 +1165,9 @@ class TestPhase5ControlledModeAssessment:
         res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
         assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
 
-    # 22. STATE EVIDENCE: EXPLICITLY CAPTURED EMPTY DATABASE IS VALID (Section 11, 24)
+    # 22. STATE EVIDENCE: UNANCHORED EMPTY DATABASE SNAPSHOTS ({}) YIELD INCONCLUSIVE (Issue A, Section 21)
     def test_state_evidence_explicitly_captured_empty_database_is_valid(self):
-        """Explicitly captured empty database state ({}) is valid observational evidence and satisfies NO_STATE_CHANGE."""
+        """Unanchored empty database snapshots ({}) without table structure represent missing/placeholder state and yield INCONCLUSIVE."""
         session_id = "sess_p5_db_empty"
         app_id = "app_p5_db_empty"
 
@@ -1207,10 +1207,10 @@ class TestPhase5ControlledModeAssessment:
         )
 
         res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
-        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
         assm = res.rule_assessments[0]
-        assert assm.reference_compliance == RuleComplianceVerdict.PASS
-        assert assm.target_compliance == RuleComplianceVerdict.PASS
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
 
     # 23. STATE EVIDENCE: FILESYSTEM EQUAL HASHES YIELDS NO_STATE_CHANGE PASS (Section 12)
     def test_state_evidence_filesystem_equal_hashes_yields_no_state_change_pass(self):
@@ -2423,6 +2423,409 @@ class TestPhase5ControlledModeAssessment:
         assert res.overall_verdict == RuleComplianceVerdict.PASS
         assm = res.rule_assessments[0]
         assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # =========================================================================
+    # FINAL PHASE 5 CLOSURE PERMANENT REGRESSION TESTS
+    # =========================================================================
+
+    # 43. CLOSURE ISSUE A: PLACEHOLDER EMPTY SNAPSHOTS ({}) YIELD INCONCLUSIVE (Mandatory Test #4, Section 21 Test 1)
+    def test_closure_issue_a_placeholder_empty_snapshots_yield_inconclusive(self):
+        """Unanchored empty database snapshots ({}) without table structure yield INCONCLUSIVE for NO_STATE_CHANGE."""
+        session_id = "sess_p5_cls_ia_ph"
+        app_id = "app_p5_cls_ia_ph"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_cls_ia_ph",
+            session_id=session_id,
+            input_id="inp_cls_ia_ph",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": {}, "snapshot_after": {}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_cls_ia_ph",
+            session_id=session_id,
+            input_id="inp_cls_ia_ph",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": {}, "snapshot_after": {}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_ia_ph",
+            session_id=session_id,
+            correlation_id="c_p5_cls_ia_ph",
+            application_id=app_id,
+            input_set_id="is_p5_cls_ia_ph",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_ia_ph", application_id=app_id, input_set_id="is_p5_cls_ia_ph", input_set_hash="h_ia_ph", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-CLS-NO-STATE-CHANGE",
+            name="No State Mutation",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 44. CLOSURE ISSUE A: EXPLICITLY CAPTURED EMPTY DATABASE STATE YIELDS PASS (Mandatory Test #8, Section 22 Test 1)
+    def test_closure_issue_a_explicitly_captured_empty_database_yields_pass(self):
+        """Explicitly captured empty table state (e.g. table_hash of empty rows) proves NO_STATE_CHANGE as PASS."""
+        session_id = "sess_p5_cls_ia_exp"
+        app_id = "app_p5_cls_ia_exp"
+
+        empty_tbl_snap = {"users": {"row_count": 0, "rows": [], "table_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_cls_ia_exp",
+            session_id=session_id,
+            input_id="inp_cls_ia_exp",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": empty_tbl_snap, "snapshot_after": empty_tbl_snap},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_cls_ia_exp",
+            session_id=session_id,
+            input_id="inp_cls_ia_exp",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": empty_tbl_snap, "snapshot_after": empty_tbl_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_ia_exp",
+            session_id=session_id,
+            correlation_id="c_p5_cls_ia_exp",
+            application_id=app_id,
+            input_set_id="is_p5_cls_ia_exp",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_ia_exp", application_id=app_id, input_set_id="is_p5_cls_ia_exp", input_set_hash="h_ia_exp", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-CLS-EMPTY-NO-CHANGE",
+            name="Empty Table No Change",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 45. CLOSURE ISSUE B: GENERIC RECORDS DO NOT PROVE STATE MUTATION (Mandatory Test #5, Section 21 Test 2)
+    def test_closure_issue_b_generic_records_do_not_prove_state_mutation(self):
+        """Generic records (e.g. row dictionaries) without before/after state or confirmed mutation yield INCONCLUSIVE for STATE_CHANGE."""
+        session_id = "sess_p5_cls_ib_gen"
+        app_id = "app_p5_cls_ib_gen"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_cls_ib_gen",
+            session_id=session_id,
+            input_id="inp_cls_ib_gen",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"records": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_cls_ib_gen",
+            session_id=session_id,
+            input_id="inp_cls_ib_gen",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"records": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_ib_gen",
+            session_id=session_id,
+            correlation_id="c_p5_cls_ib_gen",
+            application_id=app_id,
+            input_set_id="is_p5_cls_ib_gen",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_ib_gen", application_id=app_id, input_set_id="is_p5_cls_ib_gen", input_set_hash="h_ib_gen", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-CLS-MUTATION-REQ",
+            name="State Mutation Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 46. CLOSURE ISSUE B: SELECT QUERY RESULTS IN RECORDS YIELD INCONCLUSIVE FOR STATE_CHANGE (Section 21 Test 3 & Mandatory Test #6)
+    def test_closure_issue_b_select_query_results_in_records_yield_inconclusive(self):
+        """Query result records from SELECT queries yield INCONCLUSIVE for STATE_CHANGE."""
+        session_id = "sess_p5_cls_ib_sel"
+        app_id = "app_p5_cls_ib_sel"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_cls_ib_sel",
+            session_id=session_id,
+            input_id="inp_cls_ib_sel",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["SELECT * FROM accounts WHERE id = 1"], "records": [{"id": 1, "balance": 100}]},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_cls_ib_sel",
+            session_id=session_id,
+            input_id="inp_cls_ib_sel",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["SELECT * FROM accounts WHERE id = 1"], "records": [{"id": 1, "balance": 100}]},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_ib_sel",
+            session_id=session_id,
+            correlation_id="c_p5_cls_ib_sel",
+            application_id=app_id,
+            input_set_id="is_p5_cls_ib_sel",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_ib_sel", application_id=app_id, input_set_id="is_p5_cls_ib_sel", input_set_hash="h_ib_sel", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-CLS-SELECT-NO-MUT",
+            name="Select Query No Mutation Proof",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 47. CLOSURE ISSUE B: UPDATE QUERY WITH AFFECTED_ROWS=0 YIELDS INCONCLUSIVE (Mandatory Test #7, Section 51)
+    def test_closure_issue_b_update_query_zero_affected_rows_yields_inconclusive(self):
+        """An UPDATE query with affected_rows=0 does not prove persistent state mutation and yields INCONCLUSIVE."""
+        session_id = "sess_p5_cls_ib_upd0"
+        app_id = "app_p5_cls_ib_upd0"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_cls_ib_upd0",
+            session_id=session_id,
+            input_id="inp_cls_ib_upd0",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = balance WHERE id = 999"], "affected_rows": 0},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_cls_ib_upd0",
+            session_id=session_id,
+            input_id="inp_cls_ib_upd0",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = balance WHERE id = 999"], "affected_rows": 0},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_ib_upd0",
+            session_id=session_id,
+            correlation_id="c_p5_cls_ib_upd0",
+            application_id=app_id,
+            input_set_id="is_p5_cls_ib_upd0",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_ib_upd0", application_id=app_id, input_set_id="is_p5_cls_ib_upd0", input_set_hash="h_ib_upd0", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-CLS-UPD-ZERO",
+            name="Zero Affected Rows Mutation Req",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 48. CLOSURE STATE DIFF: BEFORE=A / AFTER=B YIELDS STATE_CHANGE PASS (Mandatory Test #9, Section 22 Test 3)
+    def test_closure_snapshot_diff_before_a_after_b_yields_state_change_pass(self):
+        """When explicitly captured snapshot before (A) differs from after (B), STATE_CHANGE yields PASS."""
+        session_id = "sess_p5_cls_diff"
+        app_id = "app_p5_cls_diff"
+
+        snap_a = {"users": {"row_count": 1, "table_hash": "hash_a"}}
+        snap_b = {"users": {"row_count": 2, "table_hash": "hash_b"}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_cls_diff",
+            session_id=session_id,
+            input_id="inp_cls_diff",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": snap_a, "snapshot_after": snap_b},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_cls_diff",
+            session_id=session_id,
+            input_id="inp_cls_diff",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": snap_a, "snapshot_after": snap_b},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_diff",
+            session_id=session_id,
+            correlation_id="c_p5_cls_diff",
+            application_id=app_id,
+            input_set_id="is_p5_cls_diff",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_diff", application_id=app_id, input_set_id="is_p5_cls_diff", input_set_hash="h_diff", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-CLS-DIFF-CHANGE",
+            name="State Diff Requires Change",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 49. CLOSURE MANDATORY E2E #1: VALID OUTPUT + MALFORMED STATE OVERALL INCONCLUSIVE (Section 45)
+    def test_closure_mandatory_e2e_1_valid_output_and_malformed_state(self):
+        """Mandatory End-to-End Test #1: Output passes, state is malformed/partial -> Overall INCONCLUSIVE."""
+        session_id = "sess_p5_cls_m1"
+        app_id = "app_p5_cls_m1"
+
+        rec_r_out = EvidenceRecord(
+            evidence_id="r_m1_out",
+            session_id=session_id,
+            input_id="inp_m1",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "SUCCESS", "http_status": 200}, "normalized_output": {"status": "SUCCESS", "http_status": 200}, "amount": 100},
+        )
+        rec_t_out = EvidenceRecord(
+            evidence_id="t_m1_out",
+            session_id=session_id,
+            input_id="inp_m1",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "SUCCESS", "http_status": 200}, "normalized_output": {"status": "SUCCESS", "http_status": 200}, "amount": 100},
+        )
+        rec_r_db = EvidenceRecord(
+            evidence_id="r_m1_db",
+            session_id=session_id,
+            input_id="inp_m1",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"queries": ["UPDATE accounts SET balance = balance - 100"]},
+        )
+        rec_t_db = EvidenceRecord(
+            evidence_id="t_m1_db",
+            session_id=session_id,
+            input_id="inp_m1",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"queries": ["UPDATE accounts SET balance = balance - 100"]},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_m1",
+            session_id=session_id,
+            correlation_id="c_p5_cls_m1",
+            application_id=app_id,
+            input_set_id="is_p5_cls_m1",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_m1", application_id=app_id, input_set_id="is_p5_cls_m1", input_set_hash="h_m1", records=[rec_r_out, rec_t_out, rec_r_db, rec_t_db]),
+            records=[rec_r_out, rec_t_out, rec_r_db, rec_t_db],
+        )
+
+        rule_out = BusinessRule(
+            rule_id="RULE-M1-OUTPUT",
+            name="Output Must Succeed",
+            condition=RulePredicate(field="amount", operator=RuleOperator.GT, value=0),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+        rule_state = BusinessRule(
+            rule_id="RULE-M1-STATE",
+            name="State Mutation Required",
+            condition=RulePredicate(field="amount", operator=RuleOperator.GT, value=0),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule_out, rule_state], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm_out = next(a for a in res.rule_assessments if a.rule_id == "RULE-M1-OUTPUT")
+        assm_state = next(a for a in res.rule_assessments if a.rule_id == "RULE-M1-STATE")
+        assert assm_out.overall_rule_status == RuleComplianceVerdict.PASS
+        assert assm_state.overall_rule_status == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 50. CLOSURE MANDATORY E2E #2: ROLE CONTAMINATION SECRET ISOLATION (Section 46, Mandatory Test #2)
+    def test_closure_mandatory_e2e_2_role_contamination_secret_isolation(self):
+        """Mandatory End-to-End Test #2: Reference cannot see Target secret field, evaluating independently."""
+        session_id = "sess_p5_cls_m2"
+        app_id = "app_p5_cls_m2"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_m2",
+            session_id=session_id,
+            input_id="inp_m2",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK"}, "normalized_output": {"status": "OK"}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_m2",
+            session_id=session_id,
+            input_id="inp_m2",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK", "secret": 99}, "normalized_output": {"status": "OK", "secret": 99}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_cls_m2",
+            session_id=session_id,
+            correlation_id="c_p5_cls_m2",
+            application_id=app_id,
+            input_set_id="is_p5_cls_m2",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_cls_m2", application_id=app_id, input_set_id="is_p5_cls_m2", input_set_hash="h_m2", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-M2-SECRET-99",
+            name="Secret Must Equal 99",
+            condition=RulePredicate(field="secret", operator=RuleOperator.EQ, value=99, field_source="output"),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assm = res.rule_assessments[0]
+        # Reference is missing 'secret' field in output -> UNKNOWN condition -> NOT_APPLICABLE / INCONCLUSIVE
+        assert assm.reference_compliance in (RuleComplianceVerdict.NOT_APPLICABLE, RuleComplianceVerdict.INCONCLUSIVE)
+        # Target has secret == 99 -> TRUE condition -> APPLICABLE -> ACCEPT passes -> PASS
         assert assm.target_compliance == RuleComplianceVerdict.PASS
 
 

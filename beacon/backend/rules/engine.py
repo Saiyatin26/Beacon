@@ -66,6 +66,88 @@ def _is_readonly_query(q: Any) -> bool:
     return clean.startswith("SELECT") or clean.startswith("EXPLAIN") or clean.startswith("SHOW") or clean.startswith("DESCRIBE")
 
 
+def _is_valid_db_snapshots(snap_before: Any, snap_after: Any) -> bool:
+    """Validates that before and after database snapshots represent genuine captured observational state,
+    not unanchored empty placeholders or uncaptured defaults.
+
+    {} == {} without table entries is considered uncaptured / placeholder and returns False.
+    Snapshots containing table entries (even empty tables like {"users": {"row_count": 0, "rows": [], "table_hash": "..."}}) return True.
+    """
+    if snap_before is None or snap_after is None:
+        return False
+    if not isinstance(snap_before, dict) or not isinstance(snap_after, dict):
+        return False
+    if len(snap_before) == 0 or len(snap_after) == 0:
+        return False
+    return True
+
+
+def _is_valid_db_row_counts(rc_before: Any, rc_after: Any) -> bool:
+    """Validates that before and after table row counts represent genuine captured observational state."""
+    if rc_before is None or rc_after is None:
+        return False
+    if not isinstance(rc_before, dict) or not isinstance(rc_after, dict):
+        return False
+    if len(rc_before) == 0 or len(rc_after) == 0:
+        return False
+    return True
+
+
+def _is_confirmed_db_mutation(obj: Any) -> bool:
+    """Checks if database evidence explicitly confirms persistent state mutation.
+
+    Generic records (e.g. row lists, SELECT results, query logs) or affected_rows <= 0
+    do NOT prove persistent mutation.
+    Only explicit affected_rows > 0 or explicit mutation_confirmed=True prove mutation.
+    """
+    if obj is None:
+        return False
+
+    # 1. Direct affected_rows attribute or key
+    aff = None
+    if isinstance(obj, dict):
+        aff = obj.get("affected_rows")
+    else:
+        aff = getattr(obj, "affected_rows", None)
+
+    if aff is not None and isinstance(aff, (int, float)) and aff > 0:
+        return True
+
+    # 2. Check explicit mutation_confirmed flag
+    if isinstance(obj, dict):
+        if obj.get("mutation_confirmed") is True:
+            return True
+    else:
+        if getattr(obj, "mutation_confirmed", False) is True:
+            return True
+
+    # 3. Check records list for explicit confirmed mutation markers
+    recs = None
+    if isinstance(obj, dict):
+        recs = obj.get("records")
+    else:
+        recs = getattr(obj, "records", None)
+
+    if isinstance(recs, list) and len(recs) > 0:
+        has_explicit_mutation = False
+        for r in recs:
+            if isinstance(r, dict):
+                if r.get("mutation_confirmed") is True:
+                    has_explicit_mutation = True
+                elif r.get("affected_rows") is not None and isinstance(r.get("affected_rows"), (int, float)) and r.get("affected_rows") > 0:
+                    has_explicit_mutation = True
+                elif r.get("operation") in ("INSERT", "UPDATE", "DELETE", "MERGE") and r.get("affected_rows", 0) > 0:
+                    has_explicit_mutation = True
+            elif hasattr(r, "mutation_confirmed") and getattr(r, "mutation_confirmed") is True:
+                has_explicit_mutation = True
+            elif hasattr(r, "affected_rows") and getattr(r, "affected_rows") is not None and getattr(r, "affected_rows") > 0:
+                has_explicit_mutation = True
+        if has_explicit_mutation:
+            return True
+
+    return False
+
+
 logger = logging.getLogger("beacon.rules.engine")
 
 
@@ -644,6 +726,8 @@ class ControlledAssessmentEngine:
         Strictly enforces:
         - Model defaults (e.g. delta_detected=False, changed=False) without snapshots or mutation proof are insufficient.
         - Single row_count (e.g. row_count=0 or 10) without before/after state cannot prove NO_STATE_CHANGE or STATE_CHANGE.
+        - Unanchored empty snapshots ({} == {}) without table structures cannot prove NO_STATE_CHANGE or STATE_CHANGE.
+        - Generic records (e.g. SELECT rows) without confirmed mutation (affected_rows > 0) cannot prove STATE_CHANGE.
         - Query statements alone (SELECT, UPDATE, INSERT, DELETE) without before/after state or confirmed persistent mutation records (e.g. affected_rows > 0) cannot prove state change or no state change.
         """
         captured, cap_reason = self.is_state_evidence_captured(item, is_reference)
@@ -663,21 +747,18 @@ class ControlledAssessmentEngine:
         # Database Evidence Sufficiency
         # ----------------------------------------------------
         if db is not None:
-            # 1. Snapshots: both before and after must be present
-            has_snapshots = (
-                getattr(db, "snapshot_before", None) is not None
-                and getattr(db, "snapshot_after", None) is not None
+            # 1. Snapshots: both before and after must be valid non-placeholder table mappings
+            has_snapshots = _is_valid_db_snapshots(
+                getattr(db, "snapshot_before", None),
+                getattr(db, "snapshot_after", None),
             )
             # 2. Table row counts: both before and after dictionaries must be present and non-empty
-            has_row_count_snapshots = bool(
-                getattr(db, "table_row_counts_before", None)
-                and getattr(db, "table_row_counts_after", None)
+            has_row_count_snapshots = _is_valid_db_row_counts(
+                getattr(db, "table_row_counts_before", None),
+                getattr(db, "table_row_counts_after", None),
             )
-            # 3. Confirmed persistent mutation records (e.g. affected_rows > 0 or explicit mutation records)
-            has_confirmed_mutation = bool(
-                (hasattr(db, "records") and db.records)
-                or (getattr(db, "affected_rows", None) is not None and getattr(db, "affected_rows") > 0)
-            )
+            # 3. Confirmed persistent mutation records (e.g. affected_rows > 0 or explicit confirmed mutation)
+            has_confirmed_mutation = _is_confirmed_db_mutation(db)
 
             if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
                 # To prove NO_STATE_CHANGE, we MUST have before/after snapshots or before/after row count snapshots
@@ -699,12 +780,9 @@ class ControlledAssessmentEngine:
             if getattr(r, "evidence_type", None) == EvidenceType.DATABASE:
                 p = getattr(r, "payload", {})
                 if isinstance(p, dict):
-                    has_raw_snapshots = ("snapshot_before" in p and "snapshot_after" in p and p["snapshot_before"] is not None and p["snapshot_after"] is not None)
-                    has_raw_counts = bool(p.get("table_row_counts_before") and p.get("table_row_counts_after"))
-                    has_raw_confirmed_mutation = bool(
-                        p.get("records")
-                        or (p.get("affected_rows") is not None and isinstance(p.get("affected_rows"), (int, float)) and p.get("affected_rows") > 0)
-                    )
+                    has_raw_snapshots = _is_valid_db_snapshots(p.get("snapshot_before"), p.get("snapshot_after"))
+                    has_raw_counts = _is_valid_db_row_counts(p.get("table_row_counts_before"), p.get("table_row_counts_after"))
+                    has_raw_confirmed_mutation = _is_confirmed_db_mutation(p)
 
                     if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
                         if has_raw_snapshots or has_raw_counts:
@@ -780,7 +858,7 @@ class ControlledAssessmentEngine:
         Authoritative precedence:
         1. Explicit before/after state snapshots (DB and Filesystem)
         2. Explicit before/after row count snapshots
-        3. Confirmed persistent mutation records (e.g. affected_rows > 0 or mutation records)
+        3. Confirmed persistent mutation records (e.g. affected_rows > 0 or explicit confirmed mutation)
         """
         recs = item.reference_records if is_reference else item.target_records
         db = item.reference_database if is_reference else item.target_database
@@ -794,7 +872,7 @@ class ControlledAssessmentEngine:
         if db is not None:
             b_snap = getattr(db, "snapshot_before", None)
             a_snap = getattr(db, "snapshot_after", None)
-            if b_snap is not None and a_snap is not None:
+            if _is_valid_db_snapshots(b_snap, a_snap):
                 has_comparison = True
                 if b_snap != a_snap:
                     state_mutated = True
@@ -802,7 +880,7 @@ class ControlledAssessmentEngine:
                 else:
                     details["db_snapshot_equal"] = True
 
-            elif getattr(db, "table_row_counts_before", None) and getattr(db, "table_row_counts_after", None):
+            elif _is_valid_db_row_counts(getattr(db, "table_row_counts_before", None), getattr(db, "table_row_counts_after", None)):
                 rc_b = getattr(db, "table_row_counts_before", {})
                 rc_a = getattr(db, "table_row_counts_after", {})
                 has_comparison = True
@@ -812,7 +890,7 @@ class ControlledAssessmentEngine:
                 else:
                     details["db_row_count_equal"] = True
 
-            elif (hasattr(db, "records") and db.records) or (getattr(db, "affected_rows", None) is not None and getattr(db, "affected_rows") > 0):
+            elif _is_confirmed_db_mutation(db):
                 state_mutated = True
                 has_comparison = True
                 details["db_confirmed_mutation"] = True
@@ -821,21 +899,23 @@ class ControlledAssessmentEngine:
         for r in recs:
             if getattr(r, "evidence_type", None) == EvidenceType.DATABASE and isinstance(r.payload, dict):
                 p = r.payload
-                if "snapshot_before" in p and "snapshot_after" in p and p["snapshot_before"] is not None and p["snapshot_after"] is not None:
+                b_raw_snap = p.get("snapshot_before")
+                a_raw_snap = p.get("snapshot_after")
+                if _is_valid_db_snapshots(b_raw_snap, a_raw_snap):
                     has_comparison = True
-                    if p["snapshot_before"] != p["snapshot_after"]:
+                    if b_raw_snap != a_raw_snap:
                         state_mutated = True
                         details["raw_db_snapshot_diff"] = True
                     else:
                         details["raw_db_snapshot_equal"] = True
-                elif "table_row_counts_before" in p and "table_row_counts_after" in p and p["table_row_counts_before"] and p["table_row_counts_after"]:
+                elif _is_valid_db_row_counts(p.get("table_row_counts_before"), p.get("table_row_counts_after")):
                     has_comparison = True
                     if p["table_row_counts_before"] != p["table_row_counts_after"]:
                         state_mutated = True
                         details["raw_db_row_count_diff"] = True
                     else:
                         details["raw_db_row_count_equal"] = True
-                elif p.get("records") or (p.get("affected_rows") is not None and isinstance(p.get("affected_rows"), (int, float)) and p.get("affected_rows") > 0):
+                elif _is_confirmed_db_mutation(p):
                     state_mutated = True
                     has_comparison = True
                     details["raw_db_confirmed_mutation"] = True
