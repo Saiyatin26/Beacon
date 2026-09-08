@@ -199,13 +199,13 @@ npm --prefix frontend run build
 
 | Test Suite | Command | Total | Passed | Failed | Skipped | Errors | Duration |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Phase 6 Discovery** | `pytest -q tests/test_v2_phase6_discovery.py` | 35 | **35** | 0 | 0 | 0 | 0.15s |
+| **Phase 6 Discovery** | `pytest -q tests/test_v2_phase6_discovery.py` | 36 | **36** | 0 | 0 | 0 | 0.22s |
 | **Phase 3 Regression** | `pytest -q tests/test_v2_phase3_execution.py` | 47 | **47** | 0 | 0 | 0 | 16.60s |
 | **Phase 5 Regression** | `pytest -q tests/test_v2_phase5_*.py` | 85 | **85** | 0 | 0 | 0 | 1.11s |
-| **Full V2 Suite (Phases 1-6)** | `pytest -q tests/test_v2_phase*.py` | 337 | **337** | 0 | 0 | 0 | 28.72s |
-| **Full Repository Suite** | `pytest -q` | 787 | **787** | 0 | 0 | 0 | 284.76s |
+| **Full V2 Suite (Phases 1-6)** | `pytest -q tests/test_v2_phase*.py` | 338 | **338** | 0 | 0 | 0 | 23.68s |
+| **Full Repository Suite** | `pytest -q` | 788 | **788** | 0 | 0 | 0 | 319.02s |
 | **Backend Compilation** | `python -m compileall -q backend` | — | **PASS** | 0 | — | 0 | 0.35s |
-| **Frontend Production Build** | `npm --prefix frontend run build` | — | **PASS** | 0 | — | 0 | 3.54s |
+| **Frontend Production Build** | `npm --prefix frontend run build` | — | **PASS** | 0 | — | 0 | 5.55s |
 
 ---
 
@@ -250,6 +250,7 @@ npm --prefix frontend run build
 | **Role Isolation** | **PASS** | Reference and Target candidate sets mined independently; no merged records. |
 | **Determinism** | **PASS** | Identical inputs produce identical expressions, fingerprints, metrics, and rankings. |
 | **Fingerprints** | **PASS** | SHA-256 cryptographic digests computed from canonical AST expressions. |
+| **Result Hash Integrity** | **PASS** | SHA-256 hash covers candidate metrics (`support`, `contradiction`, `unknown`, `applicable`, `confidence`, `status`). |
 | **Persistence** | **PASS** | Candidate instances stored in SQLite with distinct `candidate_instance_id` values. |
 | **Migration** | **PASS** | Safe non-destructive `ALTER TABLE` preserves historical records and runs. |
 | **Persistence Failure Handling** | **PASS** | Explicit `persistence_status="FAILED"` and structured diagnostic logging. |
@@ -260,11 +261,11 @@ npm --prefix frontend run build
 | **Compilation** | **PASS** | `python -m compileall -q backend` exited with code 0. |
 | **Backend Startup** | **PASS** | Health endpoint and authenticated discovery endpoint verified. |
 | **Frontend Build** | **PASS** | `npm --prefix frontend run build` exited with code 0. |
-| **Phase 6 Tests** | **PASS** | 35 / 35 passed in `tests/test_v2_phase6_discovery.py`. |
+| **Phase 6 Tests** | **PASS** | 36 / 36 passed in `tests/test_v2_phase6_discovery.py`. |
 | **Phase 3 Regression** | **PASS** | 47 / 47 passed in `tests/test_v2_phase3_execution.py`. |
 | **Phase 5 Regression** | **PASS** | 85 / 85 passed in Phase 5 test files. |
-| **Full V2 Suite** | **PASS** | 337 / 337 passed in V2 test suite. |
-| **Full Repository Suite** | **PASS** | 787 / 787 passed across entire repository test suite. |
+| **Full V2 Suite** | **PASS** | 338 / 338 passed in V2 test suite. |
+| **Full Repository Suite** | **PASS** | 788 / 788 passed across entire repository test suite. |
 
 ---
 

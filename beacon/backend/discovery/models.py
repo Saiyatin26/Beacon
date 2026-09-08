@@ -259,7 +259,7 @@ class DiscoveryResult(BaseModel):
         return [c for c in self.candidates if c.role_scope == "target"]
 
     def compute_result_hash(self) -> str:
-        """Computes deterministic SHA-256 digest across all ordered candidate fingerprints."""
+        """Computes deterministic SHA-256 digest across all ordered candidate fingerprints and validation metrics."""
         ordered_candidates = [
             {
                 "candidate_id": c.candidate_id,
@@ -268,10 +268,13 @@ class DiscoveryResult(BaseModel):
                 "canonical_expression": c.canonical_expression,
                 "role_scope": c.role_scope,
                 "support_count": c.support_count,
+                "contradiction_count": c.contradiction_count,
+                "unknown_count": c.unknown_count,
+                "applicable_count": c.applicable_count,
                 "confidence": c.confidence,
                 "validation_status": c.validation_status.value,
             }
-            for c in sorted(self.candidates, key=lambda x: x.fingerprint)
+            for c in sorted(self.candidates, key=lambda x: (x.fingerprint, x.role_scope, x.candidate_id))
         ]
         payload = {
             "application_id": self.application_id,

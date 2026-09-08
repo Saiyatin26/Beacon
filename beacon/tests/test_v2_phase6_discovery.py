@@ -1320,3 +1320,60 @@ class TestPhase6RuleDiscovery:
         assert res_tgt.contradiction_count == 1
         assert res_tgt.input_ids == ["t1", "t2"]  # t3 contradicted
 
+    # --------------------------------------------------------------------------
+    # 30. Discovery Result Hash Sensitivity Adversarial Test
+    # --------------------------------------------------------------------------
+    def test_result_hash_sensitivity_adversarial(self):
+        """Result hash must change when contradiction_count, unknown_count, support_count, or status changes."""
+        policy = DiscoveryPolicy()
+        base_candidate = DiscoveredCandidate(
+            candidate_id="cand_hash_test",
+            rule_type=DiscoveredRuleType.INPUT_OUTPUT_RELATION,
+            canonical_expression="input.x == output.y",
+            normalized_expression="input.x == output.y",
+            description="Hash test candidate",
+            role_scope="reference",
+            support_count=3,
+            contradiction_count=0,
+            unknown_count=0,
+            applicable_count=3,
+            confidence=1.0,
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+
+        res_base = DiscoveryResult(
+            discovery_id="disc_1",
+            application_id="app_1",
+            session_id="sess_1",
+            policy=policy,
+            observation_count=3,
+            candidates=[base_candidate],
+            common_fingerprints=[base_candidate.fingerprint],
+        )
+        hash_base = res_base.compute_result_hash()
+
+        # 1. Contradiction count changes (support=3, contradiction=1)
+        cand_diff_contra = base_candidate.model_copy(update={"contradiction_count": 1, "confidence": 0.75, "validation_status": CandidateValidationStatus.WEAK})
+        res_diff_contra = res_base.model_copy(update={"candidates": [cand_diff_contra]})
+        hash_diff_contra = res_diff_contra.compute_result_hash()
+        assert hash_base != hash_diff_contra
+
+        # 2. Unknown count changes (support=3, contradiction=0, unknown=1)
+        cand_diff_unknown = base_candidate.model_copy(update={"unknown_count": 1, "applicable_count": 4})
+        res_diff_unknown = res_base.model_copy(update={"candidates": [cand_diff_unknown]})
+        hash_diff_unknown = res_diff_unknown.compute_result_hash()
+        assert hash_base != hash_diff_unknown
+
+        # 3. Support count changes (support=4, contradiction=0, unknown=0)
+        cand_diff_support = base_candidate.model_copy(update={"support_count": 4, "applicable_count": 4})
+        res_diff_support = res_base.model_copy(update={"candidates": [cand_diff_support]})
+        hash_diff_support = res_diff_support.compute_result_hash()
+        assert hash_base != hash_diff_support
+
+        # 4. Status changes only
+        cand_diff_status = base_candidate.model_copy(update={"validation_status": CandidateValidationStatus.CANDIDATE})
+        res_diff_status = res_base.model_copy(update={"candidates": [cand_diff_status]})
+        hash_diff_status = res_diff_status.compute_result_hash()
+        assert hash_base != hash_diff_status
+
+
