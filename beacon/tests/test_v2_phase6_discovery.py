@@ -818,3 +818,201 @@ class TestPhase6RuleDiscovery:
         assert val.support_count == 4
         assert val.contradiction_count == 0
         assert val.validation_status == CandidateValidationStatus.VALIDATED
+
+    # --------------------------------------------------------------------------
+    # 22. Generator / Validator Meta-Test (All 9 Generators Evaluated by Validator)
+    # --------------------------------------------------------------------------
+    def test_generator_validator_meta_test(self):
+        """Every expression emitted by every enabled candidate generator is understood by CandidateValidator."""
+        from discovery.generators.boundary import BoundaryCandidateGenerator
+        from discovery.generators.cross_input import CrossInputCandidateGenerator
+        from discovery.generators.error_behavior import ErrorBehaviorCandidateGenerator
+        from discovery.generators.input_output import InputOutputCandidateGenerator
+        from discovery.generators.nullability import NullabilityCandidateGenerator
+        from discovery.generators.relational import RelationalCandidateGenerator
+        from discovery.generators.state import StateCandidateGenerator
+        from discovery.generators.type_shape import TypeShapeCandidateGenerator
+        from discovery.generators.workflow import WorkflowCandidateGenerator
+
+        policy = DiscoveryPolicy(minimum_support_count=2, enable_formula_discovery=True)
+
+        generators_with_facts = [
+            (
+                InputOutputCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", input_data={"x": 10}, output_data={"y": 20, "const": 42}, output_observed=True),
+                    ObservationFact(input_id="i2", role="reference", input_data={"x": 20}, output_data={"y": 40, "const": 42}, output_observed=True),
+                ]
+            ),
+            (
+                CrossInputCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", input_data={"a": 1}, output_data={"res": 10}, output_observed=True),
+                    ObservationFact(input_id="i2", role="reference", input_data={"a": 2}, output_data={"res": 20}, output_observed=True),
+                ]
+            ),
+            (
+                TypeShapeCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", output_data={"count": 5, "name": "foo"}, output_observed=True),
+                    ObservationFact(input_id="i2", role="reference", output_data={"count": 10, "name": "bar"}, output_observed=True),
+                ]
+            ),
+            (
+                NullabilityCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", output_data={"id": 101}, output_observed=True),
+                    ObservationFact(input_id="i2", role="reference", output_data={"id": 102}, output_observed=True),
+                ]
+            ),
+            (
+                RelationalCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", input_data={"min": 5}, output_data={"max": 10}, output_observed=True),
+                    ObservationFact(input_id="i2", role="reference", input_data={"min": 8}, output_data={"max": 12}, output_observed=True),
+                ]
+            ),
+            (
+                ErrorBehaviorCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", has_error=False, is_valid=True),
+                    ObservationFact(input_id="i2", role="reference", has_error=False, is_valid=True),
+                ]
+            ),
+            (
+                StateCandidateGenerator(),
+                [
+                    ObservationFact(
+                        input_id="i1", role="reference",
+                        state_before={"items": {"row_count": 5, "rows": []}},
+                        state_after={"items": {"row_count": 6, "rows": []}},
+                        state_valid=True, state_observed=True, state_mutated=True,
+                    ),
+                    ObservationFact(
+                        input_id="i2", role="reference",
+                        state_before={"items": {"row_count": 15, "rows": []}},
+                        state_after={"items": {"row_count": 16, "rows": []}},
+                        state_valid=True, state_observed=True, state_mutated=True,
+                    ),
+                ]
+            ),
+            (
+                WorkflowCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", workflow_events=["init", "auth", "process", "close"]),
+                    ObservationFact(input_id="i2", role="reference", workflow_events=["init", "auth", "process", "close"]),
+                ]
+            ),
+            (
+                BoundaryCandidateGenerator(),
+                [
+                    ObservationFact(input_id="i1", role="reference", input_data={"v": 1}, has_error=False, is_valid=True),
+                    ObservationFact(input_id="i2", role="reference", input_data={"v": 2}, has_error=False, is_valid=True),
+                    ObservationFact(input_id="i3", role="reference", input_data={"v": 10}, has_error=True, is_valid=True),
+                    ObservationFact(input_id="i4", role="reference", input_data={"v": 11}, has_error=True, is_valid=True),
+                ]
+            ),
+        ]
+
+        for generator, facts in generators_with_facts:
+            candidates = generator.generate_candidates(facts, policy, role_scope="reference")
+            assert len(candidates) > 0, f"Generator {generator.generator_name} produced 0 candidates for sample facts"
+
+            for cand in candidates:
+                val = candidate_validator.validate_candidate(cand, facts, policy)
+                # The validator must understand and evaluate the expression (support > 0 or applicable > 0)
+                # It must NEVER produce inconclusive due to unparseable syntax for its own generated candidates
+                assert val.applicable_count > 0 or val.support_count > 0, (
+                    f"Validator could not evaluate candidate '{cand.canonical_expression}' "
+                    f"emitted by {generator.generator_name}"
+                )
+                assert val.validation_status != CandidateValidationStatus.INCONCLUSIVE, (
+                    f"Validator returned INCONCLUSIVE for candidate '{cand.canonical_expression}' "
+                    f"generated from valid facts"
+                )
+
+    # --------------------------------------------------------------------------
+    # 23. Explicit Persistence Failure Diagnostics
+    # --------------------------------------------------------------------------
+    def test_explicit_persistence_failure_diagnostics(self, monkeypatch):
+        """When persistence fails, discovery records an explicit diagnostic error and status is not marked COMPLETE."""
+        bundle = EvidenceBundle(
+            bundle_id="b_pfail",
+            session_id="s1",
+            correlation_id="corr_pfail",
+            application_id="app1",
+            input_set_id="is_pfail",
+            manifest=EvidenceManifest(
+                correlation_id="corr_pfail",
+                input_set_id="is_pfail",
+                input_set_hash="hash_pfail",
+                session_id="s1",
+                application_id="app1",
+            ),
+            records=[
+                EvidenceRecord(
+                    evidence_id="ev1",
+                    session_id="s1",
+                    input_id="inp_1",
+                    role="reference",
+                    evidence_type=EvidenceType.OUTPUT,
+                    capture_status=EvidenceCaptureStatus.CAPTURED,
+                    payload={"data": {"y": 10}},
+                ),
+                EvidenceRecord(
+                    evidence_id="ev2",
+                    session_id="s1",
+                    input_id="inp_2",
+                    role="reference",
+                    evidence_type=EvidenceType.OUTPUT,
+                    capture_status=EvidenceCaptureStatus.CAPTURED,
+                    payload={"data": {"y": 10}},
+                ),
+            ],
+        )
+
+        def mock_save_fail(result):
+            raise sqlite3.OperationalError("Simulated disk I/O error during candidate write")
+
+        monkeypatch.setattr(discovery_persistence, "save_discovery_result", mock_save_fail)
+
+        engine = RuleDiscoveryEngine()
+        res = engine.discover_rules(bundle, persist=True)
+
+        assert res.has_failures is True
+        assert res.overall_status in ("PARTIAL", "FAILED")
+        persistence_diags = [d for d in res.diagnostics if d.generator_name == "persistence"]
+        assert len(persistence_diags) == 1
+        assert persistence_diags[0].status == "FAILED"
+        assert persistence_diags[0].severity == "ERROR"
+        assert "Simulated disk I/O error" in persistence_diags[0].message
+
+    # --------------------------------------------------------------------------
+    # 24. Strict False-Positive Rejection (Defaults, Incomplete, Malformed)
+    # --------------------------------------------------------------------------
+    def test_strict_false_positives_rejection(self):
+        """Defaults and malformed/partial structures never produce false candidate rules."""
+        # 1. Evidence with NO error observation (has_error=None)
+        f_no_err = ObservationFact(input_id="i1", role="reference", has_error=None, error_observed=False, is_valid=True)
+        # 2. Evidence with NO state observation (state_observed=False)
+        f_no_st = ObservationFact(input_id="i2", role="reference", state_observed=False, state_valid=False)
+        # 3. Evidence with malformed states
+        f_malformed_st = ObservationFact(
+            input_id="i3", role="reference",
+            state_before={"table": []},  # Not a valid snapshot dict or count
+            state_after={"table": {"unknown_field": 123}},
+            state_valid=False, state_observed=True,
+        )
+
+        facts = [f_no_err, f_no_st, f_malformed_st]
+        policy = DiscoveryPolicy(minimum_support_count=1)
+
+        err_gen = ErrorBehaviorCandidateGenerator()
+        err_cands = err_gen.generate_candidates(facts, policy, role_scope="reference")
+        # Must not generate "has_error == false"
+        assert not any(c.canonical_expression == "has_error == false" for c in err_cands)
+
+        st_gen = StateCandidateGenerator()
+        st_cands = st_gen.generate_candidates(facts, policy, role_scope="reference")
+        # Must not generate state invariants or row count transitions from malformed state
+        assert len(st_cands) == 0

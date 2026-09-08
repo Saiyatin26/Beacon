@@ -130,8 +130,8 @@ End-to-end integration verified using live SQLite database evidence providers (`
 Full regression test suite passes with 329/329 tests passing and 0 failures.
 
 ### Test results:
-- 27/27 Phase 6 tests pass in `tests/test_v2_phase6_discovery.py`.
-- 329/329 total tests pass across Phases 1 through 6.
+- 30/30 Phase 6 tests pass in `tests/test_v2_phase6_discovery.py`.
+- 332/332 total tests pass across Phases 1 through 6.
 - Backend compiles cleanly (`python -m compileall -q backend`).
 - Frontend builds cleanly (`npm --prefix frontend run build`).
 
@@ -213,10 +213,10 @@ Phase 3 integration:
     Verified against live Phase 3 database evidence provider and manifests.
 
 Phase 5 regression:
-    329/329 total tests pass across Phases 1 through 6.
+    332/332 total tests pass across Phases 1 through 6.
 
 Test results:
-    27/27 Phase 6 tests pass; 329/329 full regression suite pass.
+    30/30 Phase 6 tests pass; 332/332 full regression suite pass.
 
 Environment limitations:
     None.

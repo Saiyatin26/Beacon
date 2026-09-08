@@ -235,11 +235,11 @@ class CandidateValidator:
                 return abs(float(va) - (float(vb) + delta)) < policy.numeric_tolerance
             return va == vb
 
-        # 10. Cross-Input Invariants
-        if expr.startswith("cross_input_invariant(keys(output)"):
+        # 10. Output Shapes & Cross-Input Invariants
+        if expr.startswith("cross_input_invariant(keys(output)") or expr.startswith("keys(output)"):
             if not fact.output_observed or not fact.output_data:
                 return None
-            m_k = re.match(r"^cross_input_invariant\(keys\(output\)\s*==\s*\[(.*)\]\)$", expr)
+            m_k = re.match(r"^(?:cross_input_invariant\()?keys\(output\)\s*==\s*\[(.*)\]\)?$", expr)
             if m_k:
                 raw_ks = [k.strip().strip("'").strip('"') for k in m_k.group(1).split(",") if k.strip()]
                 return sorted(list(fact.output_data.keys())) == sorted(raw_ks)
@@ -253,7 +253,7 @@ class CandidateValidator:
                     return None
                 return True
 
-        # 11. Workflow Invariants: workflow.event('A') precedes workflow.event('B')
+        # 11. Workflow Invariants: workflow.event('A') precedes workflow.event('B') or workflow.sequence == [A -> B]
         m_wf_prec = re.match(r"^workflow\.event\('(.+?)'\)\s+precedes\s+workflow\.event\('(.+?)'\)$", expr)
         if m_wf_prec:
             ev_a = m_wf_prec.group(1)
@@ -263,6 +263,13 @@ class CandidateValidator:
             if ev_a not in fact.workflow_events or ev_b not in fact.workflow_events:
                 return None
             return fact.workflow_events.index(ev_a) < fact.workflow_events.index(ev_b)
+
+        m_wf_seq = re.match(r"^workflow\.sequence\s*==\s*\[(.*)\]$", expr)
+        if m_wf_seq:
+            if not fact.workflow_events:
+                return None
+            raw_seq = [s.strip() for s in m_wf_seq.group(1).split("->") if s.strip()]
+            return fact.workflow_events == raw_seq
 
         # 12. Boundary Transitions:
         # transition(input.x >= T) -> has_error == true/false

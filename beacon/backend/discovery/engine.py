@@ -261,6 +261,18 @@ class RuleDiscoveryEngine:
                 discovery_persistence.save_discovery_result(result)
             except Exception as exc:
                 logger.error(f"Failed to persist discovery result '{result.discovery_id}': {exc}")
+                result.diagnostics.append(
+                    DiscoveryDiagnostic(
+                        generator_name="persistence",
+                        status="FAILED",
+                        severity="ERROR",
+                        message=f"Failed to persist discovery result: {exc}",
+                        exception_type=type(exc).__name__,
+                        evidence_scope="all",
+                    )
+                )
+                result.has_failures = True
+                result.overall_status = "PARTIAL" if result.validated_count > 0 else "FAILED"
 
         return result
 
