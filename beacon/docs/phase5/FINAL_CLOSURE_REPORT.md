@@ -8,10 +8,10 @@
 ## 1. Executive Summary
 
 Phase 5 introduces **Business-Rule Understanding and Controlled Mode Assessment** to BEACON V2. In Controlled Mode, certifiers specify domain-agnostic business rules against which Reference and Target implementations are evaluated independently. This closure pass resolves the final certification-level evidence semantics issues:
-- **Issue A**: Disambiguating unanchored placeholder empty database snapshots (`{}`) from genuinely captured empty database states.
-- **Issue B**: Distinguishing generic query result `records` from explicitly confirmed persistent state mutations.
+- **Database Snapshot Sufficiency & Phase 3 Contract**: Disambiguating unanchored placeholder empty database snapshots (`{}`) and malformed/error dictionaries (e.g. `{"error": ...}`, `{"users": {}}`, `{"users": {"bad": "x"}}`) from genuinely captured database states conforming to the Phase 3 `DatabaseEvidenceProvider` contract.
+- **Generic Records vs Confirmed Mutation**: Distinguishing generic query result `records` from explicitly confirmed persistent state mutations (`affected_rows > 0`).
 
-With all 293 Phase 1–5 tests passing, zero domain hard-coding, complete Reference/Target role isolation, fail-closed evidence status handling, and verified deterministic auditability, Phase 5 is fully closed and ready for independent verification.
+With all 298 Phase 1–5 tests passing, zero domain hard-coding, complete Reference/Target role isolation, fail-closed evidence status handling, and verified deterministic auditability, Phase 5 is fully closed and ready for independent verification.
 
 ---
 
@@ -28,8 +28,8 @@ In preceding passes, Phase 5 established:
 
 ## 3. Remaining Issues Found in Final Audit
 
-1. **Issue A (Empty / Placeholder Database Snapshots)**: The engine previously evaluated `snapshot_before = {}` and `snapshot_after = {}` as equal, concluding `NO_STATE_CHANGE` as `PASS` even when `{}` was an unanchored, unconfigured placeholder rather than a genuine observation of empty database tables.
-2. **Issue B (Generic Records Treated as Mutation)**: The engine previously checked `bool(db.records)` or `bool(payload.get("records"))` and treated any truthy record list (including SELECT query row results) as confirmed persistent mutation, triggering false `STATE_CHANGE` passes.
+1. **Database Snapshot Sufficiency**: The validator previously treated any non-empty dictionary as a valid database snapshot. Malformed non-contract structures such as `{"error": "capture failed"}`, `{"users": {}}`, or `{"users": {"bad": "x"}}` could have been interpreted as valid observations.
+2. **Generic Records Treated as Mutation**: Generic query row results (e.g., SELECT rows) or arbitrary payloads in `records` were previously capable of satisfying `STATE_CHANGE` without confirmed row modifications (`affected_rows > 0`).
 
 ---
 
@@ -41,9 +41,10 @@ In Python dictionary comparison, `{}` == `{}` evaluates to `True`. When no table
 
 ## 5. Distinguishing Explicit Empty State from Missing/Placeholder State
 
-The engine now verifies genuine table structures:
+The engine now strictly validates snapshot structures against the Phase 3 `DatabaseEvidenceProvider` contract:
 - **Unanchored Placeholder Snapshot (`{}`)**: `len(snapshot) == 0` without table structure $\to$ treated as missing/unanchored observational evidence $\to$ `INCONCLUSIVE`.
-- **Explicitly Captured Empty Database State**: Contains table structure entries (e.g. `{"users": {"row_count": 0, "rows": [], "table_hash": "..."}}` or `table_row_counts_before={"users": 0}`) $\to$ valid observational evidence $\to$ yields `NO_STATE_CHANGE` `PASS` when before and after match.
+- **Malformed / Non-Contract Snapshots**: Dictionaries containing error markers (`{"error": ...}`), empty table mappings (`{"users": {}}`), or arbitrary non-contract fields (`{"users": {"bad": "x"}}`) $\to$ `INCONCLUSIVE`.
+- **Explicitly Captured Empty Database State**: Contains valid table structure entries (e.g. `{"users": {"row_count": 0, "rows": [], "table_hash": "..."}}` or `table_row_counts_before={"users": 0}`) $\to$ valid observational evidence $\to$ yields `NO_STATE_CHANGE` `PASS` when before and after match.
 
 ---
 
@@ -84,7 +85,7 @@ SQL mutation statements (`INSERT`, `UPDATE`, `DELETE`, `MERGE`, `DROP`, `ALTER`,
 Authoritative evidence precedence is strictly enforced:
 1. **Direct Before/After State Snapshots** (`snapshot_before` vs `snapshot_after`, `before_state` vs `after_state`): Absolute highest precedence. Overrides any query strings or operations.
 2. **Table Row-Count Deltas** (`table_row_counts_before` vs `table_row_counts_after`).
-3. **Explicit Confirmed Mutation Records** (`affected_rows > 0` or `mutation_confirmed: True`).
+3. **Explicit Confirmed Mutation Records** (`affected_rows > 0`).
 
 ---
 
@@ -93,9 +94,9 @@ Authoritative evidence precedence is strictly enforced:
 `DatabaseEvidence` evaluation strictly adheres to:
 - `row_count` alone does NOT prove `NO_STATE_CHANGE` or `STATE_CHANGE`.
 - `SELECT` alone does NOT prove `STATE_CHANGE`.
-- `_is_valid_db_snapshots` validates that snapshots contain table structures.
-- `_is_valid_db_row_counts` validates that table counts contain configured tables.
-- `_is_confirmed_db_mutation` requires positive affected rows or explicit mutation markers.
+- `_is_valid_db_snapshots` validates that snapshots contain table structures conforming to the Phase 3 schema (`table_hash`, `row_count`, `rows`, or primary-key row mappings).
+- `_is_valid_db_row_counts` validates that table counts contain configured tables with non-negative counts.
+- `_is_confirmed_db_mutation` requires positive affected rows (`affected_rows > 0`).
 
 ---
 
@@ -179,7 +180,11 @@ Added comprehensive permanent regression tests in `tests/test_v2_phase5_controll
 - `test_closure_snapshot_diff_before_a_after_b_yields_state_change_pass` (Mandatory Test #9, Section 22 Test 3)
 - `test_closure_mandatory_e2e_1_valid_output_and_malformed_state` (Mandatory Test #1, Section 45)
 - `test_closure_mandatory_e2e_2_role_contamination_secret_isolation` (Mandatory Test #2, Section 46)
-- Tests for all 11 mandatory end-to-end scenarios (Sections 45–55).
+- `test_malformed_snapshot_case_c_error_object_yields_inconclusive` (Section 6 Case C)
+- `test_malformed_snapshot_case_d_empty_table_dict_yields_inconclusive` (Section 6 Case D)
+- `test_malformed_snapshot_case_e_arbitrary_non_contract_dict_yields_inconclusive` (Section 6 Case E)
+- `test_asymmetric_state_change_reference_changes_target_does_not` (Section 8 Case 3)
+- `test_asymmetric_state_change_target_changes_reference_does_not` (Section 8 Case 4)
 
 ---
 
@@ -191,17 +196,20 @@ Added comprehensive permanent regression tests in `tests/test_v2_phase5_controll
    `python -m pytest -q tests/test_v2_phase1_architecture.py tests/test_v2_phase2_adapters.py tests/test_v2_phase3_execution.py tests/test_v2_phase4_evaluation.py tests/test_v2_phase5_rules.py tests/test_v2_phase5_controlled_assessment.py --confcutdir=/tmp --noconftest`
 3. Bytecode compilation:
    `python -m compileall -q backend`
-4. Frontend build:
+4. Backend import & routing verification:
+   `python -c "import sys; sys.path.insert(0, 'backend'); import rules; import api.controlled_router; import evaluation; print('IMPORTS SUCCESS')"`
+5. Frontend build:
    `npm run build` (in `frontend/`)
 
 ---
 
 ## 22. Test Results
 
-- **Phase 5 Targeted Suite**: 76 passed, 0 failed, 1 warning in 7.45s.
-- **Phase 1–5 Full Regression Suite**: 293 passed, 0 failed, 1 warning in 70.02s.
+- **Phase 5 Targeted Suite**: 81 passed, 0 failed, 1 warning in 3.72s.
+- **Phase 1–5 Full Regression Suite**: 298 passed, 0 failed, 1 warning in 39.57s.
 - **Bytecode Compilation**: 0 errors.
-- **Frontend Build**: Built cleanly (`dist/index.html`, 12.32s).
+- **Backend Imports**: SUCCESS (`IMPORTS SUCCESS`).
+- **Frontend Build**: Built cleanly (`dist/index.html`, 4.66s).
 
 ---
 
@@ -250,9 +258,11 @@ Confirmed that Phase 5 contains **no Phase 6 functionality**:
 | | Before/after state has appropriate precedence | **PASSED** |
 | | Empty snapshots interpreted according to actual Phase 3 semantics | **PASSED** |
 | | Placeholder `{}` is not automatically treated as real state | **PASSED** |
+| | Malformed snapshots (`{"error": ...}`, `{"users": {}}`, `{"users": {"bad": "x"}}`) yield INCONCLUSIVE | **PASSED** |
 | | Explicitly captured empty state remains valid evidence | **PASSED** |
 | | Valid before=A / after=A proves NO_STATE_CHANGE | **PASSED** |
 | | Valid before=A / after=B proves STATE_CHANGE | **PASSED** |
+| | Asymmetric state mutations correctly yield rule-level and overall FAIL | **PASSED** |
 | **Filesystem** | Valid before/after hashes support state comparison | **PASSED** |
 | | Missing hash does not become zero/default evidence | **PASSED** |
 | | Explicit file absence remains distinguishable from missing evidence | **PASSED** |

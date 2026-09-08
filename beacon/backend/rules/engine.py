@@ -66,20 +66,66 @@ def _is_readonly_query(q: Any) -> bool:
     return clean.startswith("SELECT") or clean.startswith("EXPLAIN") or clean.startswith("SHOW") or clean.startswith("DESCRIBE")
 
 
-def _is_valid_db_snapshots(snap_before: Any, snap_after: Any) -> bool:
-    """Validates that before and after database snapshots represent genuine captured observational state,
-    not unanchored empty placeholders or uncaptured defaults.
+def _is_valid_db_table_snapshot(tbl_name: Any, tbl_data: Any) -> bool:
+    """Validates that a single table snapshot conforms to the Phase 3 DatabaseEvidence contract.
 
-    {} == {} without table entries is considered uncaptured / placeholder and returns False.
-    Snapshots containing table entries (even empty tables like {"users": {"row_count": 0, "rows": [], "table_hash": "..."}}) return True.
+    Rejects:
+    - Non-string or error table names (e.g. 'error', 'message', 'exception').
+    - Empty table dicts (e.g. {'users': {}}).
+    - Malformed table dicts lacking Phase 3 contract fields or row mappings (e.g. {'users': {'bad': 'x'}}).
+    - Table dicts containing error markers (e.g. {'error': '...'}).
+    - Non-dict / non-list row containers.
     """
-    if snap_before is None or snap_after is None:
+    if not isinstance(tbl_name, str) or not tbl_name.strip():
         return False
-    if not isinstance(snap_before, dict) or not isinstance(snap_after, dict):
+    if tbl_name.lower() in ("error", "errors", "message", "exception", "capture_error"):
         return False
-    if len(snap_before) == 0 or len(snap_after) == 0:
+
+    # 1. Table data as list of row records (e.g. [{"id": 1, "balance": 1000}] or [])
+    if isinstance(tbl_data, list):
+        for row in tbl_data:
+            if not isinstance(row, dict):
+                return False
+        return True
+
+    # 2. Table data as structured table snapshot dict from DatabaseEvidenceProvider or primary-key row mapping
+    if isinstance(tbl_data, dict) and len(tbl_data) > 0:
+        if "error" in tbl_data or "exception" in tbl_data:
+            return False
+
+        has_hash = "table_hash" in tbl_data and isinstance(tbl_data["table_hash"], str) and len(tbl_data["table_hash"]) > 0
+        has_row_count = "row_count" in tbl_data and isinstance(tbl_data["row_count"], int) and tbl_data["row_count"] >= 0
+        has_rows = "rows" in tbl_data and isinstance(tbl_data["rows"], list)
+
+        if has_hash or has_row_count or has_rows:
+            return True
+
+        # Primary-key row mapping (e.g. {"42": {"balance": 100}}) where all items are row dicts
+        if all(isinstance(v, dict) and len(v) > 0 for v in tbl_data.values()):
+            return True
+
         return False
+
+    return False
+
+
+def _is_valid_db_snapshot_dict(snap: Any) -> bool:
+    """Validates that a database snapshot dictionary conforms to the Phase 3 contract."""
+    if not isinstance(snap, dict) or len(snap) == 0:
+        return False
+    if "error" in snap or "message" in snap or "exception" in snap:
+        return False
+    for tbl_name, tbl_data in snap.items():
+        if not _is_valid_db_table_snapshot(tbl_name, tbl_data):
+            return False
     return True
+
+
+def _is_valid_db_snapshots(snap_before: Any, snap_after: Any) -> bool:
+    """Validates that both before and after database snapshots represent genuine captured observational state
+    according to the Phase 3 DatabaseEvidence contract.
+    """
+    return _is_valid_db_snapshot_dict(snap_before) and _is_valid_db_snapshot_dict(snap_after)
 
 
 def _is_valid_db_row_counts(rc_before: Any, rc_after: Any) -> bool:
@@ -90,6 +136,14 @@ def _is_valid_db_row_counts(rc_before: Any, rc_after: Any) -> bool:
         return False
     if len(rc_before) == 0 or len(rc_after) == 0:
         return False
+    if "error" in rc_before or "error" in rc_after:
+        return False
+    for tbl_name, cnt in rc_before.items():
+        if not isinstance(tbl_name, str) or not tbl_name.strip() or not isinstance(cnt, int) or cnt < 0:
+            return False
+    for tbl_name, cnt in rc_after.items():
+        if not isinstance(tbl_name, str) or not tbl_name.strip() or not isinstance(cnt, int) or cnt < 0:
+            return False
     return True
 
 
@@ -98,7 +152,7 @@ def _is_confirmed_db_mutation(obj: Any) -> bool:
 
     Generic records (e.g. row lists, SELECT results, query logs) or affected_rows <= 0
     do NOT prove persistent mutation.
-    Only explicit affected_rows > 0 or explicit mutation_confirmed=True prove mutation.
+    Only explicit affected_rows > 0 proves persistent mutation under the Phase 3 contract.
     """
     if obj is None:
         return False
@@ -113,15 +167,7 @@ def _is_confirmed_db_mutation(obj: Any) -> bool:
     if aff is not None and isinstance(aff, (int, float)) and aff > 0:
         return True
 
-    # 2. Check explicit mutation_confirmed flag
-    if isinstance(obj, dict):
-        if obj.get("mutation_confirmed") is True:
-            return True
-    else:
-        if getattr(obj, "mutation_confirmed", False) is True:
-            return True
-
-    # 3. Check records list for explicit confirmed mutation markers
+    # 2. Check records list for explicit confirmed mutation markers with affected_rows > 0
     recs = None
     if isinstance(obj, dict):
         recs = obj.get("records")
@@ -132,14 +178,11 @@ def _is_confirmed_db_mutation(obj: Any) -> bool:
         has_explicit_mutation = False
         for r in recs:
             if isinstance(r, dict):
-                if r.get("mutation_confirmed") is True:
+                r_aff = r.get("affected_rows")
+                if r_aff is not None and isinstance(r_aff, (int, float)) and r_aff > 0:
                     has_explicit_mutation = True
-                elif r.get("affected_rows") is not None and isinstance(r.get("affected_rows"), (int, float)) and r.get("affected_rows") > 0:
+                elif r.get("operation") in ("INSERT", "UPDATE", "DELETE", "MERGE") and r_aff is not None and r_aff > 0:
                     has_explicit_mutation = True
-                elif r.get("operation") in ("INSERT", "UPDATE", "DELETE", "MERGE") and r.get("affected_rows", 0) > 0:
-                    has_explicit_mutation = True
-            elif hasattr(r, "mutation_confirmed") and getattr(r, "mutation_confirmed") is True:
-                has_explicit_mutation = True
             elif hasattr(r, "affected_rows") and getattr(r, "affected_rows") is not None and getattr(r, "affected_rows") > 0:
                 has_explicit_mutation = True
         if has_explicit_mutation:

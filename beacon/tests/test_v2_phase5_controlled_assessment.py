@@ -2828,4 +2828,239 @@ class TestPhase5ControlledModeAssessment:
         # Target has secret == 99 -> TRUE condition -> APPLICABLE -> ACCEPT passes -> PASS
         assert assm.target_compliance == RuleComplianceVerdict.PASS
 
+    # 51. MALFORMED SNAPSHOT CASE C: CAPTURE FAILED ERROR OBJECT YIELDS INCONCLUSIVE (Section 6 Case C)
+    def test_malformed_snapshot_case_c_error_object_yields_inconclusive(self):
+        """Database snapshot containing error object (e.g. {'error': 'capture failed'}) is malformed and yields INCONCLUSIVE."""
+        session_id = "sess_p5_mal_c"
+        app_id = "app_p5_mal_c"
+
+        mal_snap = {"error": "capture failed"}
+        rec_r = EvidenceRecord(
+            evidence_id="r_mal_c",
+            session_id=session_id,
+            input_id="inp_mal_c",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_mal_c",
+            session_id=session_id,
+            input_id="inp_mal_c",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_mal_c",
+            session_id=session_id,
+            correlation_id="c_p5_mal_c",
+            application_id=app_id,
+            input_set_id="is_p5_mal_c",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_mal_c", application_id=app_id, input_set_id="is_p5_mal_c", input_set_hash="h_mal_c", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-MAL-C",
+            name="Malformed Snapshot No Change",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 52. MALFORMED SNAPSHOT CASE D: EMPTY TABLE DICT YIELDS INCONCLUSIVE (Section 6 Case D)
+    def test_malformed_snapshot_case_d_empty_table_dict_yields_inconclusive(self):
+        """Database snapshot containing empty table dict (e.g. {'users': {}}) lacks contract fields and yields INCONCLUSIVE."""
+        session_id = "sess_p5_mal_d"
+        app_id = "app_p5_mal_d"
+
+        mal_snap = {"users": {}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_mal_d",
+            session_id=session_id,
+            input_id="inp_mal_d",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_mal_d",
+            session_id=session_id,
+            input_id="inp_mal_d",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_mal_d",
+            session_id=session_id,
+            correlation_id="c_p5_mal_d",
+            application_id=app_id,
+            input_set_id="is_p5_mal_d",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_mal_d", application_id=app_id, input_set_id="is_p5_mal_d", input_set_hash="h_mal_d", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-MAL-D",
+            name="Empty Table Dict No Change",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 53. MALFORMED SNAPSHOT CASE E: ARBITRARY NON-CONTRACT DICT YIELDS INCONCLUSIVE (Section 6 Case E)
+    def test_malformed_snapshot_case_e_arbitrary_non_contract_dict_yields_inconclusive(self):
+        """Database snapshot containing arbitrary non-contract dict (e.g. {'users': {'bad': 'x'}}) yields INCONCLUSIVE."""
+        session_id = "sess_p5_mal_e"
+        app_id = "app_p5_mal_e"
+
+        mal_snap = {"users": {"bad": "x"}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_mal_e",
+            session_id=session_id,
+            input_id="inp_mal_e",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_mal_e",
+            session_id=session_id,
+            input_id="inp_mal_e",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": mal_snap, "snapshot_after": mal_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_mal_e",
+            session_id=session_id,
+            correlation_id="c_p5_mal_e",
+            application_id=app_id,
+            input_set_id="is_p5_mal_e",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_mal_e", application_id=app_id, input_set_id="is_p5_mal_e", input_set_hash="h_mal_e", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-MAL-E",
+            name="Non Contract Schema No Change",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 54. ASYMMETRIC STATE CHANGE CASE 3: REFERENCE CHANGES, TARGET DOES NOT (Section 8 Case 3)
+    def test_asymmetric_state_change_reference_changes_target_does_not(self):
+        """When Reference mutates state (PASS) but Target does not mutate (FAIL), overall rule status is FAIL."""
+        session_id = "sess_p5_asym_r"
+        app_id = "app_p5_asym_r"
+
+        snap_a = {"users": {"row_count": 1, "table_hash": "hash_a"}}
+        snap_b = {"users": {"row_count": 2, "table_hash": "hash_b"}}
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_asym_r",
+            session_id=session_id,
+            input_id="inp_asym_r",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": snap_a, "snapshot_after": snap_b},  # State mutated
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_asym_r",
+            session_id=session_id,
+            input_id="inp_asym_r",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": snap_a, "snapshot_after": snap_a},  # State NOT mutated
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_asym_r",
+            session_id=session_id,
+            correlation_id="c_p5_asym_r",
+            application_id=app_id,
+            input_set_id="is_p5_asym_r",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_asym_r", application_id=app_id, input_set_id="is_p5_asym_r", input_set_hash="h_asym_r", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-ASYM-STATE-CHANGE",
+            name="State Mutation Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.FAIL
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.FAIL
+
+    # 55. ASYMMETRIC STATE CHANGE CASE 4: TARGET CHANGES, REFERENCE DOES NOT (Section 8 Case 4)
+    def test_asymmetric_state_change_target_changes_reference_does_not(self):
+        """When Target mutates state (PASS) but Reference does not mutate (FAIL), overall rule status is FAIL."""
+        session_id = "sess_p5_asym_t"
+        app_id = "app_p5_asym_t"
+
+        snap_a = {"users": {"row_count": 1, "table_hash": "hash_a"}}
+        snap_b = {"users": {"row_count": 2, "table_hash": "hash_b"}}
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_asym_t",
+            session_id=session_id,
+            input_id="inp_asym_t",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": snap_a, "snapshot_after": snap_a},  # State NOT mutated
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_asym_t",
+            session_id=session_id,
+            input_id="inp_asym_t",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": snap_a, "snapshot_after": snap_b},  # State mutated
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_asym_t",
+            session_id=session_id,
+            correlation_id="c_p5_asym_t",
+            application_id=app_id,
+            input_set_id="is_p5_asym_t",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_asym_t", application_id=app_id, input_set_id="is_p5_asym_t", input_set_hash="h_asym_t", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-ASYM-STATE-CHANGE-2",
+            name="State Mutation Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.FAIL
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.FAIL
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
 
