@@ -27,6 +27,8 @@ from execution.evidence_models import (
     EvidenceManifest,
     EvidenceRecord,
     EvidenceType,
+    FileEvidence,
+    FileStateSnapshot,
     HttpEvidence,
     OutputEvidence,
     TraceEvidence,
@@ -459,11 +461,10 @@ class TestPhase5ControlledModeAssessment:
         )
 
         res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
-
         assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
         assm = res.rule_assessments[0]
         assert assm.overall_rule_status == RuleComplianceVerdict.INCONCLUSIVE
-        assert "State evidence is missing" in assm.details["reference_explanation"]
+        assert "state evidence is missing" in assm.details["reference_explanation"].lower()
 
     # 8. FALSE-PASS ELIMINATION FOR RETURN_STATUS WITH MISSING HTTP EVIDENCE
     def test_return_status_with_missing_http_evidence_yields_inconclusive(self):
@@ -879,4 +880,959 @@ class TestPhase5ControlledModeAssessment:
             )
             assert res_fail.status_code == 500
             assert "Database persistence failure" in res_fail.json()["detail"]
+
+    # 16. STATE EVIDENCE: DATABASE EQUAL BEFORE/AFTER YIELDS NO_STATE_CHANGE PASS (Section 11)
+    def test_state_evidence_database_equal_before_after_yields_no_state_change_pass(self):
+        """When both Ref and Target have valid equal before/after DB snapshots, NO_STATE_CHANGE evaluates to PASS."""
+        session_id = "sess_p5_db_eq"
+        app_id = "app_p5_db_eq"
+
+        db_snap = {"accounts": [{"id": 1, "balance": 1000}]}
+        rec_r_db = EvidenceRecord(
+            evidence_id="r_db_eq",
+            session_id=session_id,
+            input_id="inp_db_eq",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": db_snap, "snapshot_after": db_snap},
+        )
+        rec_t_db = EvidenceRecord(
+            evidence_id="t_db_eq",
+            session_id=session_id,
+            input_id="inp_db_eq",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": db_snap, "snapshot_after": db_snap},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_db_eq",
+            session_id=session_id,
+            correlation_id="c_p5_dbeq",
+            application_id=app_id,
+            input_set_id="is_p5_dbeq",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_dbeq", application_id=app_id, input_set_id="is_p5_dbeq", input_set_hash="h_dbeq", records=[rec_r_db, rec_t_db]),
+            records=[rec_r_db, rec_t_db],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-DB-NO-MUTATION",
+            name="Database Read Only",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 17. STATE EVIDENCE: DATABASE DIFFERENT BEFORE/AFTER YIELDS STATE_CHANGE PASS (Section 11)
+    def test_state_evidence_database_different_before_after_yields_state_change_pass(self):
+        """When both Ref and Target have valid different before/after DB snapshots, STATE_CHANGE evaluates to PASS."""
+        session_id = "sess_p5_db_diff"
+        app_id = "app_p5_db_diff"
+
+        db_before = {"accounts": [{"id": 1, "balance": 1000}]}
+        db_after = {"accounts": [{"id": 1, "balance": 900}]}
+
+        rec_r_db = EvidenceRecord(
+            evidence_id="r_db_diff",
+            session_id=session_id,
+            input_id="inp_db_diff",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": db_before, "snapshot_after": db_after},
+        )
+        rec_t_db = EvidenceRecord(
+            evidence_id="t_db_diff",
+            session_id=session_id,
+            input_id="inp_db_diff",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": db_before, "snapshot_after": db_after},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_db_diff",
+            session_id=session_id,
+            correlation_id="c_p5_dbdiff",
+            application_id=app_id,
+            input_set_id="is_p5_dbdiff",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_dbdiff", application_id=app_id, input_set_id="is_p5_dbdiff", input_set_hash="h_dbdiff", records=[rec_r_db, rec_t_db]),
+            records=[rec_r_db, rec_t_db],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-DB-MUTATE",
+            name="Database Mutation Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 18. FALSE PASS 1: CAPTURED DB WITHOUT SNAPSHOTS (Section 3, 11, 23, 27) (MANDATORY)
+    def test_false_pass_1_captured_db_without_snapshots_yields_inconclusive(self):
+        """CAPTURED DB evidence with delta_detected=False but missing actual snapshots yields INCONCLUSIVE (not PASS)."""
+        session_id = "sess_p5_fp1"
+        app_id = "app_p5_fp1"
+
+        # Evidence record has status CAPTURED, but NO snapshots / observation data
+        rec_r = EvidenceRecord(
+            evidence_id="r_db_fp1",
+            session_id=session_id,
+            input_id="inp_fp1",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={},  # No snapshot_before or snapshot_after
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_db_fp1",
+            session_id=session_id,
+            input_id="inp_fp1",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={},  # No snapshot_before or snapshot_after
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fp1",
+            session_id=session_id,
+            correlation_id="c_p5_fp1",
+            application_id=app_id,
+            input_set_id="is_p5_fp1",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fp1", application_id=app_id, input_set_id="is_p5_fp1", input_set_hash="h_fp1", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FP1-NO-STATE-CHANGE",
+            name="Must Not Mutate State",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert "insufficient" in assm.details["reference_explanation"].lower() or "missing" in assm.details["reference_explanation"].lower()
+
+    # 19. STATE EVIDENCE: ONE SIDE MISSING YIELDS INCONCLUSIVE (Section 11)
+    def test_state_evidence_one_side_missing_yields_inconclusive(self):
+        """Reference has valid DB snapshots but Target has none -> Target is INCONCLUSIVE, Overall is INCONCLUSIVE."""
+        session_id = "sess_p5_db_oneside"
+        app_id = "app_p5_db_oneside"
+
+        db_snap = {"users": [{"id": 1}]}
+        rec_r = EvidenceRecord(
+            evidence_id="r_db_os",
+            session_id=session_id,
+            input_id="inp_db_os",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": db_snap, "snapshot_after": db_snap},
+        )
+        # Target has no state evidence at all (only output)
+        rec_t_out = EvidenceRecord(
+            evidence_id="t_out_os",
+            session_id=session_id,
+            input_id="inp_db_os",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK"}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_db_os",
+            session_id=session_id,
+            correlation_id="c_p5_dbos",
+            application_id=app_id,
+            input_set_id="is_p5_dbos",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_dbos", application_id=app_id, input_set_id="is_p5_dbos", input_set_hash="h_dbos", records=[rec_r, rec_t_out]),
+            records=[rec_r, rec_t_out],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-DB-ONESIDE",
+            name="State Integrity",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 20. STATE EVIDENCE: PARTIAL STATUS YIELDS INCONCLUSIVE (Section 11)
+    def test_state_evidence_partial_status_yields_inconclusive(self):
+        """When Database evidence has capture_status=PARTIAL, rule evaluation yields INCONCLUSIVE."""
+        session_id = "sess_p5_db_part"
+        app_id = "app_p5_db_part"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_db_part",
+            session_id=session_id,
+            input_id="inp_db_part",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"snapshot_before": {"a": 1}, "snapshot_after": {"a": 1}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_db_part",
+            session_id=session_id,
+            input_id="inp_db_part",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"snapshot_before": {"a": 1}, "snapshot_after": {"a": 1}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_db_part",
+            session_id=session_id,
+            correlation_id="c_p5_dbpart",
+            application_id=app_id,
+            input_set_id="is_p5_dbpart",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_dbpart", application_id=app_id, input_set_id="is_p5_dbpart", input_set_hash="h_dbpart", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-DB-PARTIAL",
+            name="No Mutation Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 21. STATE EVIDENCE: FAILED STATUS YIELDS INCONCLUSIVE (Section 11)
+    def test_state_evidence_failed_status_yields_inconclusive(self):
+        """When Database evidence has capture_status=FAILED, rule evaluation yields INCONCLUSIVE."""
+        session_id = "sess_p5_db_fail"
+        app_id = "app_p5_db_fail"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_db_fl",
+            session_id=session_id,
+            input_id="inp_db_fl",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.FAILED,
+            payload={},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_db_fl",
+            session_id=session_id,
+            input_id="inp_db_fl",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.FAILED,
+            payload={},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_db_fl",
+            session_id=session_id,
+            correlation_id="c_p5_dbfl",
+            application_id=app_id,
+            input_set_id="is_p5_dbfl",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_dbfl", application_id=app_id, input_set_id="is_p5_dbfl", input_set_hash="h_dbfl", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-DB-FAIL",
+            name="No Mutation Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 22. STATE EVIDENCE: EXPLICITLY CAPTURED EMPTY DATABASE IS VALID (Section 11, 24)
+    def test_state_evidence_explicitly_captured_empty_database_is_valid(self):
+        """Explicitly captured empty database state ({}) is valid observational evidence and satisfies NO_STATE_CHANGE."""
+        session_id = "sess_p5_db_empty"
+        app_id = "app_p5_db_empty"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_db_emp",
+            session_id=session_id,
+            input_id="inp_db_emp",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": {}, "snapshot_after": {}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_db_emp",
+            session_id=session_id,
+            input_id="inp_db_emp",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": {}, "snapshot_after": {}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_db_emp",
+            session_id=session_id,
+            correlation_id="c_p5_dbemp",
+            application_id=app_id,
+            input_set_id="is_p5_dbemp",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_dbemp", application_id=app_id, input_set_id="is_p5_dbemp", input_set_hash="h_dbemp", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-DB-EMPTY",
+            name="Empty DB No Mutation",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 23. STATE EVIDENCE: FILESYSTEM EQUAL HASHES YIELDS NO_STATE_CHANGE PASS (Section 12)
+    def test_state_evidence_filesystem_equal_hashes_yields_no_state_change_pass(self):
+        """When before and after filesystem state hashes are equal, NO_STATE_CHANGE evaluates to PASS."""
+        session_id = "sess_p5_fs_eq"
+        app_id = "app_p5_fs_eq"
+
+        file_state = {"/data/app.log": {"path": "/data/app.log", "sha256_hash": "hash_abc", "exists": True, "size_bytes": 100}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_eq",
+            session_id=session_id,
+            input_id="inp_fs_eq",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": file_state, "after_state": file_state},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_eq",
+            session_id=session_id,
+            input_id="inp_fs_eq",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": file_state, "after_state": file_state},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fs_eq",
+            session_id=session_id,
+            correlation_id="c_p5_fseq",
+            application_id=app_id,
+            input_set_id="is_p5_fseq",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fseq", application_id=app_id, input_set_id="is_p5_fseq", input_set_hash="h_fseq", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FS-NO-CHANGE",
+            name="Filesystem Read Only",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 24. STATE EVIDENCE: FILESYSTEM DIFFERENT HASHES YIELDS STATE_CHANGE PASS (Section 12)
+    def test_state_evidence_filesystem_different_hashes_yields_state_change_pass(self):
+        """When before and after filesystem state hashes differ, STATE_CHANGE evaluates to PASS."""
+        session_id = "sess_p5_fs_diff"
+        app_id = "app_p5_fs_diff"
+
+        fs_before = {"/data/app.log": {"path": "/data/app.log", "sha256_hash": "hash_111", "exists": True, "size_bytes": 100}}
+        fs_after = {"/data/app.log": {"path": "/data/app.log", "sha256_hash": "hash_222", "exists": True, "size_bytes": 200}}
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_df",
+            session_id=session_id,
+            input_id="inp_fs_df",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": fs_before, "after_state": fs_after},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_df",
+            session_id=session_id,
+            input_id="inp_fs_df",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": fs_before, "after_state": fs_after},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fs_df",
+            session_id=session_id,
+            correlation_id="c_p5_fsdf",
+            application_id=app_id,
+            input_set_id="is_p5_fsdf",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fsdf", application_id=app_id, input_set_id="is_p5_fsdf", input_set_hash="h_fsdf", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FS-CHANGE",
+            name="Filesystem Mutation Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 25. FALSE PASS 2: CAPTURED FILE WITHOUT SNAPSHOTS (Section 12, 23) (MANDATORY)
+    def test_false_pass_2_captured_file_without_snapshots_yields_inconclusive(self):
+        """FileEvidence with CAPTURED status but empty before_state / after_state yields INCONCLUSIVE (not PASS)."""
+        session_id = "sess_p5_fp2"
+        app_id = "app_p5_fp2"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_fp2",
+            session_id=session_id,
+            input_id="inp_fs_fp2",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={},  # No before_state, after_state or file lists
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_fp2",
+            session_id=session_id,
+            input_id="inp_fs_fp2",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={},  # No before_state, after_state or file lists
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fp2",
+            session_id=session_id,
+            correlation_id="c_p5_fp2",
+            application_id=app_id,
+            input_set_id="is_p5_fp2",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fp2", application_id=app_id, input_set_id="is_p5_fp2", input_set_hash="h_fp2", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FP2-NO-CHANGE",
+            name="No FS Change Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.overall_rule_status == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 26. STATE EVIDENCE: FILESYSTEM PARTIAL STATUS YIELDS INCONCLUSIVE (Section 12)
+    def test_state_evidence_filesystem_partial_status_yields_inconclusive(self):
+        """When FileEvidence has capture_status=PARTIAL, evaluation yields INCONCLUSIVE."""
+        session_id = "sess_p5_fs_part"
+        app_id = "app_p5_fs_part"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_pt",
+            session_id=session_id,
+            input_id="inp_fs_pt",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"before_state": {"/a": {"sha256_hash": "h1"}}, "after_state": {"/a": {"sha256_hash": "h1"}}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_pt",
+            session_id=session_id,
+            input_id="inp_fs_pt",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"before_state": {"/a": {"sha256_hash": "h1"}}, "after_state": {"/a": {"sha256_hash": "h1"}}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fs_pt",
+            session_id=session_id,
+            correlation_id="c_p5_fspt",
+            application_id=app_id,
+            input_set_id="is_p5_fspt",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fspt", application_id=app_id, input_set_id="is_p5_fspt", input_set_hash="h_fspt", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FS-PARTIAL",
+            name="No FS Change Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 27. STATE EVIDENCE: FILESYSTEM NOT_SUPPORTED YIELDS INCONCLUSIVE (Section 12)
+    def test_state_evidence_filesystem_not_supported_yields_inconclusive(self):
+        """When FileEvidence has capture_status=NOT_SUPPORTED, evaluation yields INCONCLUSIVE."""
+        session_id = "sess_p5_fs_ns"
+        app_id = "app_p5_fs_ns"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_ns",
+            session_id=session_id,
+            input_id="inp_fs_ns",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.NOT_SUPPORTED,
+            payload={},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_ns",
+            session_id=session_id,
+            input_id="inp_fs_ns",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.NOT_SUPPORTED,
+            payload={},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fs_ns",
+            session_id=session_id,
+            correlation_id="c_p5_fsns",
+            application_id=app_id,
+            input_set_id="is_p5_fsns",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fsns", application_id=app_id, input_set_id="is_p5_fsns", input_set_hash="h_fsns", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FS-NOT-SUPP",
+            name="No FS Change Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 28. ROLE CONTAMINATION TEST A: OUTPUT SECRET ISOLATION (Section 13, 23, 26) (MANDATORY)
+    def test_role_contamination_test_a_output_secret_isolation(self):
+        """Ref output is {'status': 'OK'}, Target output is {'status': 'OK', 'secret': 99}.
+        Rule condition: field_source='output', secret == 99.
+        Ref must evaluate to UNKNOWN -> INCONCLUSIVE.
+        Target evaluates to TRUE -> PASS.
+        Ref MUST NEVER become applicable because Target has secret.
+        """
+        session_id = "sess_p5_rc_a"
+        app_id = "app_p5_rc_a"
+
+        # Reference has NO secret
+        rec_r = EvidenceRecord(
+            evidence_id="r_rc_a",
+            session_id=session_id,
+            input_id="inp_rc_a",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK", "http_status": 200}},
+        )
+        # Target HAS secret = 99
+        rec_t = EvidenceRecord(
+            evidence_id="t_rc_a",
+            session_id=session_id,
+            input_id="inp_rc_a",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK", "secret": 99, "http_status": 200}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc_a",
+            session_id=session_id,
+            correlation_id="c_p5_rca",
+            application_id=app_id,
+            input_set_id="is_p5_rca",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rca", application_id=app_id, input_set_id="is_p5_rca", input_set_hash="h_rca", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-SECRET-99",
+            name="Secret Must Be 99",
+            condition=RulePredicate(field="secret", field_source="output", operator=RuleOperator.EQ, value=99),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assm = res.rule_assessments[0]
+
+        # Target matched condition (TRUE -> PASS)
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+        assert assm.details["target_applicability"] == "TRUE"
+
+        # Reference did NOT match condition (missing field -> UNKNOWN -> INCONCLUSIVE)
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert assm.details["reference_applicability"] == "UNKNOWN"
+
+        # Overall verdict must be INCONCLUSIVE because Reference is inconclusive
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 29. ROLE CONTAMINATION TEST B: STATE ISOLATION (Section 13)
+    def test_role_contamination_test_b_state_isolation(self):
+        """Ref has state field balance = 100, Target does not. Rule reads field_source='state', balance == 100.
+        Ref evaluates to TRUE, Target evaluates to UNKNOWN.
+        """
+        session_id = "sess_p5_rc_b"
+        app_id = "app_p5_rc_b"
+
+        rec_r_out = EvidenceRecord(
+            evidence_id="r_out_b",
+            session_id=session_id,
+            input_id="inp_rc_b",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK"}},
+        )
+        rec_r_db = EvidenceRecord(
+            evidence_id="r_db_b",
+            session_id=session_id,
+            input_id="inp_rc_b",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"balance": 100, "snapshot_before": {"balance": 100}, "snapshot_after": {"balance": 100}},
+        )
+        rec_t_out = EvidenceRecord(
+            evidence_id="t_out_b",
+            session_id=session_id,
+            input_id="inp_rc_b",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK"}},
+        )
+        rec_t_db = EvidenceRecord(
+            evidence_id="t_db_b",
+            session_id=session_id,
+            input_id="inp_rc_b",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"snapshot_before": {"score": 50}, "snapshot_after": {"score": 50}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc_b",
+            session_id=session_id,
+            correlation_id="c_p5_rcb",
+            application_id=app_id,
+            input_set_id="is_p5_rcb",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rcb", application_id=app_id, input_set_id="is_p5_rcb", input_set_hash="h_rcb", records=[rec_r_out, rec_r_db, rec_t_out, rec_t_db]),
+            records=[rec_r_out, rec_r_db, rec_t_out, rec_t_db],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-STATE-BAL-100",
+            name="State Balance 100",
+            condition=RulePredicate(field="balance", field_source="state", operator=RuleOperator.EQ, value=100),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assm = res.rule_assessments[0]
+
+        # Ref matched state condition
+        assert assm.details["reference_applicability"] == "TRUE"
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+
+        # Target lacks balance in state -> UNKNOWN -> INCONCLUSIVE
+        assert assm.details["target_applicability"] == "UNKNOWN"
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 30. ROLE CONTAMINATION TEST C: ERROR ISOLATION (Section 13)
+    def test_role_contamination_test_c_error_isolation(self):
+        """Target has error, Reference does not. Rule reads field_source='error'.
+        Ref does not see Target error -> Ref evaluates to UNKNOWN.
+        """
+        session_id = "sess_p5_rc_c"
+        app_id = "app_p5_rc_c"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_rc_c",
+            session_id=session_id,
+            input_id="inp_rc_c",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK"}},
+        )
+        rec_t_err = EvidenceRecord(
+            evidence_id="t_err_c",
+            session_id=session_id,
+            input_id="inp_rc_c",
+            role="target",
+            evidence_type=EvidenceType.ERROR,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"error_code": "ERR_NETWORK_TIMEOUT", "message": "timed out"},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc_c",
+            session_id=session_id,
+            correlation_id="c_p5_rcc",
+            application_id=app_id,
+            input_set_id="is_p5_rcc",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rcc", application_id=app_id, input_set_id="is_p5_rcc", input_set_hash="h_rcc", records=[rec_r, rec_t_err]),
+            records=[rec_r, rec_t_err],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-TIMEOUT-ERR",
+            name="Network Timeout Error",
+            condition=RulePredicate(field="error_code", field_source="error", operator=RuleOperator.EQ, value="ERR_NETWORK_TIMEOUT"),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.REJECT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assm = res.rule_assessments[0]
+
+        # Target saw error and is APPLICABLE
+        assert assm.details["target_applicability"] == "TRUE"
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+        # Reference has no error -> UNKNOWN -> INCONCLUSIVE
+        assert assm.details["reference_applicability"] == "UNKNOWN"
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 31. ROLE CONTAMINATION TEST D: METADATA ISOLATION (Section 13)
+    def test_role_contamination_test_d_metadata_isolation(self):
+        """Target metadata contains a field, Reference does not.
+        Rule reads field_source='metadata'. Ref does not see Target metadata.
+        """
+        session_id = "sess_p5_rc_d"
+        app_id = "app_p5_rc_d"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_rc_d",
+            session_id=session_id,
+            input_id="inp_rc_d",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK"}},
+            metadata={"environment": "staging"},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_rc_d",
+            session_id=session_id,
+            input_id="inp_rc_d",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK"}},
+            metadata={"environment": "production", "feature_flag": "ENABLED"},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc_d",
+            session_id=session_id,
+            correlation_id="c_p5_rcd",
+            application_id=app_id,
+            input_set_id="is_p5_rcd",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rcd", application_id=app_id, input_set_id="is_p5_rcd", input_set_hash="h_rcd", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FF-METADATA",
+            name="Feature Flag Enabled",
+            condition=RulePredicate(field="feature_flag", field_source="metadata", operator=RuleOperator.EQ, value="ENABLED"),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assm = res.rule_assessments[0]
+
+        assert assm.details["target_applicability"] == "TRUE"
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+        assert assm.details["reference_applicability"] == "UNKNOWN"
+        assert assm.reference_compliance == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 32. ROLE CONTAMINATION TEST E: AUTO SOURCE RESOLUTION IS ROLE-LOCAL (Section 13, 14)
+    def test_role_contamination_test_e_auto_source_isolation(self):
+        """AUTO source resolves only within each role's local context."""
+        session_id = "sess_p5_rc_e"
+        app_id = "app_p5_rc_e"
+
+        # Ref has flag='ALPHA', Target has flag='BETA'
+        rec_r = EvidenceRecord(
+            evidence_id="r_rc_e",
+            session_id=session_id,
+            input_id="inp_rc_e",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"flag": "ALPHA", "status": "OK"}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_rc_e",
+            session_id=session_id,
+            input_id="inp_rc_e",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"flag": "BETA", "status": "OK"}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc_e",
+            session_id=session_id,
+            correlation_id="c_p5_rce",
+            application_id=app_id,
+            input_set_id="is_p5_rce",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rce", application_id=app_id, input_set_id="is_p5_rce", input_set_hash="h_rce", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-AUTO-ALPHA",
+            name="Alpha Mode",
+            condition=RulePredicate(field="flag", field_source="auto", operator=RuleOperator.EQ, value="ALPHA"),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assm = res.rule_assessments[0]
+
+        # Reference matched 'ALPHA' -> TRUE -> PASS
+        assert assm.details["reference_applicability"] == "TRUE"
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+
+        # Target saw 'BETA' != 'ALPHA' -> FALSE -> NOT_APPLICABLE
+        assert assm.details["target_applicability"] == "FALSE"
+        assert assm.target_compliance == RuleComplianceVerdict.NOT_APPLICABLE
+
+        # Overall: Reference applicable & passed, Target not applicable -> overall PASS
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+
+    # 33. FALSE DIFFERENCE: CAPTURED EMPTY OUTPUT IS VALID OBSERVATION (Section 24)
+    def test_false_difference_captured_empty_output_equals(self):
+        """Both sides genuinely captured equal empty output payload ({}) -> ACCEPT evaluates to PASS."""
+        session_id = "sess_p5_fd_out"
+        app_id = "app_p5_fd_out"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_fd_o",
+            session_id=session_id,
+            input_id="inp_fd_o",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {}, "http_status": 204},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fd_o",
+            session_id=session_id,
+            input_id="inp_fd_o",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {}, "http_status": 204},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fd_o",
+            session_id=session_id,
+            correlation_id="c_p5_fdo",
+            application_id=app_id,
+            input_set_id="is_p5_fdo",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fdo", application_id=app_id, input_set_id="is_p5_fdo", input_set_hash="h_fdo", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-NO-CONTENT",
+            name="204 No Content Acceptance",
+            condition=RulePredicate(field="http_status", field_source="output", operator=RuleOperator.EQ, value=204),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 34. FALSE DIFFERENCE: NO ERROR WITH CAPTURED ERROR STATUS (Section 24)
+    def test_false_difference_no_error_with_captured_error_status(self):
+        """Both sides explicitly have captured success output and no error records -> ACCEPT evaluates to PASS."""
+        session_id = "sess_p5_fd_noerr"
+        app_id = "app_p5_fd_noerr"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_fd_ne",
+            session_id=session_id,
+            input_id="inp_fd_ne",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"success": True}, "http_status": 200},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fd_ne",
+            session_id=session_id,
+            input_id="inp_fd_ne",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"success": True}, "http_status": 200},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fd_ne",
+            session_id=session_id,
+            correlation_id="c_p5_fdne",
+            application_id=app_id,
+            input_set_id="is_p5_fdne",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fdne", application_id=app_id, input_set_id="is_p5_fdne", input_set_hash="h_fdne", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-SUCCESS-ACCEPT",
+            name="Success Flag True",
+            condition=RulePredicate(field="success", field_source="output", operator=RuleOperator.EQ, value=True),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
 

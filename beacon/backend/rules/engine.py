@@ -161,7 +161,8 @@ class ControlledAssessmentEngine:
     ) -> RuleAssessment:
         """Evaluates applicability and expected behavior compliance for a single rule and input.
 
-        Follows strict three-valued logic and field-source isolation:
+        Follows strict three-valued logic and role-isolated contexts:
+        - Reference and Target conditions are evaluated independently on their respective contexts.
         - TRUE -> APPLICABLE -> Check Evidence Sufficiency -> Evaluate Behavior
         - FALSE -> NOT_APPLICABLE
         - UNKNOWN -> INCONCLUSIVE
@@ -170,83 +171,79 @@ class ControlledAssessmentEngine:
         ref_eids = [r.evidence_id for r in item.reference_records if hasattr(r, "evidence_id")]
         tgt_eids = [r.evidence_id for r in item.target_records if hasattr(r, "evidence_id")]
 
-        # Build partitioned evaluation context (input, output, state, error, metadata)
-        eval_context = self._build_evaluation_context(item)
+        # 1. Build role-isolated evaluation contexts (Reference vs Target)
+        ref_context = self._build_evaluation_context(item, is_reference=True)
+        tgt_context = self._build_evaluation_context(item, is_reference=False)
 
-        # 1. Evaluate Condition Applicability using three-valued logic & field-source isolation
-        tri_state, cond_expl, observed_cond_values = rule_condition_evaluator.evaluate_condition(
-            rule.condition, eval_context
+        # 2. Evaluate Condition Applicability independently for Reference and Target
+        ref_tri, ref_cond_expl, ref_obs_cond = rule_condition_evaluator.evaluate_condition(
+            rule.condition, ref_context
+        )
+        tgt_tri, tgt_cond_expl, tgt_obs_cond = rule_condition_evaluator.evaluate_condition(
+            rule.condition, tgt_context
         )
 
-        # CASE A: Condition evaluates to FALSE -> NOT_APPLICABLE
-        if tri_state == TriState.FALSE:
-            return RuleAssessment(
-                assessment_id=f"assm_{uuid.uuid4().hex[:12]}",
-                rule_id=rule.rule_id,
-                rule_name=rule.name,
-                rule_version=rule.version,
-                rule_fingerprint=rule.fingerprint,
-                input_id=inp_id,
-                applicability="NOT_APPLICABLE",
-                condition_satisfied=False,
-                reference_compliance=RuleComplianceVerdict.NOT_APPLICABLE,
-                target_compliance=RuleComplianceVerdict.NOT_APPLICABLE,
-                overall_rule_status=RuleComplianceVerdict.NOT_APPLICABLE,
-                behavioral_equivalence=phase4_verdict,
-                reference_evidence_ids=ref_eids,
-                target_evidence_ids=tgt_eids,
-                phase4_evaluation_id=phase4_id,
-                explanation=f"Rule condition evaluated to FALSE (NOT_APPLICABLE): {cond_expl}",
-                observed_values=observed_cond_values,
-            )
+        logger.debug(
+            f"Rule '{rule.rule_id}' applicability on input '{inp_id}': "
+            f"REF={ref_tri.value} ({ref_cond_expl}), TGT={tgt_tri.value} ({tgt_cond_expl})"
+        )
 
-        # CASE B: Condition evaluates to UNKNOWN -> INCONCLUSIVE
-        if tri_state == TriState.UNKNOWN:
-            return RuleAssessment(
-                assessment_id=f"assm_{uuid.uuid4().hex[:12]}",
-                rule_id=rule.rule_id,
-                rule_name=rule.name,
-                rule_version=rule.version,
-                rule_fingerprint=rule.fingerprint,
-                input_id=inp_id,
-                applicability="UNKNOWN",
-                condition_satisfied=False,
-                reference_compliance=RuleComplianceVerdict.INCONCLUSIVE,
-                target_compliance=RuleComplianceVerdict.INCONCLUSIVE,
-                overall_rule_status=RuleComplianceVerdict.INCONCLUSIVE,
-                behavioral_equivalence=phase4_verdict,
-                reference_evidence_ids=ref_eids,
-                target_evidence_ids=tgt_eids,
-                phase4_evaluation_id=phase4_id,
-                explanation=f"Rule condition applicability is UNKNOWN (INCONCLUSIVE due to missing referenced fields): {cond_expl}",
-                observed_values=observed_cond_values,
-            )
-
-        # CASE C: Condition evaluates to TRUE -> APPLICABLE
-        # Check evidence sufficiency BEFORE evaluating behavior compliance
-        ref_sufficient, ref_suff_reason = self._check_evidence_sufficiency(item, is_reference=True, expected=rule.expected_behavior)
-        tgt_sufficient, tgt_suff_reason = self._check_evidence_sufficiency(item, is_reference=False, expected=rule.expected_behavior)
-
-        ref_obs = self._build_observation_context(item, is_reference=True)
-        tgt_obs = self._build_observation_context(item, is_reference=False)
-
-        # Evaluate Reference compliance
-        if not ref_sufficient:
-            ref_compliance = RuleComplianceVerdict.INCONCLUSIVE
-            ref_expl = f"Reference evidence insufficient: {ref_suff_reason}"
+        # 3. Evaluate Reference compliance independently
+        ref_sufficient = True
+        ref_suff_reason = "Sufficient"
+        if ref_tri == TriState.FALSE:
+            ref_compliance = RuleComplianceVerdict.NOT_APPLICABLE
+            ref_expl = f"Condition evaluated to FALSE for Reference (NOT_APPLICABLE): {ref_cond_expl}"
             ref_vals = {}
+        elif ref_tri == TriState.UNKNOWN:
+            ref_compliance = RuleComplianceVerdict.INCONCLUSIVE
+            ref_expl = f"Condition applicability is UNKNOWN for Reference (missing field): {ref_cond_expl}"
+            ref_vals = {}
+            ref_sufficient = False
         else:
-            ref_compliance, ref_expl, ref_vals = self._evaluate_behavior_compliance(rule.expected_behavior, ref_obs)
+            ref_sufficient, ref_suff_reason = self._check_evidence_sufficiency(item, is_reference=True, expected=rule.expected_behavior)
+            if not ref_sufficient:
+                ref_compliance = RuleComplianceVerdict.INCONCLUSIVE
+                ref_expl = f"Reference evidence insufficient: {ref_suff_reason}"
+                ref_vals = {}
+            else:
+                ref_obs = self._build_observation_context(item, is_reference=True)
+                ref_compliance, ref_expl, ref_vals = self._evaluate_behavior_compliance(rule.expected_behavior, ref_obs)
 
-        # Evaluate Target compliance
-        if not tgt_sufficient:
-            tgt_compliance = RuleComplianceVerdict.INCONCLUSIVE
-            tgt_expl = f"Target evidence insufficient: {tgt_suff_reason}"
+        # 4. Evaluate Target compliance independently
+        tgt_sufficient = True
+        tgt_suff_reason = "Sufficient"
+        if tgt_tri == TriState.FALSE:
+            tgt_compliance = RuleComplianceVerdict.NOT_APPLICABLE
+            tgt_expl = f"Condition evaluated to FALSE for Target (NOT_APPLICABLE): {tgt_cond_expl}"
             tgt_vals = {}
+        elif tgt_tri == TriState.UNKNOWN:
+            tgt_compliance = RuleComplianceVerdict.INCONCLUSIVE
+            tgt_expl = f"Condition applicability is UNKNOWN for Target (missing field): {tgt_cond_expl}"
+            tgt_vals = {}
+            tgt_sufficient = False
         else:
-            tgt_compliance, tgt_expl, tgt_vals = self._evaluate_behavior_compliance(rule.expected_behavior, tgt_obs)
+            tgt_sufficient, tgt_suff_reason = self._check_evidence_sufficiency(item, is_reference=False, expected=rule.expected_behavior)
+            if not tgt_sufficient:
+                tgt_compliance = RuleComplianceVerdict.INCONCLUSIVE
+                tgt_expl = f"Target evidence insufficient: {tgt_suff_reason}"
+                tgt_vals = {}
+            else:
+                tgt_obs = self._build_observation_context(item, is_reference=False)
+                tgt_compliance, tgt_expl, tgt_vals = self._evaluate_behavior_compliance(rule.expected_behavior, tgt_obs)
 
-        # Combine overall status for this rule and input
+        # 5. Determine combined applicability and condition_satisfied
+        if ref_tri == TriState.TRUE or tgt_tri == TriState.TRUE:
+            applicability = "APPLICABLE"
+            condition_satisfied = True
+        elif ref_tri == TriState.UNKNOWN or tgt_tri == TriState.UNKNOWN:
+            applicability = "UNKNOWN"
+            condition_satisfied = False
+        else:
+            applicability = "NOT_APPLICABLE"
+            condition_satisfied = False
+
+        # 6. Combine overall status for this rule and input
         if ref_compliance == RuleComplianceVerdict.ERROR or tgt_compliance == RuleComplianceVerdict.ERROR:
             overall_status = RuleComplianceVerdict.ERROR
         elif ref_compliance == RuleComplianceVerdict.FAIL or tgt_compliance == RuleComplianceVerdict.FAIL:
@@ -255,15 +252,25 @@ class ControlledAssessmentEngine:
             overall_status = RuleComplianceVerdict.INCONCLUSIVE
         elif ref_compliance == RuleComplianceVerdict.PASS and tgt_compliance == RuleComplianceVerdict.PASS:
             overall_status = RuleComplianceVerdict.PASS
+        elif ref_compliance == RuleComplianceVerdict.PASS and tgt_compliance == RuleComplianceVerdict.NOT_APPLICABLE:
+            overall_status = RuleComplianceVerdict.PASS
+        elif tgt_compliance == RuleComplianceVerdict.PASS and ref_compliance == RuleComplianceVerdict.NOT_APPLICABLE:
+            overall_status = RuleComplianceVerdict.PASS
+        elif ref_compliance == RuleComplianceVerdict.NOT_APPLICABLE and tgt_compliance == RuleComplianceVerdict.NOT_APPLICABLE:
+            overall_status = RuleComplianceVerdict.NOT_APPLICABLE
         else:
             overall_status = RuleComplianceVerdict.INCONCLUSIVE
 
-        all_observed = dict(observed_cond_values)
+        all_observed = {}
+        all_observed.update({f"ref.cond.{k}": v for k, v in ref_obs_cond.items()})
+        all_observed.update({f"tgt.cond.{k}": v for k, v in tgt_obs_cond.items()})
         all_observed.update({f"ref.{k}": v for k, v in ref_vals.items()})
         all_observed.update({f"tgt.{k}": v for k, v in tgt_vals.items()})
+        all_observed.update(ref_obs_cond)
+        all_observed.update(tgt_obs_cond)
 
         combined_expl = (
-            f"Applicable ({cond_expl}). "
+            f"Applicability: Ref={ref_tri.value}, Tgt={tgt_tri.value}. "
             f"Reference: {ref_compliance.value} ({ref_expl}). "
             f"Target: {tgt_compliance.value} ({tgt_expl})."
         )
@@ -275,8 +282,8 @@ class ControlledAssessmentEngine:
             rule_version=rule.version,
             rule_fingerprint=rule.fingerprint,
             input_id=inp_id,
-            applicability="APPLICABLE",
-            condition_satisfied=True,
+            applicability=applicability,
+            condition_satisfied=condition_satisfied,
             reference_compliance=ref_compliance,
             target_compliance=tgt_compliance,
             overall_rule_status=overall_status,
@@ -287,8 +294,12 @@ class ControlledAssessmentEngine:
             explanation=combined_expl,
             observed_values=all_observed,
             details={
+                "reference_applicability": ref_tri.value,
+                "target_applicability": tgt_tri.value,
                 "reference_explanation": ref_expl,
                 "target_explanation": tgt_expl,
+                "reference_condition_explanation": ref_cond_expl,
+                "target_condition_explanation": tgt_cond_expl,
                 "reference_sufficient": ref_sufficient,
                 "target_sufficient": tgt_sufficient,
             },
@@ -399,45 +410,8 @@ class ControlledAssessmentEngine:
                 if EvidenceSufficiency.is_insufficient(st):
                     return False, f"HTTP evidence capture status '{st}' is insufficient"
 
-        elif b_type == ExpectedBehaviorType.STATE_CHANGE:
-            if db_status and EvidenceSufficiency.is_insufficient(db_status):
-                return False, f"Database capture status '{db_status}' is insufficient"
-            if fs_status and EvidenceSufficiency.is_insufficient(fs_status):
-                return False, f"File capture status '{fs_status}' is insufficient"
-
-            for r in recs:
-                if getattr(r, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM):
-                    st = getattr(r, "capture_status", getattr(r, "status", None))
-                    if st and EvidenceSufficiency.is_insufficient(st):
-                        return False, f"State record capture status '{st}' is insufficient"
-
-            if db is None and fs is None and http_ev is None:
-                return False, "Database and filesystem state evidence is missing; cannot evaluate STATE_CHANGE"
-            if db is not None:
-                st = getattr(db, "capture_status", EvidenceCaptureStatus.CAPTURED)
-                if EvidenceSufficiency.is_insufficient(st):
-                    return False, f"Database evidence capture status '{st}' is insufficient"
-
-        elif b_type == ExpectedBehaviorType.NO_STATE_CHANGE:
-            if db_status and EvidenceSufficiency.is_insufficient(db_status):
-                return False, f"Database capture status '{db_status}' is insufficient"
-            if fs_status and EvidenceSufficiency.is_insufficient(fs_status):
-                return False, f"File capture status '{fs_status}' is insufficient"
-
-            for r in recs:
-                if getattr(r, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM):
-                    st = getattr(r, "capture_status", getattr(r, "status", None))
-                    if st and EvidenceSufficiency.is_insufficient(st):
-                        return False, f"State record capture status '{st}' is insufficient"
-
-            if db is None and fs is None:
-                return False, "State evidence is missing; cannot verify NO_STATE_CHANGE"
-            if db is not None:
-                st = getattr(db, "capture_status", EvidenceCaptureStatus.CAPTURED)
-                if EvidenceSufficiency.is_insufficient(st):
-                    return False, f"Database evidence capture status '{st}' is insufficient"
-                if getattr(db, "snapshot_before", None) is None and getattr(db, "snapshot_after", None) is None and not hasattr(db, "delta_detected"):
-                    return False, "Database snapshots are missing; insufficient to prove NO_STATE_CHANGE"
+        elif b_type in (ExpectedBehaviorType.STATE_CHANGE, ExpectedBehaviorType.NO_STATE_CHANGE):
+            return self._is_state_evidence_sufficient(item, is_reference=is_reference)
 
         elif b_type == ExpectedBehaviorType.WORKFLOW_STEP:
             if tr_status and EvidenceSufficiency.is_insufficient(tr_status):
@@ -575,24 +549,109 @@ class ControlledAssessmentEngine:
 
         return RuleComplianceVerdict.ERROR, f"Unsupported expected behavior type '{b_type}'", observed
 
-    def _build_evaluation_context(self, item: Any) -> dict[str, Any]:
-        """Assembles an isolated evaluation context partitioned by field sources: input, output, state, error, metadata."""
+    def _is_state_evidence_sufficient(self, item: Any, is_reference: bool) -> tuple[bool, str]:
+        """Validates that genuine observational state evidence (database and/or filesystem) exists.
+
+        Model defaults (e.g. delta_detected=False) without actual snapshots or mutation records
+        are strictly treated as insufficient (INCONCLUSIVE).
+        """
+        role_str = "reference" if is_reference else "target"
+        recs = item.reference_records if is_reference else item.target_records
+
+        # 1. Check adaptation failures
+        if hasattr(item, "adaptation_failures") and item.adaptation_failures:
+            for af in item.adaptation_failures:
+                if getattr(af, "role", "") == role_str:
+                    af_type = str(getattr(af, "evidence_type", "")).lower()
+                    if af_type in ("database", "file", "filesystem"):
+                        return False, f"Adaptation failure in {af_type}: {getattr(af, 'reason', '')}"
+
+        # 2. Check capture statuses
+        db_status = getattr(item, f"{role_str}_database_status", None)
+        fs_status = getattr(item, f"{role_str}_file_status", None)
+
+        if db_status and EvidenceSufficiency.is_insufficient(db_status):
+            return False, f"Database capture status '{db_status}' is insufficient"
+        if fs_status and EvidenceSufficiency.is_insufficient(fs_status):
+            return False, f"Filesystem capture status '{fs_status}' is insufficient"
+
+        for r in recs:
+            if getattr(r, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM):
+                st = getattr(r, "capture_status", getattr(r, "status", None))
+                if st and EvidenceSufficiency.is_insufficient(st):
+                    return False, f"State record capture status '{st}' is insufficient"
+
+        db = item.reference_database if is_reference else item.target_database
+        fs = item.reference_file if is_reference else item.target_file
+
+        if db is None and fs is None:
+            state_recs = [r for r in recs if getattr(r, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM)]
+            if not state_recs:
+                return False, "Database and filesystem state evidence is missing; cannot evaluate state behavior"
+
+        has_db_obs = False
+        if db is not None:
+            db_st = getattr(db, "status", getattr(db, "capture_status", EvidenceCaptureStatus.CAPTURED))
+            if EvidenceSufficiency.is_insufficient(db_st):
+                return False, f"Database evidence status '{db_st}' is insufficient"
+
+            # Check for real observations (snapshots, row counts, queries, records)
+            has_snapshots = (getattr(db, "snapshot_before", None) is not None and getattr(db, "snapshot_after", None) is not None)
+            has_row_counts = bool(getattr(db, "table_row_counts_before", None) or getattr(db, "table_row_counts_after", None))
+            has_queries = bool(getattr(db, "queries", None) or (hasattr(db, "records") and db.records is not None) or getattr(db, "row_count", None) is not None)
+
+            if has_snapshots or has_row_counts or has_queries:
+                has_db_obs = True
+
+        has_fs_obs = False
+        if fs is not None:
+            fs_st = getattr(fs, "status", getattr(fs, "capture_status", EvidenceCaptureStatus.CAPTURED))
+            if EvidenceSufficiency.is_insufficient(fs_st):
+                return False, f"Filesystem evidence status '{fs_st}' is insufficient"
+
+            # Check for real filesystem observations (snapshots, file lists)
+            has_file_states = bool(getattr(fs, "before_state", None) or getattr(fs, "after_state", None))
+            has_file_lists = (getattr(fs, "created_files", None) is not None or getattr(fs, "modified_files", None) is not None or getattr(fs, "deleted_files", None) is not None)
+
+            if has_file_states or has_file_lists:
+                has_fs_obs = True
+
+        # Check raw records for explicit observational payload
+        for r in recs:
+            if getattr(r, "evidence_type", None) == EvidenceType.DATABASE:
+                p = getattr(r, "payload", {})
+                if isinstance(p, dict) and ("snapshot_before" in p or "queries" in p or "row_count" in p or "table_row_counts_before" in p or "records" in p):
+                    has_db_obs = True
+            elif getattr(r, "evidence_type", None) == EvidenceType.FILESYSTEM:
+                p = getattr(r, "payload", {})
+                if isinstance(p, dict) and ("before_state" in p or "created_files" in p or "files" in p or "modified_files" in p):
+                    has_fs_obs = True
+
+        if not has_db_obs and not has_fs_obs:
+            return False, "State evidence exists but lacks observational before/after snapshots or mutation records (model defaults alone are insufficient)"
+
+        return True, "State evidence is sufficient"
+
+    def _build_evaluation_context(self, item: Any, is_reference: bool = True) -> dict[str, Any]:
+        """Assembles an isolated evaluation context for a specific role (Reference or Target).
+
+        Partitioned strictly by field sources: input, output, state, error, metadata.
+        Canonical input may be shared across roles.
+        Observed outputs, state, errors, and metadata are strictly role-isolated.
+        """
         input_dict: dict[str, Any] = {"input_id": item.input_id}
         output_dict: dict[str, Any] = {}
         state_dict: dict[str, Any] = {}
         error_dict: dict[str, Any] = {}
         metadata_dict: dict[str, Any] = {"input_id": item.input_id}
 
+        role_recs = item.reference_records if is_reference else item.target_records
         all_recs = item.reference_records + item.target_records
 
-        # 1. Populate metadata
-        for rec in all_recs:
-            if hasattr(rec, "metadata") and isinstance(rec.metadata, dict):
-                metadata_dict.update(rec.metadata)
-            if hasattr(rec, "provenance") and isinstance(rec.provenance, dict):
-                metadata_dict.update(rec.provenance)
+        # 1. Populate canonical input from shared input sources
+        if hasattr(item, "input_data") and isinstance(item.input_data, dict):
+            input_dict.update(item.input_data)
 
-        # 2. Populate input dictionary strictly from input sources
         for rec in all_recs:
             ev_type = getattr(rec, "evidence_type", None)
             ev_str = ev_type.value if hasattr(ev_type, "value") else str(ev_type or "")
@@ -606,69 +665,91 @@ class ControlledAssessmentEngine:
                     input_dict.update(p["arguments"])
                 elif "parameters" in p and isinstance(p["parameters"], dict):
                     input_dict.update(p["parameters"])
-                elif ev_type not in (EvidenceType.OUTPUT, EvidenceType.HTTP, EvidenceType.DATABASE, EvidenceType.FILESYSTEM, EvidenceType.TRACE, EvidenceType.ERROR):
-                    # Generic input payload (e.g. RUNTIME, METADATA, or custom records)
+                elif ev_type not in (
+                    EvidenceType.OUTPUT,
+                    EvidenceType.HTTP,
+                    EvidenceType.DATABASE,
+                    EvidenceType.FILESYSTEM,
+                    EvidenceType.TRACE,
+                    EvidenceType.ERROR,
+                ):
+                    # Generic input payload
                     input_dict.update(p)
 
-        # If payload fields were directly attached to input records or item
-        if hasattr(item, "input_data") and isinstance(item.input_data, dict):
-            input_dict.update(item.input_data)
+        # 2. Populate metadata strictly from THIS role's records
+        for rec in role_recs:
+            if hasattr(rec, "metadata") and isinstance(rec.metadata, dict):
+                metadata_dict.update(rec.metadata)
+            if hasattr(rec, "provenance") and isinstance(rec.provenance, dict):
+                metadata_dict.update(rec.provenance)
 
-        # 3. Populate output dictionary strictly from output/http sources
-        for out in (item.reference_output, item.target_output):
-            if out is not None:
-                norm = getattr(out, "normalized_output", None)
-                raw = getattr(out, "raw_output", None)
-                p_data = norm if (norm is not None and (norm or raw is None)) else raw
-                if isinstance(p_data, dict):
-                    output_dict.update(p_data)
-                if getattr(out, "http_status", None) is not None:
-                    output_dict["http_status"] = getattr(out, "http_status")
-                if getattr(out, "exit_code", None) is not None:
-                    output_dict["exit_code"] = getattr(out, "exit_code")
+        # 3. Populate output dictionary strictly from THIS role's output / http sources
+        out = item.reference_output if is_reference else item.target_output
+        http_ev = item.reference_http if is_reference else item.target_http
 
-        for http_ev in (item.reference_http, item.target_http):
-            if http_ev is not None and getattr(http_ev, "status_code", None) is not None:
-                output_dict["http_status"] = getattr(http_ev, "status_code")
-                output_dict["status_code"] = getattr(http_ev, "status_code")
+        if out is not None:
+            norm = getattr(out, "normalized_output", None)
+            raw = getattr(out, "raw_output", None)
+            p_data = norm if (norm is not None and (norm or raw is None)) else raw
+            if isinstance(p_data, dict):
+                output_dict.update(p_data)
+            if getattr(out, "http_status", None) is not None:
+                output_dict["http_status"] = getattr(out, "http_status")
+            if getattr(out, "exit_code", None) is not None:
+                output_dict["exit_code"] = getattr(out, "exit_code")
 
-        for rec in all_recs:
+        if http_ev is not None and getattr(http_ev, "status_code", None) is not None:
+            output_dict["http_status"] = getattr(http_ev, "status_code")
+            output_dict["status_code"] = getattr(http_ev, "status_code")
+
+        for rec in role_recs:
             if getattr(rec, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.HTTP) and isinstance(rec.payload, dict):
                 p = rec.payload
                 if "raw_output" in p and isinstance(p["raw_output"], dict):
                     output_dict.update(p["raw_output"])
                 if "normalized_output" in p and isinstance(p["normalized_output"], dict):
                     output_dict.update(p["normalized_output"])
-                # Also include top-level output fields if present in output record
                 for k, v in p.items():
                     if k not in ("raw_output", "normalized_output", "input", "metadata"):
                         output_dict[k] = v
 
-        # 4. Populate state dictionary strictly from database/file sources
-        for db in (item.reference_database, item.target_database):
-            if db is not None:
-                if hasattr(db, "delta_detected"):
-                    state_dict["delta_detected"] = getattr(db, "delta_detected")
-                if hasattr(db, "row_count"):
-                    state_dict["row_count"] = getattr(db, "row_count")
-                if getattr(db, "queries", None):
-                    state_dict["queries"] = getattr(db, "queries")
+        # 4. Populate state dictionary strictly from THIS role's database / file sources
+        db = item.reference_database if is_reference else item.target_database
+        fs = item.reference_file if is_reference else item.target_file
 
-        for fs in (item.reference_file, item.target_file):
-            if fs is not None and hasattr(fs, "delta_detected"):
+        if db is not None:
+            if hasattr(db, "delta_detected"):
+                state_dict["delta_detected"] = getattr(db, "delta_detected")
+            if hasattr(db, "row_count"):
+                state_dict["row_count"] = getattr(db, "row_count")
+            if getattr(db, "queries", None):
+                state_dict["queries"] = getattr(db, "queries")
+            if getattr(db, "snapshot_before", None) is not None:
+                state_dict["snapshot_before"] = getattr(db, "snapshot_before")
+            if getattr(db, "snapshot_after", None) is not None:
+                state_dict["snapshot_after"] = getattr(db, "snapshot_after")
+            if getattr(db, "records", None) is not None:
+                state_dict["records"] = getattr(db, "records")
+
+        if fs is not None:
+            if hasattr(fs, "delta_detected"):
                 state_dict["file_delta_detected"] = getattr(fs, "delta_detected")
+            if getattr(fs, "before_state", None):
+                state_dict["before_state"] = getattr(fs, "before_state")
+            if getattr(fs, "after_state", None):
+                state_dict["after_state"] = getattr(fs, "after_state")
 
-        for rec in all_recs:
+        for rec in role_recs:
             if getattr(rec, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM) and isinstance(rec.payload, dict):
                 state_dict.update(rec.payload)
 
-        # 5. Populate error dictionary strictly from error sources
-        for err in (item.reference_error, item.target_error):
-            if err is not None:
-                err_dump = err.model_dump() if hasattr(err, "model_dump") else (err if isinstance(err, dict) else {})
-                error_dict.update(err_dump)
+        # 5. Populate error dictionary strictly from THIS role's error sources
+        err = item.reference_error if is_reference else item.target_error
+        if err is not None:
+            err_dump = err.model_dump() if hasattr(err, "model_dump") else (err if isinstance(err, dict) else {})
+            error_dict.update(err_dump)
 
-        for rec in all_recs:
+        for rec in role_recs:
             if getattr(rec, "evidence_type", None) == EvidenceType.ERROR and isinstance(rec.payload, dict):
                 error_dict.update(rec.payload)
 
@@ -690,6 +771,7 @@ class ControlledAssessmentEngine:
         fs = item.reference_file if is_reference else item.target_file
         http_ev = item.reference_http if is_reference else item.target_http
         tr = item.reference_trace if is_reference else item.target_trace
+        role_recs = item.reference_records if is_reference else item.target_records
 
         # Output extraction
         if out is not None:
@@ -711,6 +793,18 @@ class ControlledAssessmentEngine:
             if getattr(out, "stderr", None) is not None:
                 obs["stderr"] = getattr(out, "stderr")
 
+        for r in role_recs:
+            if getattr(r, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.HTTP) and isinstance(r.payload, dict):
+                p = r.payload
+                if "raw_output" in p and isinstance(p["raw_output"], dict):
+                    obs.update(p["raw_output"])
+                if "normalized_output" in p and isinstance(p["normalized_output"], dict):
+                    obs.update(p["normalized_output"])
+                if "status_code" in p:
+                    obs["status_code"] = p["status_code"]
+                if "http_status" in p:
+                    obs["http_status"] = p["http_status"]
+
         # HTTP evidence extraction
         if http_ev is not None:
             if getattr(http_ev, "status_code", None) is not None:
@@ -727,23 +821,71 @@ class ControlledAssessmentEngine:
                 obs["status_code"] = err_dict["status_code"]
                 obs["http_status"] = err_dict["status_code"]
 
+        for r in role_recs:
+            if getattr(r, "evidence_type", None) == EvidenceType.ERROR and isinstance(r.payload, dict):
+                has_error = True
+                obs["error"] = r.payload
+
         if obs.get("exit_code") not in (0, None) or (obs.get("status_code") is not None and obs.get("status_code") >= 400):
             has_error = True
 
         obs["has_error"] = has_error
 
-        # State mutation extraction
+        # State mutation extraction from observational evidence
         state_mutated = False
+
         if db is not None:
-            if getattr(db, "delta_detected", False) or getattr(db, "snapshot_after", None) != getattr(db, "snapshot_before", None):
+            # 1. Snapshot comparison
+            b_snap = getattr(db, "snapshot_before", None)
+            a_snap = getattr(db, "snapshot_after", None)
+            if b_snap is not None and a_snap is not None:
+                if b_snap != a_snap:
+                    state_mutated = True
+            # 2. Row count comparison
+            rc_b = getattr(db, "table_row_counts_before", {})
+            rc_a = getattr(db, "table_row_counts_after", {})
+            if rc_b and rc_a and rc_b != rc_a:
                 state_mutated = True
+            # 3. Explicit mutation queries / records
+            if getattr(db, "queries", None) or (hasattr(db, "records") and db.records):
+                state_mutated = True
+            elif getattr(db, "row_count", None) is not None and getattr(db, "row_count") > 0:
+                state_mutated = True
+
         if fs is not None:
-            if getattr(fs, "delta_detected", False):
+            if getattr(fs, "created_files", None) or getattr(fs, "modified_files", None) or getattr(fs, "deleted_files", None):
                 state_mutated = True
-        if http_ev is not None:
-            calls = getattr(http_ev, "calls", [])
-            if calls:
-                state_mutated = True
+            b_fs = getattr(fs, "before_state", {})
+            a_fs = getattr(fs, "after_state", {})
+            if b_fs or a_fs:
+                all_paths = set(b_fs.keys()) | set(a_fs.keys())
+                for path in all_paths:
+                    bs = b_fs.get(path)
+                    as_ = a_fs.get(path)
+                    if bs is None or as_ is None:
+                        state_mutated = True
+                        break
+                    bh = getattr(bs, "sha256_hash", None) or (bs.get("sha256_hash") if isinstance(bs, dict) else None)
+                    ah = getattr(as_, "sha256_hash", None) or (as_.get("sha256_hash") if isinstance(as_, dict) else None)
+                    be = getattr(bs, "exists", True) if not isinstance(bs, dict) else bs.get("exists", True)
+                    ae = getattr(as_, "exists", True) if not isinstance(as_, dict) else as_.get("exists", True)
+                    bsz = getattr(bs, "size_bytes", 0) if not isinstance(bs, dict) else bs.get("size_bytes", 0)
+                    asz = getattr(as_, "size_bytes", 0) if not isinstance(as_, dict) else as_.get("size_bytes", 0)
+                    if be != ae or bh != ah or bsz != asz:
+                        state_mutated = True
+                        break
+
+        for r in role_recs:
+            if getattr(r, "evidence_type", None) == EvidenceType.DATABASE and isinstance(r.payload, dict):
+                p = r.payload
+                if "queries" in p and p["queries"]:
+                    state_mutated = True
+                if "snapshot_before" in p and "snapshot_after" in p and p["snapshot_before"] != p["snapshot_after"]:
+                    state_mutated = True
+            elif getattr(r, "evidence_type", None) == EvidenceType.FILESYSTEM and isinstance(r.payload, dict):
+                p = r.payload
+                if ("created_files" in p and p["created_files"]) or ("modified_files" in p and p["modified_files"]):
+                    state_mutated = True
 
         obs["state_mutated"] = state_mutated
 
@@ -755,11 +897,22 @@ class ControlledAssessmentEngine:
                 if isinstance(e, str):
                     events.append(e)
                 elif isinstance(e, dict):
-                    name = e.get("name") or e.get("event") or ""
+                    name = e.get("name") or e.get("event") or e.get("event_type") or ""
                     if name:
-                        events.append(name)
+                        events.append(str(name))
+                elif hasattr(e, "event_type"):
+                    events.append(str(getattr(e, "event_type") or ""))
                 elif hasattr(e, "name"):
-                    events.append(getattr(e, "name") or "")
+                    events.append(str(getattr(e, "name") or ""))
+
+        for r in role_recs:
+            if getattr(r, "evidence_type", None) == EvidenceType.TRACE and isinstance(r.payload, dict):
+                p = r.payload
+                if "events" in p and isinstance(p["events"], list):
+                    for ev in p["events"]:
+                        e_name = ev.get("event_type") if isinstance(ev, dict) else (ev.get("name") if isinstance(ev, dict) else str(ev))
+                        if e_name:
+                            events.append(str(e_name))
 
         obs["workflow_events"] = events
         return obs
