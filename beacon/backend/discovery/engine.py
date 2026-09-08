@@ -122,6 +122,8 @@ class RuleDiscoveryEngine:
 
             try:
                 cands = gen.generate_candidates(facts=facts, policy=active_policy, role_scope=role)
+                for cand in cands:
+                    cand.discovery_id = discovery_id
                 diagnostics.append(
                     DiscoveryDiagnostic(
                         generator_name=f"{gen_name}_{role}",

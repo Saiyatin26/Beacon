@@ -4,7 +4,6 @@ Discovers event orderings, predecessor/successor relationships, and sequence pat
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -63,7 +62,6 @@ class WorkflowCandidateGenerator(BaseCandidateGenerator):
                         canonical = f"workflow.event('{ev_a}') precedes workflow.event('{ev_b}')"
                         candidates.append(
                             DiscoveredCandidate(
-                                discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                                 candidate_id=f"cand_wf_prec_{ev_a}_{ev_b}",
                                 rule_type=DiscoveredRuleType.WORKFLOW_INVARIANT,
                                 canonical_expression=canonical,
@@ -86,7 +84,6 @@ class WorkflowCandidateGenerator(BaseCandidateGenerator):
                 canonical = f"workflow.sequence == [{seq_str}]"
                 candidates.append(
                     DiscoveredCandidate(
-                        discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                         candidate_id="cand_wf_exact_seq",
                         rule_type=DiscoveredRuleType.WORKFLOW_INVARIANT,
                         canonical_expression=canonical,

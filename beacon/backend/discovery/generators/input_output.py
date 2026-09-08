@@ -4,7 +4,6 @@ Discovers deterministic mathematical, copy, and constant relationships between i
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     CandidateValidationStatus,
@@ -51,7 +50,6 @@ class InputOutputCandidateGenerator(BaseCandidateGenerator):
                     val_repr = repr(first_val) if isinstance(first_val, str) else str(first_val)
                     canonical = f"output.{ok} == {val_repr}"
                     cand = DiscoveredCandidate(
-                        discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                         candidate_id=f"cand_io_const_{ok}",
                         rule_type=DiscoveredRuleType.INPUT_OUTPUT_RELATION,
                         canonical_expression=canonical,
@@ -78,7 +76,6 @@ class InputOutputCandidateGenerator(BaseCandidateGenerator):
                     if all(inp_val == out_val for inp_val, out_val in pairs):
                         canonical = f"output.{ok} == input.{ik}"
                         cand = DiscoveredCandidate(
-                            discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                             candidate_id=f"cand_io_copy_{ok}_{ik}",
                             rule_type=DiscoveredRuleType.INPUT_OUTPUT_RELATION,
                             canonical_expression=canonical,
@@ -136,7 +133,6 @@ class InputOutputCandidateGenerator(BaseCandidateGenerator):
                                         canonical = f"output.{ok} == {a_str} * input.{ik} - {abs(float(b_str))}"
 
                                     cand = DiscoveredCandidate(
-                                        discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                                         candidate_id=f"cand_io_formula_{ok}_{ik}",
                                         rule_type=DiscoveredRuleType.INPUT_OUTPUT_RELATION,
                                         canonical_expression=canonical,

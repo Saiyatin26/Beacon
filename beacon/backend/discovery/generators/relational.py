@@ -4,7 +4,6 @@ Discovers mathematical and relational ordering invariants (<=, >=, subset) betwe
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -71,7 +70,6 @@ class RelationalCandidateGenerator(BaseCandidateGenerator):
                             canonical = f"{f1} <= {f2}"
                             candidates.append(
                                 DiscoveredCandidate(
-                                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                                     candidate_id=f"cand_rel_le_{f1}_{f2}",
                                     rule_type=DiscoveredRuleType.RELATIONAL_INVARIANT,
                                     canonical_expression=canonical,
@@ -89,7 +87,6 @@ class RelationalCandidateGenerator(BaseCandidateGenerator):
                             canonical = f"{f1} >= {f2}"
                             candidates.append(
                                 DiscoveredCandidate(
-                                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                                     candidate_id=f"cand_rel_ge_{f1}_{f2}",
                                     rule_type=DiscoveredRuleType.RELATIONAL_INVARIANT,
                                     canonical_expression=canonical,

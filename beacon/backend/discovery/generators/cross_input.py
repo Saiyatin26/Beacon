@@ -4,7 +4,6 @@ Discovers behavioral invariants that hold consistently across independent, diver
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -51,7 +50,6 @@ class CrossInputCandidateGenerator(BaseCandidateGenerator):
                 canonical = f"cross_input_invariant(keys(output) == {first_keys})"
                 candidates.append(
                     DiscoveredCandidate(
-                        discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                         candidate_id="cand_cross_input_shape_stability",
                         rule_type=DiscoveredRuleType.CROSS_INPUT_INVARIANT,
                         canonical_expression=canonical,
@@ -106,7 +104,6 @@ class CrossInputCandidateGenerator(BaseCandidateGenerator):
                     canonical = f"monotonic_non_decreasing(input.{ik} -> output.{ok})"
                     candidates.append(
                         DiscoveredCandidate(
-                            discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                             candidate_id=f"cand_cross_input_mono_{ik}_{ok}",
                             rule_type=DiscoveredRuleType.CROSS_INPUT_INVARIANT,
                             canonical_expression=canonical,

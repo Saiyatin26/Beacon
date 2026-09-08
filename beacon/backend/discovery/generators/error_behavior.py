@@ -4,7 +4,6 @@ Discovers deterministic error occurrence, error categorization, and conditional 
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -39,7 +38,6 @@ class ErrorBehaviorCandidateGenerator(BaseCandidateGenerator):
             canonical = "has_error == false"
             candidates.append(
                 DiscoveredCandidate(
-                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                     candidate_id="cand_err_no_error",
                     rule_type=DiscoveredRuleType.ERROR_BEHAVIOR,
                     canonical_expression=canonical,
@@ -63,7 +61,6 @@ class ErrorBehaviorCandidateGenerator(BaseCandidateGenerator):
                 canonical = f"error.category == '{cat_val}'"
                 candidates.append(
                     DiscoveredCandidate(
-                        discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                         candidate_id=f"cand_err_cat_{cat_val}",
                         rule_type=DiscoveredRuleType.ERROR_BEHAVIOR,
                         canonical_expression=canonical,

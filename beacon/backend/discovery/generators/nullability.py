@@ -4,7 +4,6 @@ Discovers non-nullness, explicit presence, and empty-state invariants across exe
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -44,7 +43,6 @@ class NullabilityCandidateGenerator(BaseCandidateGenerator):
                 canonical_pres = f"exists(output.{ok})"
                 candidates.append(
                     DiscoveredCandidate(
-                        discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                         candidate_id=f"cand_exists_{ok}",
                         rule_type=DiscoveredRuleType.NULLABILITY_PATTERN,
                         canonical_expression=canonical_pres,
@@ -59,13 +57,12 @@ class NullabilityCandidateGenerator(BaseCandidateGenerator):
                     )
                 )
 
-                # 2. Field is always non-null
+        # 2. Field is always non-null
                 non_null_facts = [f for f in present_facts if f.output_data[ok] is not None]
                 if len(non_null_facts) == len(present_facts) and len(non_null_facts) >= policy.minimum_support_count:
                     canonical_nn = f"output.{ok} != null"
                     candidates.append(
                         DiscoveredCandidate(
-                            discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                             candidate_id=f"cand_notnull_{ok}",
                             rule_type=DiscoveredRuleType.NULLABILITY_PATTERN,
                             canonical_expression=canonical_nn,

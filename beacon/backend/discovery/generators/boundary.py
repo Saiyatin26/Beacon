@@ -4,7 +4,6 @@ Discovers empirical transition points and piecewise behavioral shifts across num
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -64,7 +63,6 @@ class BoundaryCandidateGenerator(BaseCandidateGenerator):
                         canonical = f"transition(input.{ik} >= {t_val_str}) -> has_error == {str(right_val).lower()}"
                         candidates.append(
                             DiscoveredCandidate(
-                                discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                                 candidate_id=f"cand_bound_err_{ik}_{t_val_str}",
                                 rule_type=DiscoveredRuleType.BOUNDARY_BEHAVIOR,
                                 canonical_expression=canonical,
@@ -102,7 +100,6 @@ class BoundaryCandidateGenerator(BaseCandidateGenerator):
                             canonical = f"transition(input.{ik} >= {t_val_str}) -> output.{ok} == {rv_repr}"
                             candidates.append(
                                 DiscoveredCandidate(
-                                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                                     candidate_id=f"cand_bound_out_{ik}_{ok}_{t_val_str}",
                                     rule_type=DiscoveredRuleType.BOUNDARY_BEHAVIOR,
                                     canonical_expression=canonical,

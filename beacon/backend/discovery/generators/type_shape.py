@@ -4,7 +4,6 @@ Discovers stable structural properties, object key shapes, and primitive types a
 """
 
 from typing import Any
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -62,7 +61,6 @@ class TypeShapeCandidateGenerator(BaseCandidateGenerator):
                 t_name = list(types_observed)[0]
                 canonical = f"typeof(output.{ok}) == '{t_name}'"
                 cand = DiscoveredCandidate(
-                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                     candidate_id=f"cand_type_{ok}_{t_name}",
                     rule_type=DiscoveredRuleType.TYPE_SHAPE_INVARIANT,
                     canonical_expression=canonical,
@@ -85,7 +83,6 @@ class TypeShapeCandidateGenerator(BaseCandidateGenerator):
                     keys_str = ", ".join(f"'{k}'" for k in first_keys)
                     canonical = f"keys(output) == [{keys_str}]"
                     cand = DiscoveredCandidate(
-                        discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                         candidate_id="cand_shape_output_keys",
                         rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
                         canonical_expression=canonical,

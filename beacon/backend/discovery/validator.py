@@ -312,16 +312,17 @@ class CandidateValidator:
         return None
 
     def _extract_state_count(self, tbl_val: Any) -> Optional[int]:
-        """Extracts integer row count from table representation."""
+        """Extracts integer row count from verified Phase 3 table snapshot structure or integer."""
         if isinstance(tbl_val, int) and not isinstance(tbl_val, bool):
             return tbl_val
         if isinstance(tbl_val, dict):
             rc = tbl_val.get("row_count")
             if isinstance(rc, int) and not isinstance(rc, bool):
                 return rc
-            rows = tbl_val.get("rows")
-            if isinstance(rows, list):
-                return len(rows)
+            if "table_hash" in tbl_val or "table_name" in tbl_val:
+                rows = tbl_val.get("rows")
+                if isinstance(rows, list):
+                    return len(rows)
         return None
 
     def _parse_literal(self, s: str) -> Any:

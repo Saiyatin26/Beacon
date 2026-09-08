@@ -5,7 +5,6 @@ from verified Phase 3 snapshots.
 """
 
 from typing import Any, Optional
-import uuid
 
 from ..models import (
     DiscoveredCandidate,
@@ -43,7 +42,6 @@ class StateCandidateGenerator(BaseCandidateGenerator):
             canonical = "state.mutated == false"
             candidates.append(
                 DiscoveredCandidate(
-                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                     candidate_id="cand_state_invariant_no_change",
                     rule_type=DiscoveredRuleType.STATE_INVARIANT,
                     canonical_expression=canonical,
@@ -61,7 +59,6 @@ class StateCandidateGenerator(BaseCandidateGenerator):
             canonical = "state.mutated == true"
             candidates.append(
                 DiscoveredCandidate(
-                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                     candidate_id="cand_state_transition_mutated",
                     rule_type=DiscoveredRuleType.STATE_TRANSITION,
                     canonical_expression=canonical,
@@ -114,7 +111,6 @@ class StateCandidateGenerator(BaseCandidateGenerator):
 
                     candidates.append(
                         DiscoveredCandidate(
-                            discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                             candidate_id=f"cand_state_count_{tbl}_{first_delta}",
                             rule_type=rule_type,
                             canonical_expression=canonical,
@@ -172,7 +168,6 @@ class StateCandidateGenerator(BaseCandidateGenerator):
 
                     candidates.append(
                         DiscoveredCandidate(
-                            discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
                             candidate_id=f"cand_state_field_{sk}_{int(first_d) if isinstance(first_d, float) and first_d.is_integer() else first_d}",
                             rule_type=rule_type,
                             canonical_expression=canonical,
@@ -190,14 +185,16 @@ class StateCandidateGenerator(BaseCandidateGenerator):
         return candidates
 
     def _extract_count(self, tbl_val: Any) -> Optional[int]:
-        """Extracts integer row/entity count from table snapshot structure or integer."""
+        """Extracts integer row/entity count from verified Phase 3 table snapshot structure or integer."""
         if isinstance(tbl_val, int) and not isinstance(tbl_val, bool):
             return tbl_val
         if isinstance(tbl_val, dict):
             rc = tbl_val.get("row_count")
             if isinstance(rc, int) and not isinstance(rc, bool):
                 return rc
-            rows = tbl_val.get("rows")
-            if isinstance(rows, list):
-                return len(rows)
+            # Only derive count from rows if authoritative table metadata exists (table_hash or table_name)
+            if "table_hash" in tbl_val or "table_name" in tbl_val:
+                rows = tbl_val.get("rows")
+                if isinstance(rows, list):
+                    return len(rows)
         return None

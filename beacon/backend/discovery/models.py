@@ -106,8 +106,8 @@ class DiscoveredCandidate(BaseModel):
     """A discovered candidate behavioral hypothesis backed by empirical observation provenance."""
     model_config = ConfigDict(extra="ignore")
 
-    discovery_id: str
-    candidate_id: str
+    discovery_id: str = ""
+    candidate_id: str = ""
     rule_type: DiscoveredRuleType
     canonical_expression: str
     normalized_expression: str
