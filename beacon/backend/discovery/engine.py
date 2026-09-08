@@ -170,50 +170,25 @@ class RuleDiscoveryEngine:
             )
             validated_candidates.append(val_cand)
 
-        # 5. Detect Shared Candidates (Discovered and validated independently on both Ref and Target)
+        # 5. Identify Common Fingerprints across Reference and Target without synthetic reconciliation
         ref_by_expr = {c.canonical_expression: c for c in validated_candidates if c.role_scope == "reference"}
         tgt_by_expr = {c.canonical_expression: c for c in validated_candidates if c.role_scope == "target"}
 
         common_exprs = set(ref_by_expr.keys()) & set(tgt_by_expr.keys())
-        shared_candidates: list[DiscoveredCandidate] = []
-
-        for expr in sorted(common_exprs):
+        for expr in common_exprs:
             rc = ref_by_expr[expr]
             tc = tgt_by_expr[expr]
-            if rc.validation_status in (CandidateValidationStatus.VALIDATED, CandidateValidationStatus.WEAK) and tc.validation_status in (CandidateValidationStatus.VALIDATED, CandidateValidationStatus.WEAK):
-                combined_iids = sorted(list(set(rc.input_ids) | set(tc.input_ids)))
-                combined_eids = sorted(list(set(rc.evidence_ids) | set(tc.evidence_ids)))
-                shared_cand = DiscoveredCandidate(
-                    discovery_id=f"disc_{uuid.uuid4().hex[:10]}",
-                    candidate_id=f"cand_shared_{rc.candidate_id[5:] if len(rc.candidate_id) > 5 else rc.candidate_id}",
-                    rule_type=rc.rule_type,
-                    canonical_expression=rc.canonical_expression,
-                    normalized_expression=rc.normalized_expression,
-                    description=f"Shared invariant discovered on both Reference and Target: {rc.description}",
-                    variables=rc.variables,
-                    source_fields=rc.source_fields,
-                    support_count=rc.support_count + tc.support_count,
-                    contradiction_count=rc.contradiction_count + tc.contradiction_count,
-                    unknown_count=rc.unknown_count + tc.unknown_count,
-                    applicable_count=rc.applicable_count + tc.applicable_count,
-                    observation_count=rc.observation_count + tc.observation_count,
-                    support_ratio=round((rc.support_count + tc.support_count) / max(1, rc.observation_count + tc.observation_count), 4),
-                    confidence=round((rc.support_count + tc.support_count) / max(1, rc.applicable_count + tc.applicable_count), 4),
-                    complexity=rc.complexity,
-                    validation_status=CandidateValidationStatus.VALIDATED if (rc.contradiction_count + tc.contradiction_count == 0) else CandidateValidationStatus.WEAK,
-                    evidence_ids=combined_eids,
-                    input_ids=combined_iids,
-                    role_scope="both",
-                    provenance={"reference_candidate_id": rc.candidate_id, "target_candidate_id": tc.candidate_id},
-                    discovery_method=rc.discovery_method,
-                    policy_version=active_policy.policy_version,
-                )
-                shared_candidates.append(shared_cand)
+            rc.provenance["observed_on_reference"] = True
+            rc.provenance["also_observed_on_target"] = True
+            tc.provenance["observed_on_target"] = True
+            tc.provenance["also_observed_on_reference"] = True
 
-        all_candidates = validated_candidates + shared_candidates
+        ref_fps = {c.fingerprint for c in validated_candidates if c.role_scope == "reference"}
+        tgt_fps = {c.fingerprint for c in validated_candidates if c.role_scope == "target"}
+        common_fingerprints = sorted(list(ref_fps & tgt_fps))
 
-        # 6. Deduplicate & Rank Deterministically
-        ranked_candidates = candidate_ranker.deduplicate_and_rank(all_candidates, active_policy)
+        # 6. Deduplicate & Rank Deterministically (Reference and Target candidates remain independent)
+        ranked_candidates = candidate_ranker.deduplicate_and_rank(validated_candidates, active_policy)
 
         # 7. Compute Summary Counts & Overall Status
         val_count = sum(1 for c in ranked_candidates if c.validation_status == CandidateValidationStatus.VALIDATED)
@@ -238,6 +213,7 @@ class RuleDiscoveryEngine:
             policy_hash=active_policy.compute_policy_hash(),
             candidates=ranked_candidates,
             overall_status=overall_status,
+            persistence_status="NOT_REQUESTED",
             diagnostics=diagnostics,
             has_failures=has_failures,
             has_warnings=has_warnings,
@@ -253,12 +229,14 @@ class RuleDiscoveryEngine:
             validated_count=val_count,
             contradicted_count=contra_count,
             inconclusive_count=inconc_count,
+            common_fingerprints=common_fingerprints,
         )
 
         # 8. Persistence
         if persist:
             try:
                 discovery_persistence.save_discovery_result(result)
+                result.persistence_status = "PERSISTED"
             except Exception as exc:
                 logger.error(f"Failed to persist discovery result '{result.discovery_id}': {exc}")
                 result.diagnostics.append(
@@ -272,6 +250,7 @@ class RuleDiscoveryEngine:
                     )
                 )
                 result.has_failures = True
+                result.persistence_status = "FAILED"
                 result.overall_status = "PARTIAL" if result.validated_count > 0 else "FAILED"
 
         return result

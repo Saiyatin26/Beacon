@@ -51,7 +51,10 @@ Phase 6 of BEACON V2 (*Full Rule / Invariant Discovery Engine*) has been complet
 - [x] Phase 7 boundary passes (no OracleSets, no rule reconciliation).
 - [x] Phase 5 regression passes (85/85 Phase 5 tests pass).
 - [x] Phase 3 integration passes (real SQLite provider integration).
-- [x] Phase 6 tests pass (27/27 tests pass).
+- [x] Phase 6 tests pass (31/31 tests pass).
+- [x] Safe non-destructive persistence migration preserves historical data without drop.
+- [x] Strict Reference and Target candidate isolation without synthetic reconciliation.
+- [x] Explicit persistence_status ('NOT_REQUESTED', 'PERSISTED', 'FAILED').
 - [x] Determinism test passes (reproducible fingerprints, ordering, result hashes).
 - [x] Persistence history test passes (separate rows for identical rerun).
 - [x] Documentation matches implementation.
@@ -62,7 +65,7 @@ Phase 6 of BEACON V2 (*Full Rule / Invariant Discovery Engine*) has been complet
 ## 2. Detailed Audit Sections
 
 ### Architecture:
-Bounded 7-stage pipeline: Evidence Contract Check → Fail-Closed Normalization → Observation Matrix Construction → Candidate Mining → Normalization & Canonicalization → Empirical Validation → Deduplication & Ranking → Diagnostic Assembly → SQLite Persistence & REST API Exposure.
+Bounded 7-stage pipeline: Evidence Contract Check → Fail-Closed Normalization → Observation Matrix Construction → Candidate Mining (Independent Reference & Target Scopes) → Normalization & Canonicalization → Empirical Validation → Deduplication & Ranking → Diagnostic Assembly → SQLite Persistence & REST API Exposure.
 
 ### Evidence contract:
 Consumes Phase 3 `EvidenceBundle` instances. Normalizes capture statuses using `normalize_capture_status`. Protects against unobserved defaults (`has_error: Optional[bool]`, `state_mutated: Optional[bool]`).
@@ -100,16 +103,16 @@ Strict 3-valued logic (Support, Contradiction, Unknown) producing empirical stat
 Missing, uncaptured, partial, or malformed evidence contributes strictly to `unknown_count`. It is never treated as support or contradiction.
 
 ### Provenance:
-Every candidate maintains its generator `discovery_method`, list of supporting `input_ids`, backing `evidence_ids`, and cryptographic `fingerprint`.
+Every candidate maintains its generator `discovery_method`, list of supporting `input_ids`, backing `evidence_ids`, role scope, and cryptographic `fingerprint`.
 
 ### Determinism:
 All candidate sorting, expressions, and hashes are 100% deterministic across runs with identical inputs and policies.
 
 ### Persistence:
-Stored across `discoveries` and `discovered_candidates` tables in SQLite using `candidate_instance_id` to preserve historical integrity across multiple runs.
+Stored across `discoveries` and `discovered_candidates` tables in SQLite using `candidate_instance_id` to preserve historical integrity across multiple runs. Safe non-destructive table migrations preserve historical rows when upgrading schemas.
 
 ### Failure handling:
-Generator exceptions are recorded in structured `DiscoveryDiagnostic` models, setting `has_failures=True` and `overall_status="PARTIAL"` or `"FAILED"`.
+Generator and persistence exceptions are recorded in structured `DiscoveryDiagnostic` models, setting `has_failures=True`, `persistence_status="FAILED"`, and `overall_status="PARTIAL"` or `"FAILED"`.
 
 ### Performance:
 Bounded search space with strict policy limits (`maximum_candidates`, `maximum_candidate_complexity`, `maximum_sequence_length`). Full test suite runs in < 2 seconds.
@@ -121,22 +124,23 @@ Strict regex and AST evaluation with zero usage of `eval()`, `exec()`, or dynami
 100% domain agnostic. Zero hardcoded business concepts in discovery core logic.
 
 ### Phase boundary audit:
-Phase 6 strictly stops at candidate discovery. No OracleSet models are created, no rule reconciliation is performed.
+Phase 6 strictly stops at candidate discovery. No OracleSet models are created, no rule reconciliation is performed. Reference and Target candidates are mined independently; common occurrences across roles are tracked as `common_fingerprints` and candidate metadata without synthetic reconciliation.
 
 ### Phase 3 integration:
 End-to-end integration verified using live SQLite database evidence providers (`DatabaseEvidenceProvider`).
 
 ### Phase 5 regression:
-Full regression test suite passes with 329/329 tests passing and 0 failures.
+Full regression test suite passes with 333/333 V2 tests passing and 782/782 total repository tests passing with 0 failures.
 
 ### Test results:
-- 30/30 Phase 6 tests pass in `tests/test_v2_phase6_discovery.py`.
-- 332/332 total tests pass across Phases 1 through 6.
+- 31/31 Phase 6 tests pass in `tests/test_v2_phase6_discovery.py`.
+- 333/333 total V2 tests pass across Phases 1 through 6.
+- 782/782 total repository tests pass across all phases.
 - Backend compiles cleanly (`python -m compileall -q backend`).
 - Frontend builds cleanly (`npm --prefix frontend run build`).
 
 ### Environment limitations:
-None.
+None. All tests and build tools executed successfully in the local Windows Python 3.11 environment.
 
 ### Remaining blockers:
 None.
@@ -192,10 +196,10 @@ Determinism:
     100% reproducible candidate ordering, fingerprints, and result hashes.
 
 Persistence:
-    SQLite storage separating semantic identity from candidate_instance_id.
+    SQLite storage separating semantic identity from candidate_instance_id with non-destructive migrations.
 
 Failure handling:
-    Structured DiscoveryDiagnostic logging and explicit overall_status.
+    Structured DiscoveryDiagnostic logging, explicit persistence_status ('NOT_REQUESTED', 'PERSISTED', 'FAILED'), and overall_status.
 
 Performance:
     Bounded polynomial search space executing in < 2 seconds.
@@ -213,10 +217,10 @@ Phase 3 integration:
     Verified against live Phase 3 database evidence provider and manifests.
 
 Phase 5 regression:
-    332/332 total tests pass across Phases 1 through 6.
+    333/333 total V2 tests pass; 782/782 total repository tests pass.
 
 Test results:
-    30/30 Phase 6 tests pass; 332/332 full regression suite pass.
+    31/31 Phase 6 tests pass; 333/333 V2 suite pass; 782/782 full repository suite pass.
 
 Environment limitations:
     None.

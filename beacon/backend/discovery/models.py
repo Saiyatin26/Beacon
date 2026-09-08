@@ -137,10 +137,9 @@ class DiscoveredCandidate(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def compute_fingerprint(self) -> str:
-        """Computes a deterministic SHA-256 fingerprint over rule type, role scope, and canonical expression."""
+        """Computes a deterministic SHA-256 fingerprint over semantic rule type, expression, variables, and fields."""
         payload = {
             "rule_type": self.rule_type.value,
-            "role_scope": self.role_scope,
             "canonical_expression": self.canonical_expression.strip(),
             "variables": sorted(self.variables),
             "source_fields": sorted(self.source_fields),
@@ -228,6 +227,7 @@ class DiscoveryResult(BaseModel):
 
     # Completeness & Diagnostics
     overall_status: str = "COMPLETE"  # "COMPLETE", "PARTIAL", "FAILED"
+    persistence_status: str = "NOT_REQUESTED"  # "NOT_REQUESTED", "PERSISTED", "FAILED"
     diagnostics: list[DiscoveryDiagnostic] = Field(default_factory=list)
     has_failures: bool = False
     has_warnings: bool = False
@@ -238,8 +238,19 @@ class DiscoveryResult(BaseModel):
     validated_count: int = 0
     contradicted_count: int = 0
     inconclusive_count: int = 0
+    common_fingerprints: list[str] = Field(default_factory=list)
     result_hash: str = ""
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    @property
+    def reference_candidates(self) -> list[DiscoveredCandidate]:
+        """Returns discovered candidates scoped to the Reference application."""
+        return [c for c in self.candidates if c.role_scope == "reference"]
+
+    @property
+    def target_candidates(self) -> list[DiscoveredCandidate]:
+        """Returns discovered candidates scoped to the Target application."""
+        return [c for c in self.candidates if c.role_scope == "target"]
 
     def compute_result_hash(self) -> str:
         """Computes deterministic SHA-256 digest across all ordered candidate fingerprints."""
@@ -262,6 +273,7 @@ class DiscoveryResult(BaseModel):
             "policy_hash": self.policy_hash,
             "observation_count": self.observation_count,
             "candidates": ordered_candidates,
+            "common_fingerprints": sorted(self.common_fingerprints),
         }
         return compute_deterministic_hash(payload)
 

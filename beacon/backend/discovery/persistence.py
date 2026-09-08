@@ -55,7 +55,41 @@ class DiscoveryPersistenceStore:
             cursor.execute("PRAGMA table_info(discovered_candidates)")
             existing_cols = {row[1] for row in cursor.fetchall()}
             if existing_cols and "candidate_instance_id" not in existing_cols:
-                conn.execute("DROP TABLE IF EXISTS discovered_candidates")
+                logger.info("Migrating discovered_candidates table to support candidate_instance_id while preserving historical data...")
+                conn.execute("ALTER TABLE discovered_candidates RENAME TO discovered_candidates_old")
+                conn.execute("""
+                    CREATE TABLE discovered_candidates (
+                        candidate_instance_id TEXT PRIMARY KEY,
+                        candidate_id TEXT NOT NULL,
+                        discovery_id TEXT NOT NULL,
+                        fingerprint TEXT NOT NULL,
+                        rule_type TEXT NOT NULL,
+                        canonical_expression TEXT NOT NULL,
+                        role_scope TEXT NOT NULL,
+                        support_count INTEGER NOT NULL,
+                        contradiction_count INTEGER NOT NULL,
+                        confidence REAL NOT NULL,
+                        validation_status TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        payload_json TEXT NOT NULL,
+                        FOREIGN KEY (discovery_id) REFERENCES discoveries(discovery_id)
+                    )
+                """)
+                conn.execute("""
+                    INSERT INTO discovered_candidates (
+                        candidate_instance_id, candidate_id, discovery_id, fingerprint, rule_type,
+                        canonical_expression, role_scope, support_count, contradiction_count,
+                        confidence, validation_status, created_at, payload_json
+                    )
+                    SELECT
+                        discovery_id || '_' || candidate_id || '_' || rowid,
+                        candidate_id, discovery_id, fingerprint, rule_type,
+                        canonical_expression, role_scope, support_count, contradiction_count,
+                        confidence, validation_status, created_at, payload_json
+                    FROM discovered_candidates_old
+                """)
+                conn.execute("DROP TABLE discovered_candidates_old")
+                logger.info("Successfully migrated historical discovered_candidates data without loss.")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS discovered_candidates (

@@ -335,7 +335,7 @@ class TestPhase6RuleDiscovery:
     # 10. Role Isolation & Shared Invariant Discovery
     # --------------------------------------------------------------------------
     def test_role_separation_reference_target_shared(self):
-        """Reference and Target evidence generate distinct candidates, shared candidates are identified without reconciliation."""
+        """Reference and Target evidence generate distinct candidates, common fingerprints are tracked without synthetic reconciliation."""
         session_id = "sess_disc_roles"
         app_id = "app_disc_roles"
 
@@ -370,14 +370,25 @@ class TestPhase6RuleDiscovery:
         assert result.observation_count == 4
         assert len(result.candidates) > 0
 
-        # Check for role scopes
-        ref_cands = [c for c in result.candidates if c.role_scope == "reference"]
-        tgt_cands = [c for c in result.candidates if c.role_scope == "target"]
-        shared_cands = [c for c in result.candidates if c.role_scope == "both"]
-
+        # Check for role scopes (Reference and Target candidates remain independent)
+        ref_cands = result.reference_candidates
+        tgt_cands = result.target_candidates
         assert len(ref_cands) >= 1
         assert len(tgt_cands) >= 1
-        assert len(shared_cands) >= 1
+
+        # Every candidate retains its own role scope and evidence provenance
+        for c in ref_cands:
+            assert c.role_scope == "reference"
+            assert all(eid.startswith("r") for eid in c.evidence_ids)
+        for c in tgt_cands:
+            assert c.role_scope == "target"
+            assert all(eid.startswith("t") for eid in c.evidence_ids)
+
+        # Common fingerprints are surfaced without synthetic merged candidates
+        assert len(result.common_fingerprints) > 0
+        assert not any(c.role_scope == "both" for c in result.candidates)
+        assert ref_cands[0].provenance.get("also_observed_on_target") is True
+        assert tgt_cands[0].provenance.get("also_observed_on_reference") is True
 
     # --------------------------------------------------------------------------
     # 11. Determinism
@@ -981,6 +992,7 @@ class TestPhase6RuleDiscovery:
 
         assert res.has_failures is True
         assert res.overall_status in ("PARTIAL", "FAILED")
+        assert res.persistence_status == "FAILED"
         persistence_diags = [d for d in res.diagnostics if d.generator_name == "persistence"]
         assert len(persistence_diags) == 1
         assert persistence_diags[0].status == "FAILED"
@@ -1016,3 +1028,78 @@ class TestPhase6RuleDiscovery:
         st_cands = st_gen.generate_candidates(facts, policy, role_scope="reference")
         # Must not generate state invariants or row count transitions from malformed state
         assert len(st_cands) == 0
+
+    # --------------------------------------------------------------------------
+    # 25. Safe Non-Destructive Persistence Migration
+    # --------------------------------------------------------------------------
+    def test_safe_persistence_migration_preserves_historical_data(self, tmp_path):
+        """Legacy discovered_candidates table without candidate_instance_id is migrated safely without data loss."""
+        db_file = tmp_path / "legacy_migration_test.db"
+
+        # 1. Create a legacy table without candidate_instance_id
+        with sqlite3.connect(str(db_file)) as conn:
+            conn.execute("""
+                CREATE TABLE discoveries (
+                    discovery_id TEXT PRIMARY KEY,
+                    application_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    policy_hash TEXT NOT NULL,
+                    policy_json TEXT NOT NULL,
+                    observation_count INTEGER NOT NULL,
+                    generated_count INTEGER NOT NULL,
+                    validated_count INTEGER NOT NULL,
+                    contradicted_count INTEGER NOT NULL,
+                    inconclusive_count INTEGER NOT NULL,
+                    result_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE discovered_candidates (
+                    candidate_id TEXT NOT NULL,
+                    discovery_id TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    rule_type TEXT NOT NULL,
+                    canonical_expression TEXT NOT NULL,
+                    role_scope TEXT NOT NULL,
+                    support_count INTEGER NOT NULL,
+                    contradiction_count INTEGER NOT NULL,
+                    confidence REAL NOT NULL,
+                    validation_status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+            """)
+            # Insert historical candidate records
+            conn.execute("""
+                INSERT INTO discovered_candidates (
+                    candidate_id, discovery_id, fingerprint, rule_type, canonical_expression,
+                    role_scope, support_count, contradiction_count, confidence,
+                    validation_status, created_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                "c_old_1", "disc_old", "fp_old_123", "INPUT_OUTPUT_RELATION",
+                "output.y == input.x", "reference", 5, 0, 1.0, "VALIDATED",
+                "2026-09-01T00:00:00Z", '{"test": 1}'
+            ))
+            conn.commit()
+
+        # 2. Instantiate DiscoveryPersistenceStore which runs safe migration
+        store = DiscoveryPersistenceStore(db_path=str(db_file))
+
+        # 3. Verify schema was upgraded and historical data remains intact
+        with sqlite3.connect(str(db_file)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(discovered_candidates)")
+            cols = {row[1] for row in cursor.fetchall()}
+            assert "candidate_instance_id" in cols
+
+            cursor.execute("SELECT candidate_instance_id, candidate_id, discovery_id, fingerprint FROM discovered_candidates")
+            rows = cursor.fetchall()
+            assert len(rows) == 1
+            row = rows[0]
+            assert row[0] is not None and len(row[0]) > 0  # candidate_instance_id generated
+            assert row[1] == "c_old_1"
+            assert row[2] == "disc_old"
+            assert row[3] == "fp_old_123"

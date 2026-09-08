@@ -24,16 +24,16 @@ class CandidateRanker:
         Returns:
             Deduplicated, ranked, and bounded list of DiscoveredCandidates.
         """
-        # 1. Deduplicate by canonical fingerprint
-        dedup_map: dict[str, DiscoveredCandidate] = {}
+        # 1. Deduplicate by role scope and canonical fingerprint
+        dedup_map: dict[tuple[str, str], DiscoveredCandidate] = {}
 
         for c in candidates:
-            fp = c.fingerprint
-            if fp not in dedup_map:
-                dedup_map[fp] = c
+            key = (c.role_scope, c.fingerprint)
+            if key not in dedup_map:
+                dedup_map[key] = c
             else:
-                # Merge evidence IDs and input IDs
-                existing = dedup_map[fp]
+                # Merge evidence IDs and input IDs within the same role scope
+                existing = dedup_map[key]
                 combined_eids = sorted(list(set(existing.evidence_ids) | set(c.evidence_ids)))
                 combined_iids = sorted(list(set(existing.input_ids) | set(c.input_ids)))
                 existing.evidence_ids = combined_eids
