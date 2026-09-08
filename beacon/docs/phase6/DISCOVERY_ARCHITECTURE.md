@@ -10,16 +10,17 @@ The Phase 6 Rule / Invariant Discovery Engine transforms raw execution evidence 
        ▼
 1. Validation & Extraction
    • Validates Phase 3 evidence records and manifests.
-   • Builds ObservationFact items for each input and role.
+   • Builds ObservationFact items for each input and role with fail-closed status normalization.
        │
        ▼
 2. Observation Matrix Construction
-   • Assembles ObservationMatrix with distinct Reference & Target facts.
+   • Assembles ObservationMatrix with strictly partitioned Reference & Target facts.
    • Preserves value distinctions (None vs empty dict vs empty list vs 0 vs False vs "").
        │
        ▼
 3. Domain-Agnostic Candidate Generation
    • Input/Output Generator (Equality, Copy, Constants, Bounded Linear Formulas)
+   • Cross-Input Generator (Monotonic trends, Cross-Input Shape Stability across >=2 inputs)
    • Type & Shape Invariant Generator
    • Nullability & Presence Pattern Generator
    • Relational Invariant Generator (<=, >=, ==)
@@ -35,25 +36,26 @@ The Phase 6 Rule / Invariant Discovery Engine transforms raw execution evidence 
        │
        ▼
 5. Empirical Candidate Validation
+   • Scope Classification: PER_FACT vs CROSS_OBSERVATION (aggregate).
    • Computes support_count, contradiction_count, unknown_count, applicable_count.
    • Calculates support_ratio and empirical confidence.
    • Classifies into VALIDATED, WEAK, CONTRADICTED, INSUFFICIENT_COVERAGE, INCONCLUSIVE.
        │
        ▼
-6. Role-Scoped Separation & Shared Candidate Tagging
+6. Role-Scoped Separation & Independent Mining
    • Reference rules (role_scope="reference")
    • Target rules (role_scope="target")
-   • Cross-Implementation Shared candidates (role_scope="both")
+   • Common rules surfaced via common_fingerprints without synthetic reconciliation.
    • NEVER performs rule reconciliation (strictly deferred to Phase 7).
        │
        ▼
 7. Deduplication & Deterministic Ranking
-   • Deduplicates candidates sharing canonical fingerprints.
+   • Deduplicates candidates sharing canonical fingerprints per role scope.
    • Deterministically sorts by confidence desc, support desc, complexity asc, expression asc.
        │
        ▼
 8. Persistence & API
-   • Explicit SQLite storage into `discoveries` and `discovered_candidates`.
+   • Explicit SQLite storage into `discoveries` and `discovered_candidates` (using candidate_instance_id).
    • Exposes REST endpoints via `/api/v2/discovery`.
 ```
 
@@ -76,19 +78,28 @@ Confidence = Support Count / Applicable Observations
 
 ---
 
-## 3. Provenance & Determinism
+## 3. Validation Scopes: Per-Fact vs Cross-Observation
+
+The candidate validator classifies hypotheses into two explicit evaluation scopes:
+1. **PER_FACT**: Evaluates hypotheses against each observation independently (e.g. arithmetic relations, types, shapes, nullability, single-observation state/error properties).
+2. **CROSS_OBSERVATION**: Evaluates aggregate properties across the observation group (e.g. `monotonic_non_decreasing(input.x -> output.y)`). Observations are filtered for validity, sorted deterministically by input value, and compared pairwise to ensure monotonicity and detect conflicting duplicate inputs.
+
+---
+
+## 4. Provenance & Determinism
 
 Every candidate maintains complete provenance:
-- `discovery_method`: Generator method string (e.g., `formula_fitting`, `structural_mining`, `sequence_mining`, `transition_analysis`).
+- `discovery_method`: Generator method string (e.g., `direct_relation`, `cross_input_analysis`, `sequence_mining`, `state_delta_analysis`).
 - `input_ids`: Sorted list of input IDs whose observations support the candidate.
 - `evidence_ids`: Sorted list of Phase 3 evidence IDs directly backing the candidate.
-- `fingerprint`: Cryptographic SHA-256 digest of `rule_type`, `canonical_expression`, `role_scope`, and `variables`.
+- `fingerprint`: Cryptographic SHA-256 digest of `rule_type`, `canonical_expression`, `variables`, and `source_fields`. Role scope is excluded so identical hypotheses discovered on Reference and Target share the semantic fingerprint while remaining independent records.
+- `candidate_instance_id`: Unique persistent instance ID in SQLite, separating historical execution instances from semantic identity.
 - `result_hash`: Deterministic SHA-256 digest across all ranked candidate fingerprints for a given run.
 
 ---
 
-## 4. Security & Safety
+## 5. Security & Safety
 
 - **No `eval()` / `exec()`**: All candidate expressions are parsed and evaluated using deterministic regex, AST parsers, and bounded mathematical functions with strict numeric tolerance.
 - **Complexity Limits**: Formula discovery and sequence mining are bounded by explicit maximum depth and count constraints defined in `DiscoveryPolicy`.
-- **Denial of Service Prevention**: Maximum candidates per run is strictly enforced (default: 200).
+- **Denial of Service Prevention**: Maximum candidates per run is strictly enforced (`maximum_candidates = 100`).

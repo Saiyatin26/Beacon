@@ -37,6 +37,12 @@ class CandidateValidationStatus(str, Enum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
+class ValidationScope(str, Enum):
+    """Scope of candidate evaluation: per-fact atomic check or cross-observation group analysis."""
+    PER_FACT = "PER_FACT"
+    CROSS_OBSERVATION = "CROSS_OBSERVATION"
+
+
 class DiscoveryMethod(str, Enum):
     """Deterministic mining strategy used to discover the candidate."""
     DIRECT_RELATION = "direct_relation"

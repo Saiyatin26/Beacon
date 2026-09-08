@@ -35,6 +35,7 @@ from discovery.models import (
     DiscoveryPolicy,
     DiscoveryResult,
     ObservationFact,
+    ValidationScope,
 )
 from discovery.normalizer import candidate_normalizer
 from discovery.persistence import DiscoveryPersistenceStore, discovery_persistence
@@ -1103,3 +1104,219 @@ class TestPhase6RuleDiscovery:
             assert row[1] == "c_old_1"
             assert row[2] == "disc_old"
             assert row[3] == "fp_old_123"
+
+    # --------------------------------------------------------------------------
+    # 26. Adversarial Cross-Observation Monotonicity Validation (Mandatory Bug Fix Test)
+    # --------------------------------------------------------------------------
+    def test_adversarial_cross_observation_monotonicity_violations(self):
+        """Cross-observation validator detects violations, conflicts, and missing values across observation groups."""
+        policy = DiscoveryPolicy(minimum_support_count=2, minimum_confidence=0.8)
+        cand = DiscoveredCandidate(
+            candidate_id="cand_mono_test",
+            rule_type=DiscoveredRuleType.CROSS_INPUT_INVARIANT,
+            canonical_expression="monotonic_non_decreasing(input.x -> output.y)",
+            normalized_expression="monotonic_non_decreasing(input.x -> output.y)",
+            description="Monotonicity test candidate",
+            variables=["input.x", "output.y"],
+            source_fields=["input.x", "output.y"],
+        )
+
+        assert candidate_validator.get_validation_scope(cand) == ValidationScope.CROSS_OBSERVATION
+
+        # Case 1: Perfectly valid monotonic sequence (1->2, 2->4, 3->6, 4->8)
+        facts_valid = [
+            ObservationFact(input_id="i1", role="reference", input_data={"x": 1}, output_data={"y": 2}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", input_data={"x": 2}, output_data={"y": 4}, output_observed=True),
+            ObservationFact(input_id="i3", role="reference", input_data={"x": 3}, output_data={"y": 6}, output_observed=True),
+            ObservationFact(input_id="i4", role="reference", input_data={"x": 4}, output_data={"y": 8}, output_observed=True),
+        ]
+        res_valid = candidate_validator.validate_candidate(cand.model_copy(), facts_valid, policy)
+        assert res_valid.support_count == 4
+        assert res_valid.contradiction_count == 0
+        assert res_valid.unknown_count == 0
+        assert res_valid.confidence == 1.0
+        assert res_valid.validation_status == CandidateValidationStatus.VALIDATED
+
+        # Case 2: One violation (1->2, 2->4, 3->6, 4->1) -> must have contradiction_count > 0, status != VALIDATED
+        facts_one_viol = [
+            ObservationFact(input_id="i1", role="reference", input_data={"x": 1}, output_data={"y": 2}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", input_data={"x": 2}, output_data={"y": 4}, output_observed=True),
+            ObservationFact(input_id="i3", role="reference", input_data={"x": 3}, output_data={"y": 6}, output_observed=True),
+            ObservationFact(input_id="i4", role="reference", input_data={"x": 4}, output_data={"y": 1}, output_observed=True),
+        ]
+        res_one_viol = candidate_validator.validate_candidate(cand.model_copy(), facts_one_viol, policy)
+        assert res_one_viol.support_count == 3
+        assert res_one_viol.contradiction_count == 1
+        assert res_one_viol.confidence == 0.75
+        assert res_one_viol.validation_status == CandidateValidationStatus.WEAK
+        assert res_one_viol.validation_status != CandidateValidationStatus.VALIDATED
+
+        # Case 3: Multiple violations (1->5, 2->2, 3->7, 4->1)
+        facts_multi_viol = [
+            ObservationFact(input_id="i1", role="reference", input_data={"x": 1}, output_data={"y": 5}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", input_data={"x": 2}, output_data={"y": 2}, output_observed=True),
+            ObservationFact(input_id="i3", role="reference", input_data={"x": 3}, output_data={"y": 7}, output_observed=True),
+            ObservationFact(input_id="i4", role="reference", input_data={"x": 4}, output_data={"y": 1}, output_observed=True),
+        ]
+        res_multi_viol = candidate_validator.validate_candidate(cand.model_copy(), facts_multi_viol, policy)
+        assert res_multi_viol.support_count == 2
+        assert res_multi_viol.contradiction_count == 2
+        assert res_multi_viol.confidence == 0.5
+        assert res_multi_viol.validation_status in (CandidateValidationStatus.WEAK, CandidateValidationStatus.CONTRADICTED)
+
+        # Case 4: Missing output or input (x=1->y=2, x=2->missing y, x=3->y=5)
+        facts_missing = [
+            ObservationFact(input_id="i1", role="reference", input_data={"x": 1}, output_data={"y": 2}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", input_data={"x": 2}, output_data={}, output_observed=False),
+            ObservationFact(input_id="i3", role="reference", input_data={"x": 3}, output_data={"y": 5}, output_observed=True),
+        ]
+        res_missing = candidate_validator.validate_candidate(cand.model_copy(), facts_missing, policy)
+        assert res_missing.unknown_count == 1
+        assert res_missing.support_count == 2
+        assert res_missing.contradiction_count == 0
+
+        # Case 5: Non-numeric values (x=1->y="abc", x=2->y="xyz") -> UNKNOWN
+        facts_non_numeric = [
+            ObservationFact(input_id="i1", role="reference", input_data={"x": 1}, output_data={"y": "abc"}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", input_data={"x": 2}, output_data={"y": "xyz"}, output_observed=True),
+        ]
+        res_non_num = candidate_validator.validate_candidate(cand.model_copy(), facts_non_numeric, policy)
+        assert res_non_num.unknown_count == 2
+        assert res_non_num.support_count == 0
+        assert res_non_num.validation_status == CandidateValidationStatus.INCONCLUSIVE
+
+        # Case 6: Duplicate same input / same output (10->20, 10->20) -> compatible support
+        facts_dup_same = [
+            ObservationFact(input_id="i1", role="reference", input_data={"x": 10}, output_data={"y": 20}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", input_data={"x": 10}, output_data={"y": 20}, output_observed=True),
+        ]
+        res_dup_same = candidate_validator.validate_candidate(cand.model_copy(), facts_dup_same, policy)
+        assert res_dup_same.support_count == 2
+        assert res_dup_same.contradiction_count == 0
+        assert res_dup_same.validation_status == CandidateValidationStatus.VALIDATED
+
+        # Case 7: Duplicate same input / conflicting output (10->20, 10->30) -> CONTRADICTION
+        facts_dup_conflict = [
+            ObservationFact(input_id="i1", role="reference", input_data={"x": 10}, output_data={"y": 20}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", input_data={"x": 10}, output_data={"y": 30}, output_observed=True),
+        ]
+        res_dup_conflict = candidate_validator.validate_candidate(cand.model_copy(), facts_dup_conflict, policy)
+        assert res_dup_conflict.support_count == 1
+        assert res_dup_conflict.contradiction_count == 1
+        assert res_dup_conflict.confidence == 0.5
+        assert res_dup_conflict.validation_status in (CandidateValidationStatus.WEAK, CandidateValidationStatus.CONTRADICTED)
+
+    # --------------------------------------------------------------------------
+    # 27. Cross-Observation Shuffling & Determinism Test
+    # --------------------------------------------------------------------------
+    def test_cross_observation_shuffling_determinism(self):
+        """Permutations of input observation order yield identical validation metrics, status, and input provenance."""
+        policy = DiscoveryPolicy(minimum_support_count=2, minimum_confidence=0.8)
+        cand = DiscoveredCandidate(
+            candidate_id="cand_mono_det",
+            rule_type=DiscoveredRuleType.CROSS_INPUT_INVARIANT,
+            canonical_expression="monotonic_non_decreasing(input.x -> output.y)",
+            normalized_expression="monotonic_non_decreasing(input.x -> output.y)",
+            description="Determinism test candidate",
+            variables=["input.x", "output.y"],
+            source_fields=["input.x", "output.y"],
+        )
+
+        f1 = ObservationFact(input_id="inp_a", role="reference", input_data={"x": 1}, output_data={"y": 10}, output_observed=True)
+        f2 = ObservationFact(input_id="inp_b", role="reference", input_data={"x": 2}, output_data={"y": 20}, output_observed=True)
+        f3 = ObservationFact(input_id="inp_c", role="reference", input_data={"x": 3}, output_data={"y": 30}, output_observed=True)
+        f4 = ObservationFact(input_id="inp_d", role="reference", input_data={"x": 4}, output_data={"y": 40}, output_observed=True)
+
+        perm1 = [f1, f2, f3, f4]
+        perm2 = [f4, f3, f2, f1]
+        perm3 = [f2, f4, f1, f3]
+        perm4 = [f3, f1, f4, f2]
+
+        r1 = candidate_validator.validate_candidate(cand.model_copy(), perm1, policy)
+        r2 = candidate_validator.validate_candidate(cand.model_copy(), perm2, policy)
+        r3 = candidate_validator.validate_candidate(cand.model_copy(), perm3, policy)
+        r4 = candidate_validator.validate_candidate(cand.model_copy(), perm4, policy)
+
+        for r in [r2, r3, r4]:
+            assert r.support_count == r1.support_count == 4
+            assert r.contradiction_count == r1.contradiction_count == 0
+            assert r.confidence == r1.confidence == 1.0
+            assert r.validation_status == r1.validation_status == CandidateValidationStatus.VALIDATED
+            assert r.input_ids == r1.input_ids == ["inp_a", "inp_b", "inp_c", "inp_d"]
+
+    # --------------------------------------------------------------------------
+    # 28. Cross-Observation Shape Stability Adversarial Test
+    # --------------------------------------------------------------------------
+    def test_cross_observation_shape_stability_adversarial(self):
+        """Cross-observation shape invariant detects structural discrepancy in any observation."""
+        policy = DiscoveryPolicy(minimum_support_count=2, minimum_confidence=0.8)
+        cand = DiscoveredCandidate(
+            candidate_id="cand_shape_test",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="keys(output) == ['a', 'b']",
+            normalized_expression="keys(output) == ['a', 'b']",
+            description="Shape consistency test",
+            variables=["output.a", "output.b"],
+            source_fields=["output.a", "output.b"],
+        )
+
+        facts = [
+            ObservationFact(input_id="i1", role="reference", output_data={"a": 1, "b": 2}, output_observed=True),
+            ObservationFact(input_id="i2", role="reference", output_data={"a": 3, "b": 4}, output_observed=True),
+            ObservationFact(input_id="i3", role="reference", output_data={"a": 5, "c": 6}, output_observed=True),  # Discrepancy!
+        ]
+
+        res = candidate_validator.validate_candidate(cand.model_copy(), facts, policy)
+        assert res.support_count == 2
+        assert res.contradiction_count == 1
+        assert res.confidence == round(2 / 3, 4)
+        assert res.validation_status == CandidateValidationStatus.WEAK
+        assert res.validation_status != CandidateValidationStatus.VALIDATED
+
+    # --------------------------------------------------------------------------
+    # 29. Cross-Observation Role Isolation Adversarial Test
+    # --------------------------------------------------------------------------
+    def test_cross_observation_role_isolation_adversarial(self):
+        """Reference observations cannot validate violating Target candidates and vice-versa."""
+        policy = DiscoveryPolicy(minimum_support_count=2, minimum_confidence=0.8)
+
+        # Reference behaves monotonically: 1->2, 2->4, 3->6
+        ref_facts = [
+            ObservationFact(input_id="r1", role="reference", input_data={"x": 1}, output_data={"y": 2}, output_observed=True),
+            ObservationFact(input_id="r2", role="reference", input_data={"x": 2}, output_data={"y": 4}, output_observed=True),
+            ObservationFact(input_id="r3", role="reference", input_data={"x": 3}, output_data={"y": 6}, output_observed=True),
+        ]
+        # Target violates monotonicity: 1->2, 2->4, 3->1
+        tgt_facts = [
+            ObservationFact(input_id="t1", role="target", input_data={"x": 1}, output_data={"y": 2}, output_observed=True),
+            ObservationFact(input_id="t2", role="target", input_data={"x": 2}, output_data={"y": 4}, output_observed=True),
+            ObservationFact(input_id="t3", role="target", input_data={"x": 3}, output_data={"y": 1}, output_observed=True),
+        ]
+
+        cand_ref = DiscoveredCandidate(
+            candidate_id="cand_mono_ref",
+            rule_type=DiscoveredRuleType.CROSS_INPUT_INVARIANT,
+            canonical_expression="monotonic_non_decreasing(input.x -> output.y)",
+            normalized_expression="monotonic_non_decreasing(input.x -> output.y)",
+            description="Ref candidate",
+            role_scope="reference",
+        )
+        cand_tgt = DiscoveredCandidate(
+            candidate_id="cand_mono_tgt",
+            rule_type=DiscoveredRuleType.CROSS_INPUT_INVARIANT,
+            canonical_expression="monotonic_non_decreasing(input.x -> output.y)",
+            normalized_expression="monotonic_non_decreasing(input.x -> output.y)",
+            description="Tgt candidate",
+            role_scope="target",
+        )
+
+        res_ref = candidate_validator.validate_candidate(cand_ref, ref_facts, policy)
+        assert res_ref.validation_status == CandidateValidationStatus.VALIDATED
+        assert res_ref.contradiction_count == 0
+        assert res_ref.input_ids == ["r1", "r2", "r3"]
+
+        res_tgt = candidate_validator.validate_candidate(cand_tgt, tgt_facts, policy)
+        assert res_tgt.validation_status == CandidateValidationStatus.WEAK
+        assert res_tgt.contradiction_count == 1
+        assert res_tgt.input_ids == ["t1", "t2"]  # t3 contradicted
+

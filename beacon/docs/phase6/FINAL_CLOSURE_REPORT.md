@@ -199,13 +199,13 @@ npm --prefix frontend run build
 
 | Test Suite | Command | Total | Passed | Failed | Skipped | Errors | Duration |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Phase 6 Discovery** | `pytest -q tests/test_v2_phase6_discovery.py` | 31 | **31** | 0 | 0 | 0 | 0.23s |
-| **Phase 3 Regression** | `pytest -q tests/test_v2_phase3_execution.py` | 47 | **47** | 0 | 0 | 0 | 12.20s |
-| **Phase 5 Regression** | `pytest -q tests/test_v2_phase5_*.py` | 85 | **85** | 0 | 0 | 0 | 1.03s |
-| **Full V2 Suite (Phases 1-6)** | `pytest -q tests/test_v2_phase*.py` | 333 | **333** | 0 | 0 | 0 | 23.73s |
-| **Full Repository Suite** | `pytest -q` | 783 | **783** | 0 | 0 | 0 | 318.97s |
-| **Backend Compilation** | `python -m compileall -q backend` | — | **PASS** | 0 | — | 0 | 0.45s |
-| **Frontend Production Build** | `npm --prefix frontend run build` | — | **PASS** | 0 | — | 0 | 12.98s |
+| **Phase 6 Discovery** | `pytest -q tests/test_v2_phase6_discovery.py` | 35 | **35** | 0 | 0 | 0 | 0.15s |
+| **Phase 3 Regression** | `pytest -q tests/test_v2_phase3_execution.py` | 47 | **47** | 0 | 0 | 0 | 16.60s |
+| **Phase 5 Regression** | `pytest -q tests/test_v2_phase5_*.py` | 85 | **85** | 0 | 0 | 0 | 1.11s |
+| **Full V2 Suite (Phases 1-6)** | `pytest -q tests/test_v2_phase*.py` | 337 | **337** | 0 | 0 | 0 | 28.72s |
+| **Full Repository Suite** | `pytest -q` | 787 | **787** | 0 | 0 | 0 | 284.76s |
+| **Backend Compilation** | `python -m compileall -q backend` | — | **PASS** | 0 | — | 0 | 0.35s |
+| **Frontend Production Build** | `npm --prefix frontend run build` | — | **PASS** | 0 | — | 0 | 3.54s |
 
 ---
 
@@ -244,6 +244,7 @@ npm --prefix frontend run build
 | **Cross-Input Discovery** | **PASS** | Monotonic trends and output shape stability across diverse inputs verified. |
 | **Boundary Discovery** | **PASS** | Empirical transition thresholds discovered without domain labels. |
 | **Validator Compatibility** | **PASS** | Meta-test verifies 100% of generated candidates are understood by validator. |
+| **Cross-Observation Validation** | **PASS** | Aggregate monotonicity validation correctly detects violations and duplicate conflicts. |
 | **Unknown Handling** | **PASS** | Missing/partial evidence tracked strictly as `unknown_count`. |
 | **Model Default Protection** | **PASS** | Model defaults cannot generate false observations or hypotheses. |
 | **Role Isolation** | **PASS** | Reference and Target candidate sets mined independently; no merged records. |
@@ -259,11 +260,11 @@ npm --prefix frontend run build
 | **Compilation** | **PASS** | `python -m compileall -q backend` exited with code 0. |
 | **Backend Startup** | **PASS** | Health endpoint and authenticated discovery endpoint verified. |
 | **Frontend Build** | **PASS** | `npm --prefix frontend run build` exited with code 0. |
-| **Phase 6 Tests** | **PASS** | 31 / 31 passed in `tests/test_v2_phase6_discovery.py`. |
+| **Phase 6 Tests** | **PASS** | 35 / 35 passed in `tests/test_v2_phase6_discovery.py`. |
 | **Phase 3 Regression** | **PASS** | 47 / 47 passed in `tests/test_v2_phase3_execution.py`. |
 | **Phase 5 Regression** | **PASS** | 85 / 85 passed in Phase 5 test files. |
-| **Full V2 Suite** | **PASS** | 333 / 333 passed in V2 test suite. |
-| **Full Repository Suite** | **PASS** | 783 / 783 passed across entire repository test suite. |
+| **Full V2 Suite** | **PASS** | 337 / 337 passed in V2 test suite. |
+| **Full Repository Suite** | **PASS** | 787 / 787 passed across entire repository test suite. |
 
 ---
 

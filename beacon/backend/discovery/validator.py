@@ -13,11 +13,19 @@ from .models import (
     DiscoveredRuleType,
     DiscoveryPolicy,
     ObservationFact,
+    ValidationScope,
 )
 
 
 class CandidateValidator:
     """Validates candidate hypotheses against observations, distinguishing support, contradiction, and unknown."""
+
+    def get_validation_scope(self, candidate: DiscoveredCandidate) -> ValidationScope:
+        """Determines whether a candidate hypothesis requires atomic per-fact or aggregate cross-observation validation."""
+        expr = candidate.canonical_expression
+        if candidate.rule_type == DiscoveredRuleType.CROSS_INPUT_INVARIANT and expr.startswith("monotonic_non_decreasing("):
+            return ValidationScope.CROSS_OBSERVATION
+        return ValidationScope.PER_FACT
 
     def validate_candidate(
         self,
@@ -26,14 +34,146 @@ class CandidateValidator:
         policy: DiscoveryPolicy,
     ) -> DiscoveredCandidate:
         """Evaluates a candidate against all facts in scope, mutating and returning its empirical statistics."""
+        scope = self.get_validation_scope(candidate)
+        if scope == ValidationScope.CROSS_OBSERVATION:
+            return self._validate_cross_observation(candidate, facts, policy)
+        return self._validate_per_fact(candidate, facts, policy)
+
+    def _validate_cross_observation(
+        self,
+        candidate: DiscoveredCandidate,
+        facts: list[ObservationFact],
+        policy: DiscoveryPolicy,
+    ) -> DiscoveredCandidate:
+        """Evaluates aggregate cross-observation hypotheses (e.g. monotonicity across sorted observations)."""
+        expr = candidate.canonical_expression
+
+        # 1. Monotonic non-decreasing across input -> output
+        m_mono = re.match(r"^monotonic_non_decreasing\(input\.([a-zA-Z0-9_]+)\s*->\s*output\.([a-zA-Z0-9_]+)\)$", expr)
+        if m_mono:
+            ik, ok = m_mono.group(1), m_mono.group(2)
+
+            usable_facts: list[ObservationFact] = []
+            unknown_count = 0
+
+            for fact in facts:
+                # Must be valid, captured, with output observed and numeric input and output
+                if not fact.is_valid or not fact.output_observed:
+                    unknown_count += 1
+                    continue
+                if ik not in fact.input_data or ok not in fact.output_data:
+                    unknown_count += 1
+                    continue
+                iv = fact.input_data[ik]
+                ov = fact.output_data[ok]
+                if not isinstance(iv, (int, float)) or not isinstance(ov, (int, float)) or isinstance(iv, bool) or isinstance(ov, bool):
+                    unknown_count += 1
+                    continue
+                usable_facts.append(fact)
+
+            total_obs = len(facts)
+            if not usable_facts:
+                candidate.support_count = 0
+                candidate.contradiction_count = 0
+                candidate.unknown_count = total_obs
+                candidate.applicable_count = 0
+                candidate.observation_count = total_obs
+                candidate.support_ratio = 0.0
+                candidate.confidence = 0.0
+                candidate.validation_status = CandidateValidationStatus.INCONCLUSIVE
+                candidate.input_ids = []
+                candidate.evidence_ids = []
+                return candidate
+
+            # Deterministically sort by (input_val, input_id)
+            sorted_facts = sorted(usable_facts, key=lambda f: (float(f.input_data[ik]), str(f.input_id)))
+
+            if len(sorted_facts) < 2:
+                # Single observation is insufficient for genuine cross-observation monotonicity
+                candidate.support_count = len(sorted_facts)
+                candidate.contradiction_count = 0
+                candidate.unknown_count = unknown_count
+                candidate.applicable_count = len(sorted_facts)
+                candidate.observation_count = total_obs
+                candidate.support_ratio = round(len(sorted_facts) / total_obs, 4) if total_obs > 0 else 0.0
+                candidate.confidence = 1.0
+                candidate.validation_status = CandidateValidationStatus.INSUFFICIENT_COVERAGE
+                candidate.input_ids = [sorted_facts[0].input_id]
+                candidate.evidence_ids = sorted_facts[0].evidence_ids.copy()
+                return candidate
+
+            support_count = 1  # Base observation sorted_facts[0] is supported
+            contradiction_count = 0
+            supporting_inputs = {sorted_facts[0].input_id}
+            supporting_evidence_ids = set(sorted_facts[0].evidence_ids)
+
+            for i in range(1, len(sorted_facts)):
+                prev_f = sorted_facts[i - 1]
+                curr_f = sorted_facts[i]
+                prev_x = float(prev_f.input_data[ik])
+                curr_x = float(curr_f.input_data[ik])
+                prev_y = float(prev_f.output_data[ok])
+                curr_y = float(curr_f.output_data[ok])
+
+                if abs(curr_x - prev_x) < policy.numeric_tolerance:
+                    # Duplicate input value
+                    if abs(curr_y - prev_y) <= policy.numeric_tolerance:
+                        # Consistent duplicate mapping
+                        support_count += 1
+                        supporting_inputs.add(curr_f.input_id)
+                        supporting_evidence_ids.update(curr_f.evidence_ids)
+                    else:
+                        # Conflicting / non-deterministic output for same input
+                        contradiction_count += 1
+                else:
+                    # Ascending input value
+                    if curr_y >= prev_y - policy.numeric_tolerance:
+                        support_count += 1
+                        supporting_inputs.add(curr_f.input_id)
+                        supporting_evidence_ids.update(curr_f.evidence_ids)
+                    else:
+                        contradiction_count += 1
+
+            applicable_count = support_count + contradiction_count
+            support_ratio = (support_count / total_obs) if total_obs > 0 else 0.0
+            confidence = (support_count / applicable_count) if applicable_count > 0 else 0.0
+
+            if applicable_count == 0:
+                status = CandidateValidationStatus.INCONCLUSIVE
+            elif contradiction_count > 0:
+                status = CandidateValidationStatus.CONTRADICTED if confidence < 0.5 else CandidateValidationStatus.WEAK
+            elif support_count >= policy.minimum_support_count and confidence >= policy.minimum_confidence:
+                status = CandidateValidationStatus.VALIDATED
+            else:
+                status = CandidateValidationStatus.INSUFFICIENT_COVERAGE
+
+            candidate.support_count = support_count
+            candidate.contradiction_count = contradiction_count
+            candidate.unknown_count = unknown_count
+            candidate.applicable_count = applicable_count
+            candidate.observation_count = total_obs
+            candidate.support_ratio = round(support_ratio, 4)
+            candidate.confidence = round(confidence, 4)
+            candidate.validation_status = status
+            candidate.input_ids = sorted(list(supporting_inputs))
+            candidate.evidence_ids = sorted(list(supporting_evidence_ids))
+
+            return candidate
+
+        return self._validate_per_fact(candidate, facts, policy)
+
+    def _validate_per_fact(
+        self,
+        candidate: DiscoveredCandidate,
+        facts: list[ObservationFact],
+        policy: DiscoveryPolicy,
+    ) -> DiscoveredCandidate:
+        """Evaluates per-fact atomic hypotheses across observations."""
         support_count = 0
         contradiction_count = 0
         unknown_count = 0
         supporting_inputs = set()
         supporting_evidence_ids = set()
-
-        expr = candidate.canonical_expression
-        rule_type = candidate.rule_type
 
         for fact in facts:
             # Check if fact is valid / not an adaptation failure
