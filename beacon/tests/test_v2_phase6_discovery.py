@@ -569,3 +569,252 @@ class TestPhase6RuleDiscovery:
         res_list = client.get("/api/v2/discovery", headers=headers)
         assert res_list.status_code == 200
         assert any(d["discovery_id"] == disc_id for d in res_list.json())
+
+    # --------------------------------------------------------------------------
+    # 15. Critical Hardening: Fail-Closed Status Normalization
+    # --------------------------------------------------------------------------
+    def test_unknown_unrecognized_capture_status_fails_closed(self):
+        """Unrecognized, malformed, or unknown capture statuses strictly fail closed to insufficient evidence."""
+        from discovery.matrix import normalize_capture_status
+
+        assert normalize_capture_status("CAPTURED") == "CAPTURED"
+        assert normalize_capture_status("captured") == "CAPTURED"
+        assert normalize_capture_status("FAILED") == "FAILED"
+        assert normalize_capture_status("PARTIAL") == "PARTIAL"
+        assert normalize_capture_status("NOT_AVAILABLE") == "NOT_AVAILABLE"
+        assert normalize_capture_status("NOT_SUPPORTED") == "NOT_SUPPORTED"
+        assert normalize_capture_status("UNKNOWN") == "UNKNOWN"
+
+        # Unrecognized / malformed values MUST fail closed to UNKNOWN
+        assert normalize_capture_status("INVALID_CUSTOM_STATUS") == "UNKNOWN"
+        assert normalize_capture_status("FUTURE_STATUS") == "UNKNOWN"
+        assert normalize_capture_status(None) == "UNKNOWN"
+        assert normalize_capture_status(12345) == "UNKNOWN"
+
+        rec_bad = EvidenceRecord(
+            evidence_id="r_bad_st", session_id="s1", input_id="inp_bad", role="reference",
+            evidence_type=EvidenceType.OUTPUT, payload={"raw_output": {"ok": True}},
+            capture_status=EvidenceCaptureStatus.FAILED,
+        )
+        object.__setattr__(rec_bad, "capture_status", "FUTURE_UNSUPPORTED_STATUS")
+
+        bundle = EvidenceBundle(
+            bundle_id="bnd_bad_st", session_id="s1", correlation_id="c1", application_id="app1", input_set_id="is1",
+            manifest=EvidenceManifest(session_id="s1", correlation_id="c1", application_id="app1", input_set_id="is1", input_set_hash="h1", records=[rec_bad]),
+            records=[rec_bad],
+        )
+
+        matrix = observation_matrix_builder.build_matrix(bundle)
+        assert len(matrix.reference_facts) == 1
+        fact = matrix.reference_facts[0]
+        assert fact.capture_status == "UNKNOWN"
+        assert fact.is_valid is False
+
+        # Evaluating a candidate on invalid fact must yield UNKNOWN, not support
+        cand = DiscoveredCandidate(
+            discovery_id="d1", candidate_id="c1", rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.ok == true", normalized_expression="output.ok == true",
+            description="ok is true", variables=["output.ok"], source_fields=["output.ok"],
+        )
+        val = candidate_validator.validate_candidate(cand, [fact], DiscoveryPolicy())
+        assert val.support_count == 0
+        assert val.contradiction_count == 0
+        assert val.unknown_count == 1
+        assert val.validation_status == CandidateValidationStatus.INCONCLUSIVE
+
+    # --------------------------------------------------------------------------
+    # 16. Critical Hardening: Model Defaults Do Not Become Observations
+    # --------------------------------------------------------------------------
+    def test_model_defaults_do_not_generate_false_observations(self):
+        """Missing error and state evidence must have has_error=None and state_mutated=None."""
+        # Fact where output and error evidence are missing entirely
+        fact_missing = ObservationFact(
+            input_id="inp_none",
+            role="reference",
+            input_data={"param": 10},
+            output_data={},
+            output_observed=False,
+            error_observed=False,
+            state_observed=False,
+        )
+        assert fact_missing.has_error is None
+        assert fact_missing.state_mutated is None
+
+        policy = DiscoveryPolicy(minimum_support_count=1)
+
+        # Error generator must NOT generate 'has_error == false' from missing evidence
+        err_gen = ErrorBehaviorCandidateGenerator()
+        err_cands = err_gen.generate_candidates([fact_missing], policy, role_scope="reference")
+        assert len(err_cands) == 0
+
+        # State generator must NOT generate 'state.mutated == false' from missing evidence
+        st_gen = StateCandidateGenerator()
+        st_cands = st_gen.generate_candidates([fact_missing], policy, role_scope="reference")
+        assert len(st_cands) == 0
+
+    # --------------------------------------------------------------------------
+    # 17. Critical Hardening: Structured Diagnostics & Failure Completeness
+    # --------------------------------------------------------------------------
+    def test_discovery_failure_diagnostics_and_completeness(self):
+        """Generator crashes are captured as structured diagnostics with overall_status='PARTIAL' or 'FAILED'."""
+        class FailingGenerator:
+            generator_name = "failing_mock_generator"
+            def generate_candidates(self, facts, policy, role_scope="reference"):
+                raise RuntimeError("Synthetic simulated generator crash")
+
+        engine = RuleDiscoveryEngine()
+        engine.generators.append(FailingGenerator())
+
+        session_id = "sess_diag"
+        app_id = "app_diag"
+        rec = EvidenceRecord(
+            evidence_id="r_diag_1", session_id=session_id, input_id="inp_diag_1", role="reference",
+            evidence_type=EvidenceType.OUTPUT, payload={"raw_output": {"val": 100}}
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_diag", session_id=session_id, correlation_id="c_diag", application_id=app_id, input_set_id="is_diag",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_diag", application_id=app_id, input_set_id="is_diag", input_set_hash="h_diag", records=[rec]),
+            records=[rec],
+        )
+
+        res = engine.discover_rules(bundle, persist=False)
+        assert res.has_failures is True
+        assert res.overall_status in ("PARTIAL", "FAILED")
+        assert any(d.status == "FAILED" and "failing_mock_generator" in d.generator_name for d in res.diagnostics)
+
+    # --------------------------------------------------------------------------
+    # 18. Critical Hardening: Persistence History Isolation
+    # --------------------------------------------------------------------------
+    def test_persistence_history_isolation(self):
+        """Running discovery twice creates separate discovery records and candidate instances without overwriting."""
+        session_id = "sess_p6_hist"
+        app_id = "app_p6_hist"
+        records = [
+            EvidenceRecord(
+                evidence_id="r_hist_1", session_id=session_id, input_id="inp_hist_1", role="reference",
+                evidence_type=EvidenceType.OUTPUT, payload={"raw_output": {"amount": 500, "status": "APPROVED"}}
+            ),
+            EvidenceRecord(
+                evidence_id="r_hist_2", session_id=session_id, input_id="inp_hist_2", role="reference",
+                evidence_type=EvidenceType.OUTPUT, payload={"raw_output": {"amount": 600, "status": "APPROVED"}}
+            ),
+        ]
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p6_hist", session_id=session_id, correlation_id="c_hist", application_id=app_id, input_set_id="is_hist",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_hist", application_id=app_id, input_set_id="is_hist", input_set_hash="h_hist", records=[records[0], records[1]]),
+            records=records,
+        )
+
+        res1 = rule_discovery_engine.discover_rules(bundle=bundle, persist=True)
+        res2 = rule_discovery_engine.discover_rules(bundle=bundle, persist=True)
+
+        assert res1.discovery_id != res2.discovery_id
+        assert res1.result_hash == res2.result_hash
+
+        with sqlite3.connect(discovery_persistence.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM discoveries WHERE discovery_id IN (?, ?)", (res1.discovery_id, res2.discovery_id))
+            assert cursor.fetchone()[0] == 2
+
+            cursor.execute("SELECT COUNT(*) FROM discovered_candidates WHERE discovery_id = ?", (res1.discovery_id,))
+            count_cand_1 = cursor.fetchone()[0]
+            cursor.execute("SELECT COUNT(*) FROM discovered_candidates WHERE discovery_id = ?", (res2.discovery_id,))
+            count_cand_2 = cursor.fetchone()[0]
+
+            assert count_cand_1 > 0
+            assert count_cand_2 > 0
+            assert count_cand_1 == count_cand_2
+
+    # --------------------------------------------------------------------------
+    # 19. Critical Hardening: True Cross-Input Invariant Discovery
+    # --------------------------------------------------------------------------
+    def test_true_cross_input_invariant_discovery(self):
+        """CrossInputCandidateGenerator analyzes behavior across diverse independent inputs."""
+        from discovery.generators.cross_input import CrossInputCandidateGenerator
+
+        facts = [
+            ObservationFact(input_id="inp_1", role="reference", input_data={"score": 10}, output_data={"level": 1, "status": "OK"}, output_observed=True),
+            ObservationFact(input_id="inp_2", role="reference", input_data={"score": 20}, output_data={"level": 2, "status": "OK"}, output_observed=True),
+            ObservationFact(input_id="inp_3", role="reference", input_data={"score": 30}, output_data={"level": 3, "status": "OK"}, output_observed=True),
+        ]
+        policy = DiscoveryPolicy(minimum_support_count=2)
+        gen = CrossInputCandidateGenerator()
+        candidates = gen.generate_candidates(facts, policy, role_scope="reference")
+
+        shape_cands = [c for c in candidates if "keys(output)" in c.canonical_expression]
+        mono_cands = [c for c in candidates if "monotonic_non_decreasing" in c.canonical_expression]
+
+        assert len(shape_cands) >= 1
+        assert len(mono_cands) >= 1
+
+        val = candidate_validator.validate_candidate(shape_cands[0], facts, policy)
+        assert val.support_count == 3
+        assert val.contradiction_count == 0
+        assert val.validation_status == CandidateValidationStatus.VALIDATED
+
+    # --------------------------------------------------------------------------
+    # 20. Critical Hardening: State Entity Delta Transitions & Invariants
+    # --------------------------------------------------------------------------
+    def test_state_table_delta_transitions_and_invariants(self):
+        """StateCandidateGenerator discovers table row count transitions and invariants."""
+        facts = [
+            ObservationFact(
+                input_id="inp_1", role="reference",
+                state_before={"users": {"row_count": 10, "rows": []}},
+                state_after={"users": {"row_count": 11, "rows": []}},
+                state_valid=True, state_observed=True, state_mutated=True,
+            ),
+            ObservationFact(
+                input_id="inp_2", role="reference",
+                state_before={"users": {"row_count": 25, "rows": []}},
+                state_after={"users": {"row_count": 26, "rows": []}},
+                state_valid=True, state_observed=True, state_mutated=True,
+            ),
+        ]
+        policy = DiscoveryPolicy(minimum_support_count=2)
+        gen = StateCandidateGenerator()
+        candidates = gen.generate_candidates(facts, policy, role_scope="reference")
+
+        count_trans = [c for c in candidates if "state_after.users.row_count == state_before.users.row_count + 1" in c.canonical_expression]
+        assert len(count_trans) == 1
+        cand = count_trans[0]
+        assert cand.rule_type == DiscoveredRuleType.STATE_TRANSITION
+
+        # Contradiction handling
+        facts_with_contra = facts + [
+            ObservationFact(
+                input_id="inp_3", role="reference",
+                state_before={"users": {"row_count": 5, "rows": []}},
+                state_after={"users": {"row_count": 10, "rows": []}},  # Delta = +5, not +1!
+                state_valid=True, state_observed=True, state_mutated=True,
+            )
+        ]
+        val = candidate_validator.validate_candidate(cand, facts_with_contra, policy)
+        assert val.support_count == 2
+        assert val.contradiction_count == 1
+        assert val.confidence < 1.0
+
+    # --------------------------------------------------------------------------
+    # 21. Critical Hardening: Generic Output Shift Boundary Discovery
+    # --------------------------------------------------------------------------
+    def test_generic_output_shift_boundary_discovery(self):
+        """BoundaryCandidateGenerator detects generic output category transitions across numeric input distributions."""
+        facts = [
+            ObservationFact(input_id="inp_1", role="reference", input_data={"age": 16}, output_data={"tier": "JUNIOR"}, output_observed=True),
+            ObservationFact(input_id="inp_2", role="reference", input_data={"age": 17}, output_data={"tier": "JUNIOR"}, output_observed=True),
+            ObservationFact(input_id="inp_3", role="reference", input_data={"age": 18}, output_data={"tier": "SENIOR"}, output_observed=True),
+            ObservationFact(input_id="inp_4", role="reference", input_data={"age": 19}, output_data={"tier": "SENIOR"}, output_observed=True),
+        ]
+        policy = DiscoveryPolicy(minimum_support_count=2)
+        gen = BoundaryCandidateGenerator()
+        candidates = gen.generate_candidates(facts, policy, role_scope="reference")
+
+        bound_cands = [c for c in candidates if "transition(input.age >= 18)" in c.canonical_expression]
+        assert len(bound_cands) >= 1
+        cand = bound_cands[0]
+        assert "output.tier == 'SENIOR'" in cand.canonical_expression
+
+        val = candidate_validator.validate_candidate(cand, facts, policy)
+        assert val.support_count == 4
+        assert val.contradiction_count == 0
+        assert val.validation_status == CandidateValidationStatus.VALIDATED

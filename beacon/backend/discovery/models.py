@@ -152,6 +152,20 @@ class DiscoveredCandidate(BaseModel):
             object.__setattr__(self, "fingerprint", self.compute_fingerprint())
 
 
+class DiscoveryDiagnostic(BaseModel):
+    """Structured diagnostic record detailing generator execution status, warnings, or failures."""
+    model_config = ConfigDict(extra="ignore")
+
+    generator_name: str
+    status: str = "SUCCESS"  # "SUCCESS", "PARTIAL", "FAILED", "SKIPPED"
+    severity: str = "INFO"   # "INFO", "WARNING", "ERROR"
+    message: str = ""
+    exception_type: Optional[str] = None
+    candidate_count: int = 0
+    evidence_scope: str = ""
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+
 class ObservationFact(BaseModel):
     """Normalized atomic behavioral observation extracted from Phase 3 evidence for a single input & role."""
     model_config = ConfigDict(extra="ignore")
@@ -166,13 +180,18 @@ class ObservationFact(BaseModel):
     raw_output: Optional[Any] = None
     exit_code: Optional[int] = None
     http_status: Optional[int] = None
-    has_error: bool = False
+    has_error: Optional[bool] = None  # None = not observed / unknown
     error_data: dict[str, Any] = Field(default_factory=dict)
+
+    # Observation Presence Flags (Protects against model default assumptions)
+    output_observed: bool = False
+    error_observed: bool = False
+    state_observed: bool = False
 
     # State Observations (Contract-locked)
     state_before: Optional[dict[str, Any]] = None
     state_after: Optional[dict[str, Any]] = None
-    state_mutated: bool = False
+    state_mutated: Optional[bool] = None
     state_valid: bool = False
 
     # Workflow Events
@@ -206,6 +225,12 @@ class DiscoveryResult(BaseModel):
     policy: DiscoveryPolicy
     policy_hash: str = ""
     candidates: list[DiscoveredCandidate] = Field(default_factory=list)
+
+    # Completeness & Diagnostics
+    overall_status: str = "COMPLETE"  # "COMPLETE", "PARTIAL", "FAILED"
+    diagnostics: list[DiscoveryDiagnostic] = Field(default_factory=list)
+    has_failures: bool = False
+    has_warnings: bool = False
 
     evidence_scope: dict[str, Any] = Field(default_factory=dict)
     observation_count: int = 0
@@ -245,3 +270,7 @@ class DiscoveryResult(BaseModel):
             object.__setattr__(self, "policy_hash", self.policy.compute_policy_hash())
         if not self.result_hash:
             object.__setattr__(self, "result_hash", self.compute_result_hash())
+        if any(d.status == "FAILED" or d.severity == "ERROR" for d in self.diagnostics):
+            object.__setattr__(self, "has_failures", True)
+            if self.overall_status == "COMPLETE":
+                object.__setattr__(self, "overall_status", "PARTIAL")

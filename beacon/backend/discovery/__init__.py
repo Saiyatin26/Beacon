@@ -4,11 +4,12 @@ Exports data models, observation matrix builder, discovery policies, and master 
 """
 
 from .engine import RuleDiscoveryEngine, rule_discovery_engine
-from .matrix import ObservationMatrixBuilder, observation_matrix_builder
+from .matrix import ObservationMatrixBuilder, normalize_capture_status, observation_matrix_builder
 from .models import (
     CandidateValidationStatus,
     DiscoveredCandidate,
     DiscoveredRuleType,
+    DiscoveryDiagnostic,
     DiscoveryMethod,
     DiscoveryPolicy,
     DiscoveryResult,
@@ -26,8 +27,10 @@ __all__ = [
     "rule_discovery_engine",
     "ObservationMatrixBuilder",
     "observation_matrix_builder",
+    "normalize_capture_status",
     "DiscoveredRuleType",
     "CandidateValidationStatus",
+    "DiscoveryDiagnostic",
     "DiscoveryMethod",
     "DiscoveryPolicy",
     "DiscoveredCandidate",

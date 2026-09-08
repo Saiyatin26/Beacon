@@ -20,6 +20,26 @@ from .models import ObservationFact, ObservationMatrix
 logger = logging.getLogger("beacon.discovery.matrix")
 
 
+def normalize_capture_status(status_val: Any) -> str:
+    """Centralized fail-closed capture status normalization.
+
+    Only explicitly recognized valid status strings or enums are accepted.
+    Any unrecognized, malformed, or unexpected value strictly fails closed to 'UNKNOWN'.
+    """
+    if status_val is None:
+        return "UNKNOWN"
+
+    if isinstance(status_val, EvidenceCaptureStatus):
+        return status_val.value
+
+    st_str = str(status_val).strip().upper()
+    if st_str in ("CAPTURED", "PARTIAL", "FAILED", "NOT_AVAILABLE", "NOT_SUPPORTED", "UNKNOWN"):
+        return st_str
+
+    # Fail-closed for any unexpected or unrecognized status string
+    return "UNKNOWN"
+
+
 class ObservationMatrixBuilder:
     """Extracts and normalizes behavioral facts across Reference and Target execution evidence."""
 
@@ -75,10 +95,7 @@ class ObservationMatrixBuilder:
         role_str = "reference" if is_reference else "target"
         recs = item.reference_records if is_reference else item.target_records
 
-        if not recs and not is_reference:
-            # If target records are missing entirely
-            return None
-        if not recs and is_reference:
+        if not recs:
             return None
 
         evidence_ids = [getattr(r, "evidence_id", "") for r in recs if getattr(r, "evidence_id", "")]
@@ -94,8 +111,10 @@ class ObservationMatrixBuilder:
         raw_output = None
         exit_code = None
         http_status = None
+        output_observed = False
 
         if out is not None:
+            output_observed = True
             raw_output = getattr(out, "raw_output", None)
             exit_code = getattr(out, "exit_code", None)
             http_status = getattr(out, "http_status", None)
@@ -105,24 +124,59 @@ class ObservationMatrixBuilder:
             if isinstance(raw_output, dict):
                 output_data.update(raw_output)
 
-        # 3. Error Data
+        # Check raw output records if not typed
+        if not output_observed:
+            for r in recs:
+                if getattr(r, "evidence_type", None) == EvidenceType.OUTPUT and isinstance(r.payload, dict):
+                    output_observed = True
+                    p = r.payload
+                    raw_out = p.get("raw_output")
+                    if raw_out is not None:
+                        raw_output = raw_out
+                        if isinstance(raw_out, dict):
+                            output_data.update(raw_out)
+                    if "exit_code" in p:
+                        exit_code = p.get("exit_code")
+                    if "http_status" in p:
+                        http_status = p.get("http_status")
+                    break
+
+        # 3. Error Data (Model-default protected: only set True or False when explicitly observed)
         err = item.reference_error if is_reference else item.target_error
-        has_error = False
+        has_error: Optional[bool] = None
         error_data: dict[str, Any] = {}
+        error_observed = False
 
         if err is not None:
+            error_observed = True
             has_error = True
             error_data["category"] = getattr(err, "category", "APPLICATION_ERROR")
             error_data["message"] = getattr(err, "message", "")
             error_data["exception_type"] = getattr(err, "exception_type", None)
         elif exit_code is not None and exit_code != 0:
+            error_observed = True
             has_error = True
             error_data["category"] = "PROCESS_ERROR"
             error_data["exit_code"] = exit_code
         elif http_status is not None and http_status >= 400:
+            error_observed = True
             has_error = True
             error_data["category"] = "HTTP_ERROR"
             error_data["http_status"] = http_status
+        elif output_observed:
+            # If output was observed without errors and exit code 0 or http status < 400
+            error_observed = True
+            has_error = False
+        else:
+            # Check raw error records
+            for r in recs:
+                if getattr(r, "evidence_type", None) == EvidenceType.ERROR and isinstance(r.payload, dict):
+                    error_observed = True
+                    has_error = True
+                    error_data["category"] = r.payload.get("category", "APPLICATION_ERROR")
+                    error_data["message"] = r.payload.get("message", "")
+                    error_data["exception_type"] = r.payload.get("exception_type")
+                    break
 
         # 4. Database & Filesystem State (Strict Phase 3 contract)
         db = item.reference_database if is_reference else item.target_database
@@ -130,8 +184,9 @@ class ObservationMatrixBuilder:
 
         state_before: Optional[dict[str, Any]] = None
         state_after: Optional[dict[str, Any]] = None
-        state_mutated = False
+        state_mutated: Optional[bool] = None
         state_valid = False
+        state_observed = (db is not None or fs is not None)
 
         if db is not None:
             b_db = getattr(db, "snapshot_before", None)
@@ -140,14 +195,12 @@ class ObservationMatrixBuilder:
                 state_valid = True
                 state_before = b_db
                 state_after = a_db
-                if b_db != a_db:
-                    state_mutated = True
+                state_mutated = (b_db != a_db)
             elif _is_valid_db_row_counts(getattr(db, "table_row_counts_before", None), getattr(db, "table_row_counts_after", None)):
                 state_valid = True
                 state_before = getattr(db, "table_row_counts_before", {})
                 state_after = getattr(db, "table_row_counts_after", {})
-                if state_before != state_after:
-                    state_mutated = True
+                state_mutated = (state_before != state_after)
 
         if fs is not None and not state_valid:
             b_fs = getattr(fs, "before_state", None)
@@ -156,13 +209,13 @@ class ObservationMatrixBuilder:
                 state_valid = True
                 state_before = b_fs if isinstance(b_fs, dict) else {}
                 state_after = a_fs if isinstance(a_fs, dict) else {}
-                if state_before != state_after:
-                    state_mutated = True
+                state_mutated = (state_before != state_after)
 
         # Check raw database records if not populated by typed model
         if not state_valid:
             for r in recs:
                 if getattr(r, "evidence_type", None) == EvidenceType.DATABASE and isinstance(r.payload, dict):
+                    state_observed = True
                     p = r.payload
                     b_raw = p.get("snapshot_before")
                     a_raw = p.get("snapshot_after")
@@ -170,8 +223,7 @@ class ObservationMatrixBuilder:
                         state_valid = True
                         state_before = b_raw
                         state_after = a_raw
-                        if b_raw != a_raw:
-                            state_mutated = True
+                        state_mutated = (b_raw != a_raw)
                         break
 
         # 5. Workflow Trace Events
@@ -211,12 +263,16 @@ class ObservationMatrixBuilder:
                     adaptation_failure = getattr(af, "reason", "Adaptation failed")
                     break
 
+        # Fail-closed capture status check across all records
         status_val = "CAPTURED"
         for r in recs:
-            st = getattr(r, "capture_status", getattr(r, "status", None))
-            if st and str(st).upper() in ("FAILED", "PARTIAL", "NOT_SUPPORTED", "NOT_AVAILABLE"):
-                status_val = str(st).upper()
+            raw_st = getattr(r, "capture_status", getattr(r, "status", None))
+            norm_st = normalize_capture_status(raw_st)
+            if norm_st != "CAPTURED":
+                status_val = norm_st
                 break
+
+        is_valid = (adaptation_failure is None and status_val == "CAPTURED")
 
         return ObservationFact(
             input_id=item.input_id,
@@ -229,6 +285,9 @@ class ObservationMatrixBuilder:
             http_status=http_status,
             has_error=has_error,
             error_data=error_data,
+            output_observed=output_observed,
+            error_observed=error_observed,
+            state_observed=state_observed,
             state_before=state_before,
             state_after=state_after,
             state_mutated=state_mutated,
@@ -236,7 +295,7 @@ class ObservationMatrixBuilder:
             workflow_events=workflow_events,
             metadata_data=metadata_data,
             capture_status=status_val,
-            is_valid=(adaptation_failure is None and status_val == "CAPTURED"),
+            is_valid=is_valid,
             adaptation_failure=adaptation_failure,
         )
 

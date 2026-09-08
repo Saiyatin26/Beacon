@@ -51,9 +51,16 @@ class DiscoveryPersistenceStore:
                     payload_json TEXT NOT NULL
                 )
             """)
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(discovered_candidates)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            if existing_cols and "candidate_instance_id" not in existing_cols:
+                conn.execute("DROP TABLE IF EXISTS discovered_candidates")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS discovered_candidates (
-                    candidate_id TEXT PRIMARY KEY,
+                    candidate_instance_id TEXT PRIMARY KEY,
+                    candidate_id TEXT NOT NULL,
                     discovery_id TEXT NOT NULL,
                     fingerprint TEXT NOT NULL,
                     rule_type TEXT NOT NULL,
@@ -71,7 +78,7 @@ class DiscoveryPersistenceStore:
             conn.commit()
 
     def save_discovery_result(self, result: DiscoveryResult) -> None:
-        """Persists a complete DiscoveryResult into SQLite."""
+        """Persists a complete DiscoveryResult into SQLite without overwriting candidate history."""
         try:
             with self._get_conn() as conn:
                 policy_json = json.dumps(result.policy.model_dump(), default=str)
@@ -99,15 +106,17 @@ class DiscoveryPersistenceStore:
                     payload_json,
                 ))
 
-                for cand in result.candidates:
+                for idx, cand in enumerate(result.candidates):
+                    instance_id = f"{result.discovery_id}_{cand.candidate_id}_{idx}"
                     cand_payload = json.dumps(cand.model_dump(), default=str)
                     conn.execute("""
                         INSERT OR REPLACE INTO discovered_candidates (
-                            candidate_id, discovery_id, fingerprint, rule_type,
+                            candidate_instance_id, candidate_id, discovery_id, fingerprint, rule_type,
                             canonical_expression, role_scope, support_count, contradiction_count,
                             confidence, validation_status, created_at, payload_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
+                        instance_id,
                         cand.candidate_id,
                         result.discovery_id,
                         cand.fingerprint,

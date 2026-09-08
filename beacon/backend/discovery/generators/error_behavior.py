@@ -33,8 +33,9 @@ class ErrorBehaviorCandidateGenerator(BaseCandidateGenerator):
         if not facts:
             return candidates
 
-        # 1. Universal Success Invariant (No Error)
-        if all(not f.has_error for f in facts) and len(facts) >= policy.minimum_support_count:
+        # 1. Universal Success Invariant (No Error) — requires explicit False observations, not None or missing
+        valid_success_facts = [f for f in facts if f.is_valid and f.has_error is False]
+        if len(valid_success_facts) == len(facts) and len(valid_success_facts) >= policy.minimum_support_count:
             canonical = "has_error == false"
             candidates.append(
                 DiscoveredCandidate(
@@ -54,7 +55,7 @@ class ErrorBehaviorCandidateGenerator(BaseCandidateGenerator):
             )
 
         # 2. Consistent Error Category when error occurs
-        error_facts = [f for f in facts if f.has_error]
+        error_facts = [f for f in facts if f.is_valid and f.has_error is True]
         if len(error_facts) >= policy.minimum_support_count:
             categories = [f.error_data.get("category") for f in error_facts if "category" in f.error_data]
             if categories and all(c == categories[0] for c in categories):

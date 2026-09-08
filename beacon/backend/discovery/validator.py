@@ -174,28 +174,86 @@ class CandidateValidator:
 
         # 8. Error Behavior: has_error == false / true
         if expr == "has_error == false":
+            if fact.has_error is None or not fact.is_valid:
+                return None
             return fact.has_error is False
         elif expr == "has_error == true":
+            if fact.has_error is None or not fact.is_valid:
+                return None
             return fact.has_error is True
 
         m_err_cat = re.match(r"^error\.category\s*==\s*'(.+)'$", expr)
         if m_err_cat:
             cat = m_err_cat.group(1)
-            if not fact.has_error:
+            if fact.has_error is not True:
                 return None
             return fact.error_data.get("category") == cat
 
-        # 9. State Invariant: state.mutated == false / true
+        # 9. State Invariant & Transition Rules
         if expr == "state.mutated == false":
-            if not fact.state_valid:
+            if not fact.state_valid or fact.state_mutated is None:
                 return None
             return fact.state_mutated is False
         elif expr == "state.mutated == true":
-            if not fact.state_valid:
+            if not fact.state_valid or fact.state_mutated is None:
                 return None
             return fact.state_mutated is True
 
-        # 10. Workflow Invariants: workflow.event('A') precedes workflow.event('B')
+        # State Table Row Count Delta / Invariant: state_after.tbl.row_count == state_before.tbl.row_count (+/- delta)
+        m_st_tbl = re.match(r"^state_after\.([a-zA-Z0-9_]+)\.row_count\s*==\s*state_before\.([a-zA-Z0-9_]+)\.row_count(?:\s*([\+\-])\s*([0-9]+))?$", expr)
+        if m_st_tbl:
+            tbl_a, tbl_b = m_st_tbl.group(1), m_st_tbl.group(2)
+            sign, d_str = m_st_tbl.group(3), m_st_tbl.group(4)
+            delta = int(d_str) if d_str else 0
+            if sign == "-":
+                delta = -delta
+
+            if not fact.state_valid or fact.state_before is None or fact.state_after is None:
+                return None
+            ca = self._extract_state_count(fact.state_after.get(tbl_a))
+            cb = self._extract_state_count(fact.state_before.get(tbl_b))
+            if ca is None or cb is None:
+                return None
+            return ca == (cb + delta)
+
+        # State Scalar Field Delta / Invariant: state_after.fld == state_before.fld (+/- delta)
+        m_st_fld = re.match(r"^state_after\.([a-zA-Z0-9_]+)\s*==\s*state_before\.([a-zA-Z0-9_]+)(?:\s*([\+\-])\s*([0-9\.\-]+))?$", expr)
+        if m_st_fld:
+            fa, fb = m_st_fld.group(1), m_st_fld.group(2)
+            sign, d_str = m_st_fld.group(3), m_st_fld.group(4)
+            delta = float(d_str) if d_str else 0.0
+            if sign == "-":
+                delta = -delta
+
+            if not fact.state_valid or fact.state_before is None or fact.state_after is None:
+                return None
+            if fa not in fact.state_after or fb not in fact.state_before:
+                return None
+            va = fact.state_after[fa]
+            vb = fact.state_before[fb]
+            if isinstance(va, (int, float)) and isinstance(vb, (int, float)) and not isinstance(va, bool) and not isinstance(vb, bool):
+                return abs(float(va) - (float(vb) + delta)) < policy.numeric_tolerance
+            return va == vb
+
+        # 10. Cross-Input Invariants
+        if expr.startswith("cross_input_invariant(keys(output)"):
+            if not fact.output_observed or not fact.output_data:
+                return None
+            m_k = re.match(r"^cross_input_invariant\(keys\(output\)\s*==\s*\[(.*)\]\)$", expr)
+            if m_k:
+                raw_ks = [k.strip().strip("'").strip('"') for k in m_k.group(1).split(",") if k.strip()]
+                return sorted(list(fact.output_data.keys())) == sorted(raw_ks)
+            return True
+
+        if expr.startswith("monotonic_non_decreasing("):
+            m_m = re.match(r"^monotonic_non_decreasing\(input\.([a-zA-Z0-9_]+)\s*->\s*output\.([a-zA-Z0-9_]+)\)$", expr)
+            if m_m:
+                ik, ok = m_m.group(1), m_m.group(2)
+                if ik not in fact.input_data or ok not in fact.output_data:
+                    return None
+                return True
+
+        # 11. Workflow Invariants: workflow.event('A') precedes workflow.event('B')
         m_wf_prec = re.match(r"^workflow\.event\('(.+?)'\)\s+precedes\s+workflow\.event\('(.+?)'\)$", expr)
         if m_wf_prec:
             ev_a = m_wf_prec.group(1)
@@ -206,13 +264,16 @@ class CandidateValidator:
                 return None
             return fact.workflow_events.index(ev_a) < fact.workflow_events.index(ev_b)
 
-        # 11. Boundary Transition: transition(input.x >= T) -> has_error == true/false
-        m_trans = re.match(r"^transition\(input\.([a-zA-Z0-9_]+)\s*>=\s*([0-9\.\-]+)\)\s*->\s*has_error\s*==\s*(true|false)$", expr)
-        if m_trans:
-            ik = m_trans.group(1)
-            t_val = float(m_trans.group(2))
-            expected_err = m_trans.group(3) == "true"
+        # 12. Boundary Transitions:
+        # transition(input.x >= T) -> has_error == true/false
+        m_trans_err = re.match(r"^transition\(input\.([a-zA-Z0-9_]+)\s*>=\s*([0-9\.\-]+)\)\s*->\s*has_error\s*==\s*(true|false)$", expr)
+        if m_trans_err:
+            ik = m_trans_err.group(1)
+            t_val = float(m_trans_err.group(2))
+            expected_err = m_trans_err.group(3) == "true"
             if ik not in fact.input_data or not isinstance(fact.input_data[ik], (int, float)) or isinstance(fact.input_data[ik], bool):
+                return None
+            if fact.has_error is None:
                 return None
             iv = float(fact.input_data[ik])
             if iv >= t_val:
@@ -220,7 +281,40 @@ class CandidateValidator:
             else:
                 return fact.has_error != expected_err
 
+        # transition(input.x >= T) -> output.y == val
+        m_trans_out = re.match(r"^transition\(input\.([a-zA-Z0-9_]+)\s*>=\s*([0-9\.\-]+)\)\s*->\s*output\.([a-zA-Z0-9_]+)\s*==\s*(.+)$", expr)
+        if m_trans_out:
+            ik = m_trans_out.group(1)
+            t_val = float(m_trans_out.group(2))
+            ok = m_trans_out.group(3)
+            raw_target = m_trans_out.group(4).strip()
+            target_val = self._parse_literal(raw_target)
+
+            if ik not in fact.input_data or not isinstance(fact.input_data[ik], (int, float)) or isinstance(fact.input_data[ik], bool):
+                return None
+            if ok not in fact.output_data:
+                return None
+            iv = float(fact.input_data[ik])
+            ov = fact.output_data[ok]
+            if iv >= t_val:
+                return ov == target_val
+            else:
+                return ov != target_val
+
         # Generic default: if unable to evaluate deterministically
+        return None
+
+    def _extract_state_count(self, tbl_val: Any) -> Optional[int]:
+        """Extracts integer row count from table representation."""
+        if isinstance(tbl_val, int) and not isinstance(tbl_val, bool):
+            return tbl_val
+        if isinstance(tbl_val, dict):
+            rc = tbl_val.get("row_count")
+            if isinstance(rc, int) and not isinstance(rc, bool):
+                return rc
+            rows = tbl_val.get("rows")
+            if isinstance(rows, list):
+                return len(rows)
         return None
 
     def _parse_literal(self, s: str) -> Any:
