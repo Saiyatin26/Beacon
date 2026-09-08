@@ -3,7 +3,8 @@
 Coordinates the evaluation of user-defined business rules against Phase 3 EvidenceBundles
 and Phase 4 Behavioral Evaluation results, assessing compliance independently for
 Reference and Target implementations with strict three-valued applicability,
-evidence sufficiency preconditions, and cryptographic auditability.
+field-source isolation, comprehensive evidence sufficiency preconditions,
+adaptation safety propagation, and cryptographic auditability.
 """
 
 from datetime import datetime, timezone
@@ -72,7 +73,7 @@ class ControlledAssessmentEngine:
                 r.fingerprint = r.compute_fingerprint()
             validated_rules.append(r)
 
-        # 2. Correlate Phase 3 evidence by input_id
+        # 2. Correlate Phase 3 evidence by input_id with adaptation failure propagation
         correlated_items, issues = evaluation_input_adapter.adapt_bundle(bundle=bundle, verify_integrity=False)
 
         # 3. Map Phase 4 input verdicts if provided
@@ -160,7 +161,7 @@ class ControlledAssessmentEngine:
     ) -> RuleAssessment:
         """Evaluates applicability and expected behavior compliance for a single rule and input.
 
-        Follows strict three-valued logic:
+        Follows strict three-valued logic and field-source isolation:
         - TRUE -> APPLICABLE -> Check Evidence Sufficiency -> Evaluate Behavior
         - FALSE -> NOT_APPLICABLE
         - UNKNOWN -> INCONCLUSIVE
@@ -169,12 +170,12 @@ class ControlledAssessmentEngine:
         ref_eids = [r.evidence_id for r in item.reference_records if hasattr(r, "evidence_id")]
         tgt_eids = [r.evidence_id for r in item.target_records if hasattr(r, "evidence_id")]
 
-        # Build combined input context from records and payloads
-        input_context = self._build_input_context(item)
+        # Build partitioned evaluation context (input, output, state, error, metadata)
+        eval_context = self._build_evaluation_context(item)
 
-        # 1. Evaluate Condition Applicability using three-valued logic
+        # 1. Evaluate Condition Applicability using three-valued logic & field-source isolation
         tri_state, cond_expl, observed_cond_values = rule_condition_evaluator.evaluate_condition(
-            rule.condition, input_context
+            rule.condition, eval_context
         )
 
         # CASE A: Condition evaluates to FALSE -> NOT_APPLICABLE
@@ -217,7 +218,7 @@ class ControlledAssessmentEngine:
                 reference_evidence_ids=ref_eids,
                 target_evidence_ids=tgt_eids,
                 phase4_evaluation_id=phase4_id,
-                explanation=f"Rule condition applicability is UNKNOWN (INCONCLUSIVE due to missing referenced input fields): {cond_expl}",
+                explanation=f"Rule condition applicability is UNKNOWN (INCONCLUSIVE due to missing referenced fields): {cond_expl}",
                 observed_values=observed_cond_values,
             )
 
@@ -298,7 +299,23 @@ class ControlledAssessmentEngine:
     ) -> tuple[bool, str]:
         """Checks if observation evidence for the given role is sufficient to evaluate the expected behavior."""
         recs = item.reference_records if is_reference else item.target_records
+        role_str = "reference" if is_reference else "target"
         b_type = expected.behavior_type
+
+        # 1. Check if there are AdaptationFailures for this role and relevant dimension
+        if hasattr(item, "adaptation_failures") and item.adaptation_failures:
+            for af in item.adaptation_failures:
+                af_role = getattr(af, "role", "")
+                if af_role == role_str:
+                    af_type = str(getattr(af, "evidence_type", "")).lower()
+                    if b_type in (ExpectedBehaviorType.ACCEPT, ExpectedBehaviorType.REJECT, ExpectedBehaviorType.RETURN_VALUE) and af_type in ("output", "http", "error"):
+                        return False, f"Adaptation failure in {af_type}: {getattr(af, 'reason', '')}"
+                    elif b_type in (ExpectedBehaviorType.RETURN_STATUS,) and af_type in ("http", "output"):
+                        return False, f"Adaptation failure in {af_type}: {getattr(af, 'reason', '')}"
+                    elif b_type in (ExpectedBehaviorType.STATE_CHANGE, ExpectedBehaviorType.NO_STATE_CHANGE) and af_type in ("database", "file"):
+                        return False, f"Adaptation failure in {af_type}: {getattr(af, 'reason', '')}"
+                    elif b_type in (ExpectedBehaviorType.WORKFLOW_STEP,) and af_type in ("trace",):
+                        return False, f"Adaptation failure in trace: {getattr(af, 'reason', '')}"
 
         out = item.reference_output if is_reference else item.target_output
         err = item.reference_error if is_reference else item.target_error
@@ -307,10 +324,27 @@ class ControlledAssessmentEngine:
         http_ev = item.reference_http if is_reference else item.target_http
         tr = item.reference_trace if is_reference else item.target_trace
 
-        # 1. ACCEPT behavior requires captured output or HTTP evidence
+        out_status = getattr(item, f"{role_str}_output_status", None)
+        db_status = getattr(item, f"{role_str}_database_status", None)
+        fs_status = getattr(item, f"{role_str}_file_status", None)
+        http_status = getattr(item, f"{role_str}_http_status", None)
+        tr_status = getattr(item, f"{role_str}_trace_status", None)
+        err_status = getattr(item, f"{role_str}_error_status", None)
+
+        # 2. Check Dimension-Specific Statuses & Records
         if b_type == ExpectedBehaviorType.ACCEPT:
+            if out_status and EvidenceSufficiency.is_insufficient(out_status):
+                return False, f"Output evidence capture status '{out_status}' is insufficient"
+            if http_status and EvidenceSufficiency.is_insufficient(http_status):
+                return False, f"HTTP evidence capture status '{http_status}' is insufficient"
+
+            for r in recs:
+                if getattr(r, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.HTTP):
+                    st = getattr(r, "capture_status", getattr(r, "status", None))
+                    if st and EvidenceSufficiency.is_insufficient(st):
+                        return False, f"Output/HTTP record capture status '{st}' is insufficient"
+
             if out is None and http_ev is None:
-                # Check if there is an explicit record of type OUTPUT or HTTP
                 has_out_rec = any(getattr(r, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.HTTP) for r in recs)
                 if not has_out_rec:
                     return False, "Output and HTTP execution evidence are missing; cannot prove ACCEPT"
@@ -319,23 +353,45 @@ class ControlledAssessmentEngine:
                 if EvidenceSufficiency.is_insufficient(st):
                     return False, f"Output evidence capture status '{st}' is insufficient"
 
-        # 2. REJECT behavior requires observable output or error or HTTP record
         elif b_type == ExpectedBehaviorType.REJECT:
+            if out_status and EvidenceSufficiency.is_insufficient(out_status):
+                return False, f"Output evidence capture status '{out_status}' is insufficient"
+            if err_status and EvidenceSufficiency.is_insufficient(err_status):
+                return False, f"Error evidence capture status '{err_status}' is insufficient"
+
+            for r in recs:
+                if getattr(r, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.ERROR, EvidenceType.HTTP):
+                    st = getattr(r, "capture_status", getattr(r, "status", None))
+                    if st and EvidenceSufficiency.is_insufficient(st):
+                        return False, f"Execution record capture status '{st}' is insufficient"
+
             if out is None and err is None and http_ev is None:
                 has_exec_rec = any(getattr(r, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.ERROR, EvidenceType.HTTP) for r in recs)
                 if not has_exec_rec:
                     return False, "Execution evidence (output/error/HTTP) is missing; cannot evaluate REJECT"
 
-        # 3. RETURN_VALUE behavior requires captured output evidence
         elif b_type == ExpectedBehaviorType.RETURN_VALUE:
+            if out_status and EvidenceSufficiency.is_insufficient(out_status):
+                return False, f"Output evidence capture status '{out_status}' is insufficient"
+
+            for r in recs:
+                if getattr(r, "evidence_type", None) == EvidenceType.OUTPUT:
+                    st = getattr(r, "capture_status", getattr(r, "status", None))
+                    if st and EvidenceSufficiency.is_insufficient(st):
+                        return False, f"Output record capture status '{st}' is insufficient"
+
             if out is None:
                 return False, "Output evidence is completely missing; cannot evaluate RETURN_VALUE"
             st = getattr(out, "capture_status", EvidenceCaptureStatus.CAPTURED)
             if EvidenceSufficiency.is_insufficient(st):
                 return False, f"Output evidence capture status '{st}' is insufficient"
 
-        # 4. RETURN_STATUS behavior requires captured HTTP or process output evidence
         elif b_type == ExpectedBehaviorType.RETURN_STATUS:
+            if http_status and EvidenceSufficiency.is_insufficient(http_status):
+                return False, f"HTTP evidence capture status '{http_status}' is insufficient"
+            if out_status and EvidenceSufficiency.is_insufficient(out_status):
+                return False, f"Output evidence capture status '{out_status}' is insufficient"
+
             if http_ev is None and out is None:
                 return False, "HTTP and output evidence are missing; cannot evaluate RETURN_STATUS"
             if http_ev is not None:
@@ -343,8 +399,18 @@ class ControlledAssessmentEngine:
                 if EvidenceSufficiency.is_insufficient(st):
                     return False, f"HTTP evidence capture status '{st}' is insufficient"
 
-        # 5. STATE_CHANGE behavior requires DB, File, or HTTP call state evidence
         elif b_type == ExpectedBehaviorType.STATE_CHANGE:
+            if db_status and EvidenceSufficiency.is_insufficient(db_status):
+                return False, f"Database capture status '{db_status}' is insufficient"
+            if fs_status and EvidenceSufficiency.is_insufficient(fs_status):
+                return False, f"File capture status '{fs_status}' is insufficient"
+
+            for r in recs:
+                if getattr(r, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM):
+                    st = getattr(r, "capture_status", getattr(r, "status", None))
+                    if st and EvidenceSufficiency.is_insufficient(st):
+                        return False, f"State record capture status '{st}' is insufficient"
+
             if db is None and fs is None and http_ev is None:
                 return False, "Database and filesystem state evidence is missing; cannot evaluate STATE_CHANGE"
             if db is not None:
@@ -352,28 +418,47 @@ class ControlledAssessmentEngine:
                 if EvidenceSufficiency.is_insufficient(st):
                     return False, f"Database evidence capture status '{st}' is insufficient"
 
-        # 6. NO_STATE_CHANGE requires complete before/after state evidence
         elif b_type == ExpectedBehaviorType.NO_STATE_CHANGE:
+            if db_status and EvidenceSufficiency.is_insufficient(db_status):
+                return False, f"Database capture status '{db_status}' is insufficient"
+            if fs_status and EvidenceSufficiency.is_insufficient(fs_status):
+                return False, f"File capture status '{fs_status}' is insufficient"
+
+            for r in recs:
+                if getattr(r, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM):
+                    st = getattr(r, "capture_status", getattr(r, "status", None))
+                    if st and EvidenceSufficiency.is_insufficient(st):
+                        return False, f"State record capture status '{st}' is insufficient"
+
             if db is None and fs is None:
                 return False, "State evidence is missing; cannot verify NO_STATE_CHANGE"
             if db is not None:
                 st = getattr(db, "capture_status", EvidenceCaptureStatus.CAPTURED)
                 if EvidenceSufficiency.is_insufficient(st):
                     return False, f"Database evidence capture status '{st}' is insufficient"
-                # If snapshots before/after are completely missing, evidence is insufficient to guarantee no state change
                 if getattr(db, "snapshot_before", None) is None and getattr(db, "snapshot_after", None) is None and not hasattr(db, "delta_detected"):
                     return False, "Database snapshots are missing; insufficient to prove NO_STATE_CHANGE"
 
-        # 7. WORKFLOW_STEP behavior requires trace evidence
         elif b_type == ExpectedBehaviorType.WORKFLOW_STEP:
+            if tr_status and EvidenceSufficiency.is_insufficient(tr_status):
+                return False, f"Trace capture status '{tr_status}' is insufficient"
+
+            for r in recs:
+                if getattr(r, "evidence_type", None) == EvidenceType.TRACE:
+                    st = getattr(r, "capture_status", getattr(r, "status", None))
+                    if st and EvidenceSufficiency.is_insufficient(st):
+                        return False, f"Trace record capture status '{st}' is insufficient"
+
             if tr is None:
                 return False, "Trace evidence is missing; cannot evaluate WORKFLOW_STEP"
             st = getattr(tr, "capture_status", EvidenceCaptureStatus.CAPTURED)
             if EvidenceSufficiency.is_insufficient(st):
                 return False, f"Trace evidence capture status '{st}' is insufficient"
 
-        # 8. ERROR behavior requires error or output evidence
         elif b_type == ExpectedBehaviorType.ERROR:
+            if err_status and EvidenceSufficiency.is_insufficient(err_status):
+                return False, f"Error capture status '{err_status}' is insufficient"
+
             if err is None and out is None and http_ev is None:
                 return False, "Error and output evidence are missing; cannot evaluate ERROR behavior"
 
@@ -439,9 +524,9 @@ class ControlledAssessmentEngine:
             if output_ctx is None:
                 output_ctx = obs_ctx
 
-            actual_val = rule_condition_evaluator.extract_field_value(output_ctx, target_field)
+            actual_val = rule_condition_evaluator.extract_field_value(output_ctx, target_field, field_source="auto")
             if actual_val is _MISSING and output_ctx is not obs_ctx:
-                actual_val = rule_condition_evaluator.extract_field_value(obs_ctx, target_field)
+                actual_val = rule_condition_evaluator.extract_field_value(obs_ctx, target_field, field_source="auto")
 
             observed[target_field] = None if actual_val is _MISSING else actual_val
 
@@ -490,27 +575,110 @@ class ControlledAssessmentEngine:
 
         return RuleComplianceVerdict.ERROR, f"Unsupported expected behavior type '{b_type}'", observed
 
-    def _build_input_context(self, item: Any) -> dict[str, Any]:
-        """Assembles contextual variables (input payload, metadata, provenance) for condition evaluation."""
-        context: dict[str, Any] = {"input_id": item.input_id}
+    def _build_evaluation_context(self, item: Any) -> dict[str, Any]:
+        """Assembles an isolated evaluation context partitioned by field sources: input, output, state, error, metadata."""
+        input_dict: dict[str, Any] = {"input_id": item.input_id}
+        output_dict: dict[str, Any] = {}
+        state_dict: dict[str, Any] = {}
+        error_dict: dict[str, Any] = {}
+        metadata_dict: dict[str, Any] = {"input_id": item.input_id}
 
-        # Extract payload from records
         all_recs = item.reference_records + item.target_records
-        for rec in all_recs:
-            if hasattr(rec, "metadata") and rec.metadata:
-                context.update(rec.metadata)
-            if hasattr(rec, "provenance") and rec.provenance:
-                context.update(rec.provenance)
-            # If payload has input arguments or fields
-            if hasattr(rec, "payload") and isinstance(rec.payload, dict):
-                if "input" in rec.payload and isinstance(rec.payload["input"], dict):
-                    context.update(rec.payload["input"])
-                elif "arguments" in rec.payload and isinstance(rec.payload["arguments"], dict):
-                    context.update(rec.payload["arguments"])
-                else:
-                    context.update(rec.payload)
 
-        return context
+        # 1. Populate metadata
+        for rec in all_recs:
+            if hasattr(rec, "metadata") and isinstance(rec.metadata, dict):
+                metadata_dict.update(rec.metadata)
+            if hasattr(rec, "provenance") and isinstance(rec.provenance, dict):
+                metadata_dict.update(rec.provenance)
+
+        # 2. Populate input dictionary strictly from input sources
+        for rec in all_recs:
+            ev_type = getattr(rec, "evidence_type", None)
+            ev_str = ev_type.value if hasattr(ev_type, "value") else str(ev_type or "")
+            if hasattr(rec, "payload") and isinstance(rec.payload, dict):
+                p = rec.payload
+                if ev_str.upper() == "INPUT":
+                    input_dict.update(p)
+                elif "input" in p and isinstance(p["input"], dict):
+                    input_dict.update(p["input"])
+                elif "arguments" in p and isinstance(p["arguments"], dict):
+                    input_dict.update(p["arguments"])
+                elif "parameters" in p and isinstance(p["parameters"], dict):
+                    input_dict.update(p["parameters"])
+                elif ev_type not in (EvidenceType.OUTPUT, EvidenceType.HTTP, EvidenceType.DATABASE, EvidenceType.FILESYSTEM, EvidenceType.TRACE, EvidenceType.ERROR):
+                    # Generic input payload (e.g. RUNTIME, METADATA, or custom records)
+                    input_dict.update(p)
+
+        # If payload fields were directly attached to input records or item
+        if hasattr(item, "input_data") and isinstance(item.input_data, dict):
+            input_dict.update(item.input_data)
+
+        # 3. Populate output dictionary strictly from output/http sources
+        for out in (item.reference_output, item.target_output):
+            if out is not None:
+                norm = getattr(out, "normalized_output", None)
+                raw = getattr(out, "raw_output", None)
+                p_data = norm if (norm is not None and (norm or raw is None)) else raw
+                if isinstance(p_data, dict):
+                    output_dict.update(p_data)
+                if getattr(out, "http_status", None) is not None:
+                    output_dict["http_status"] = getattr(out, "http_status")
+                if getattr(out, "exit_code", None) is not None:
+                    output_dict["exit_code"] = getattr(out, "exit_code")
+
+        for http_ev in (item.reference_http, item.target_http):
+            if http_ev is not None and getattr(http_ev, "status_code", None) is not None:
+                output_dict["http_status"] = getattr(http_ev, "status_code")
+                output_dict["status_code"] = getattr(http_ev, "status_code")
+
+        for rec in all_recs:
+            if getattr(rec, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.HTTP) and isinstance(rec.payload, dict):
+                p = rec.payload
+                if "raw_output" in p and isinstance(p["raw_output"], dict):
+                    output_dict.update(p["raw_output"])
+                if "normalized_output" in p and isinstance(p["normalized_output"], dict):
+                    output_dict.update(p["normalized_output"])
+                # Also include top-level output fields if present in output record
+                for k, v in p.items():
+                    if k not in ("raw_output", "normalized_output", "input", "metadata"):
+                        output_dict[k] = v
+
+        # 4. Populate state dictionary strictly from database/file sources
+        for db in (item.reference_database, item.target_database):
+            if db is not None:
+                if hasattr(db, "delta_detected"):
+                    state_dict["delta_detected"] = getattr(db, "delta_detected")
+                if hasattr(db, "row_count"):
+                    state_dict["row_count"] = getattr(db, "row_count")
+                if getattr(db, "queries", None):
+                    state_dict["queries"] = getattr(db, "queries")
+
+        for fs in (item.reference_file, item.target_file):
+            if fs is not None and hasattr(fs, "delta_detected"):
+                state_dict["file_delta_detected"] = getattr(fs, "delta_detected")
+
+        for rec in all_recs:
+            if getattr(rec, "evidence_type", None) in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM) and isinstance(rec.payload, dict):
+                state_dict.update(rec.payload)
+
+        # 5. Populate error dictionary strictly from error sources
+        for err in (item.reference_error, item.target_error):
+            if err is not None:
+                err_dump = err.model_dump() if hasattr(err, "model_dump") else (err if isinstance(err, dict) else {})
+                error_dict.update(err_dump)
+
+        for rec in all_recs:
+            if getattr(rec, "evidence_type", None) == EvidenceType.ERROR and isinstance(rec.payload, dict):
+                error_dict.update(rec.payload)
+
+        return {
+            "input": input_dict,
+            "output": output_dict,
+            "state": state_dict,
+            "error": error_dict,
+            "metadata": metadata_dict,
+        }
 
     def _build_observation_context(self, item: Any, is_reference: bool) -> dict[str, Any]:
         """Extracts observation variables (output, error, state, workflow) for a specific role."""

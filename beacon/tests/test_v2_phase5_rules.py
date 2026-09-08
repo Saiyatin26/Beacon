@@ -5,8 +5,13 @@ deterministic fingerprinting, strict three-valued condition evaluation (TRUE, FA
 and versioned registry persistence with error propagation.
 """
 
+from pathlib import Path
+import sys
 from unittest.mock import patch
 import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "backend"))
 
 from rules.evaluator import TriState, rule_condition_evaluator
 from rules.models import (
@@ -385,3 +390,85 @@ class TestPhase5RuleRegistryAndPersistence:
         with patch.object(test_registry, "_persist_rule_to_db", side_effect=Exception("Disk full / connection failed")):
             with pytest.raises(Exception):
                 test_registry.register_rule(rule)
+
+
+class TestPhase5FieldSourceIsolation:
+    """Tests strict source isolation (input, output, state, error, metadata, auto)."""
+
+    def test_field_source_input_only_ignores_output(self):
+        """When field_source='input', evaluator searches ONLY input partition (ignoring output)."""
+        eval_ctx = {
+            "input": {},
+            "output": {"age": 25},
+            "state": {},
+            "error": {},
+            "metadata": {},
+        }
+        pred = RulePredicate(field="age", field_source="input", operator=RuleOperator.GTE, value=18)
+        tri, expl, obs = rule_condition_evaluator.evaluate_condition(pred, eval_ctx)
+
+        assert tri == TriState.UNKNOWN
+        assert "missing" in expl
+
+    def test_field_source_output_positive(self):
+        """When field_source='output', evaluator matches output partition correctly."""
+        eval_ctx = {
+            "input": {},
+            "output": {"result": "APPROVED"},
+            "state": {},
+            "error": {},
+            "metadata": {},
+        }
+        pred = RulePredicate(field="result", field_source="output", operator=RuleOperator.EQ, value="APPROVED")
+        tri, expl, obs = rule_condition_evaluator.evaluate_condition(pred, eval_ctx)
+
+        assert tri == TriState.TRUE
+        assert obs["result"] == "APPROVED"
+
+    def test_field_source_state_error_metadata_isolation(self):
+        """Evaluator strictly isolates state, error, and metadata sources."""
+        eval_ctx = {
+            "input": {"id": "1"},
+            "output": {"status": "OK"},
+            "state": {"row_count": 10},
+            "error": {"code": "ERR_01"},
+            "metadata": {"env": "production"},
+        }
+        pred_state = RulePredicate(field="row_count", field_source="state", operator=RuleOperator.GT, value=0)
+        tri_s, _, _ = rule_condition_evaluator.evaluate_condition(pred_state, eval_ctx)
+        assert tri_s == TriState.TRUE
+
+        # Searching for state field in input yields UNKNOWN
+        pred_state_in_input = RulePredicate(field="row_count", field_source="input", operator=RuleOperator.GT, value=0)
+        tri_si, _, _ = rule_condition_evaluator.evaluate_condition(pred_state_in_input, eval_ctx)
+        assert tri_si == TriState.UNKNOWN
+
+        pred_err = RulePredicate(field="code", field_source="error", operator=RuleOperator.EQ, value="ERR_01")
+        tri_e, _, _ = rule_condition_evaluator.evaluate_condition(pred_err, eval_ctx)
+        assert tri_e == TriState.TRUE
+
+        pred_meta = RulePredicate(field="env", field_source="metadata", operator=RuleOperator.EQ, value="production")
+        tri_m, _, _ = rule_condition_evaluator.evaluate_condition(pred_meta, eval_ctx)
+        assert tri_m == TriState.TRUE
+
+    def test_field_source_auto_precedence_order(self):
+        """Auto source searches in deterministic order: input -> output -> state -> error -> metadata."""
+        eval_ctx = {
+            "input": {"flag": "INPUT_VAL"},
+            "output": {"flag": "OUTPUT_VAL", "out_only": "OUT_OK"},
+            "state": {},
+            "error": {},
+            "metadata": {},
+        }
+        # flag exists in both input and output -> auto resolves to input value
+        pred_flag = RulePredicate(field="flag", field_source="auto", operator=RuleOperator.EQ, value="INPUT_VAL")
+        tri_f, _, obs = rule_condition_evaluator.evaluate_condition(pred_flag, eval_ctx)
+        assert tri_f == TriState.TRUE
+        assert obs["flag"] == "INPUT_VAL"
+
+        # out_only exists only in output -> auto resolves to output value
+        pred_out = RulePredicate(field="out_only", field_source="auto", operator=RuleOperator.EQ, value="OUT_OK")
+        tri_o, _, obs_o = rule_condition_evaluator.evaluate_condition(pred_out, eval_ctx)
+        assert tri_o == TriState.TRUE
+        assert obs_o["out_only"] == "OUT_OK"
+

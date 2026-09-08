@@ -6,10 +6,17 @@ elimination, three-valued applicability, evidence sufficiency preconditions, tra
 and deterministic reproducibility.
 """
 
+from pathlib import Path
+import sys
+from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "backend"))
+
 from api.main import app
+from auth import create_access_token
 from evaluation.engine import behavioral_evaluation_engine
 from evaluation.models import BehaviorDimension, EvaluationVerdict
 from evaluation.policies import DEFAULT_COMPARISON_POLICY
@@ -34,7 +41,7 @@ from rules.models import (
     RulePredicate,
     RuleSeverity,
 )
-from rules.registry import rule_registry
+from rules.registry import RulePersistenceError, rule_registry
 
 
 class TestPhase5ControlledModeAssessment:
@@ -553,3 +560,323 @@ class TestPhase5ControlledModeAssessment:
         assert res1.evaluation_fingerprint != ""
         assert res1.evaluation_fingerprint == res2.evaluation_fingerprint
         assert res1.overall_verdict == res2.overall_verdict
+
+    # 10. MANDATORY FIELD-SOURCE ISOLATION E2E TEST (Section 30 & 54)
+    def test_field_source_input_isolation_e2e(self):
+        """Input is {}, Output is {'age': 25}. Rule with field_source='input' must evaluate to UNKNOWN -> INCONCLUSIVE."""
+        session_id = "sess_p5_fsrc"
+        app_id = "app_p5_fsrc"
+
+        # Output record has raw_output = {'age': 25}, but input record has empty payload
+        rec_r = EvidenceRecord(
+            evidence_id="r_out_fs",
+            session_id=session_id,
+            input_id="inp_fsrc",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"age": 25, "status": "OK", "http_status": 200}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_out_fs",
+            session_id=session_id,
+            input_id="inp_fsrc",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"age": 25, "status": "OK", "http_status": 200}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fs",
+            session_id=session_id,
+            correlation_id="c_p5_fs",
+            application_id=app_id,
+            input_set_id="is_p5_fs",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fs", application_id=app_id, input_set_id="is_p5_fs", input_set_hash="h_fs", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-SRC-INPUT",
+            name="Age From Input Only",
+            condition=RulePredicate(field="age", field_source="input", operator=RuleOperator.GTE, value=18),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.applicability == "UNKNOWN"
+        assert assm.overall_rule_status == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 11. MANDATORY POSITIVE FIELD-SOURCE E2E TEST (Section 31 & 55)
+    def test_field_source_output_positive_e2e(self):
+        """Input is {}, Output is {'result': 'APPROVED'}. Rule with field_source='output' must evaluate to TRUE -> PASS."""
+        session_id = "sess_p5_fout"
+        app_id = "app_p5_fout"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_out_fo",
+            session_id=session_id,
+            input_id="inp_fout",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"result": "APPROVED", "http_status": 200}},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_out_fo",
+            session_id=session_id,
+            input_id="inp_fout",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"result": "APPROVED", "http_status": 200}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fo",
+            session_id=session_id,
+            correlation_id="c_p5_fo",
+            application_id=app_id,
+            input_set_id="is_p5_fo",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fo", application_id=app_id, input_set_id="is_p5_fo", input_set_hash="h_fo", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-SRC-OUTPUT",
+            name="Result From Output",
+            condition=RulePredicate(field="result", field_source="output", operator=RuleOperator.EQ, value="APPROVED"),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.applicability == "APPLICABLE"
+        assert assm.overall_rule_status == RuleComplianceVerdict.PASS
+
+    # 12. MANDATORY ADAPTATION FAILURE PROPAGATION TEST (Section 16 & 52)
+    def test_adaptation_failure_propagation_yields_inconclusive(self):
+        """When an adaptation failure or partial capture status occurs for a required dimension, rule is INCONCLUSIVE."""
+        session_id = "sess_p5_af"
+        app_id = "app_p5_af"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_out_af",
+            session_id=session_id,
+            input_id="inp_af",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK", "http_status": 200}, "input": {"age": 25}},
+        )
+        # Target output record has PARTIAL capture status
+        rec_t = EvidenceRecord(
+            evidence_id="t_out_af",
+            session_id=session_id,
+            input_id="inp_af",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.PARTIAL,
+            payload={"raw_output": {"status": "OK", "http_status": 200}, "input": {"age": 25}},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_af",
+            session_id=session_id,
+            correlation_id="c_p5_af",
+            application_id=app_id,
+            input_set_id="is_p5_af",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_af", application_id=app_id, input_set_id="is_p5_af", input_set_hash="h_af", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-AF-01",
+            name="Age Requirement",
+            condition=RulePredicate(field="age", operator=RuleOperator.GTE, value=18),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.target_compliance == RuleComplianceVerdict.INCONCLUSIVE
+        assert res.summary.inconclusive_rule_count >= 1
+
+    # 13. MANDATORY WORKFLOW_STEP MISSING TRACE TEST (Section 19 & 52)
+    def test_workflow_step_with_missing_trace_evidence_yields_inconclusive(self):
+        """When a rule expects WORKFLOW_STEP='AUDIT_LOG' but trace evidence is missing/partial, result is INCONCLUSIVE."""
+        session_id = "sess_p5_trace"
+        app_id = "app_p5_trace"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_out_tr",
+            session_id=session_id,
+            input_id="inp_tr",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK", "http_status": 200}, "op": "TRANSFER"},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_out_tr",
+            session_id=session_id,
+            input_id="inp_tr",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "OK", "http_status": 200}, "op": "TRANSFER"},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_tr",
+            session_id=session_id,
+            correlation_id="c_p5_tr",
+            application_id=app_id,
+            input_set_id="is_p5_tr",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_tr", application_id=app_id, input_set_id="is_p5_tr", input_set_hash="h_tr", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-WORKFLOW-01",
+            name="Audit Trace Required",
+            condition=RulePredicate(field="op", operator=RuleOperator.EQ, value="TRANSFER"),
+            expected_behavior=ExpectedBehavior(
+                behavior_type=ExpectedBehaviorType.WORKFLOW_STEP,
+                expected_workflow_event="AUDIT_LOG",
+            ),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.overall_rule_status == RuleComplianceVerdict.INCONCLUSIVE
+        assert "Trace evidence is missing" in assm.details["reference_explanation"]
+
+    # 14. REST API ENDPOINTS AND DURABLE AUDIT PERSISTENCE
+    def test_api_controlled_mode_endpoints_and_persistence(self, client):
+        """Tests REST API rule CRUD and Controlled Mode execution with SQLite audit retrieval."""
+        from auth.repository import auth_repository
+        admin_user = auth_repository.get_user_by_username("admin")
+        token = create_access_token(user=admin_user)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 1. Create rule via API
+        rule_payload = {
+            "rule_id": "API-RULE-01",
+            "name": "API Adult Eligibility",
+            "condition": {"field": "age", "operator": "GTE", "value": 18},
+            "expected_behavior": {"behavior_type": "ACCEPT"},
+        }
+        res_create = client.post("/api/v2/rules", json=rule_payload, headers=headers)
+        assert res_create.status_code == 201
+        created = res_create.json()
+        assert created["rule_id"] == "API-RULE-01"
+        assert created["fingerprint"] != ""
+
+        # 2. Get rule
+        res_get = client.get("/api/v2/rules/API-RULE-01", headers=headers)
+        assert res_get.status_code == 200
+        assert res_get.json()["version"] == 1
+
+        # 3. Evaluate controlled mode via API
+        bundle = {
+            "bundle_id": "bnd_api_test",
+            "session_id": "sess_api",
+            "correlation_id": "c_api",
+            "application_id": "app_api",
+            "input_set_id": "is_api",
+            "manifest": {
+                "session_id": "sess_api",
+                "correlation_id": "c_api",
+                "application_id": "app_api",
+                "input_set_id": "is_api",
+                "input_set_hash": "h_api",
+                "records": [
+                    {
+                        "evidence_id": "r1",
+                        "session_id": "sess_api",
+                        "input_id": "inp1",
+                        "role": "reference",
+                        "evidence_type": "OUTPUT",
+                        "capture_status": "CAPTURED",
+                        "payload": {"raw_output": {"status": "OK", "http_status": 200}, "input": {"age": 21}},
+                    },
+                    {
+                        "evidence_id": "t1",
+                        "session_id": "sess_api",
+                        "input_id": "inp1",
+                        "role": "target",
+                        "evidence_type": "OUTPUT",
+                        "capture_status": "CAPTURED",
+                        "payload": {"raw_output": {"status": "OK", "http_status": 200}, "input": {"age": 21}},
+                    },
+                ],
+            },
+            "records": [
+                {
+                    "evidence_id": "r1",
+                    "session_id": "sess_api",
+                    "input_id": "inp1",
+                    "role": "reference",
+                    "evidence_type": "OUTPUT",
+                    "capture_status": "CAPTURED",
+                    "payload": {"raw_output": {"status": "OK", "http_status": 200}, "input": {"age": 21}},
+                },
+                {
+                    "evidence_id": "t1",
+                    "session_id": "sess_api",
+                    "input_id": "inp1",
+                    "role": "target",
+                    "evidence_type": "OUTPUT",
+                    "capture_status": "CAPTURED",
+                    "payload": {"raw_output": {"status": "OK", "http_status": 200}, "input": {"age": 21}},
+                },
+            ],
+        }
+
+        res_eval = client.post(
+            "/api/v2/controlled/evaluate",
+            json={"rule_ids": ["API-RULE-01"], "bundle": bundle},
+            headers=headers,
+        )
+        assert res_eval.status_code == 200
+        eval_data = res_eval.json()
+        assert eval_data["overall_verdict"] == "PASS"
+        eval_id = eval_data["evaluation_id"]
+
+        # 4. Retrieve evaluation from audit persistence
+        res_fetch = client.get(f"/api/v2/controlled/evaluations/{eval_id}", headers=headers)
+        assert res_fetch.status_code == 200
+        fetched_eval = res_fetch.json()
+        assert fetched_eval["evaluation_id"] == eval_id
+        assert fetched_eval["overall_verdict"] == "PASS"
+
+    # 15. REST API PERSISTENCE FAILURE RETURNS EXPLICIT ERROR
+    def test_api_persistence_failure_returns_explicit_error(self, client):
+        """When SQLite persistence fails during evaluation, API returns explicit HTTP 500 error."""
+        from auth.repository import auth_repository
+        admin_user = auth_repository.get_user_by_username("admin")
+        token = create_access_token(user=admin_user)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        # 1. Statically validate rule first
+        res_val = client.post(
+            "/api/v2/rules/validate",
+            json={"rule": {"rule_id": "R-TEST", "name": "Test", "condition": {"field": "x", "operator": "EQ", "value": 1}, "expected_behavior": {"behavior_type": "ACCEPT"}}},
+            headers=headers,
+        )
+        assert res_val.status_code == 200
+        assert res_val.json()["is_valid"] is True
+
+        # 2. Test rule creation failure on SQLite error
+        with patch.object(rule_registry, "register_rule", side_effect=RulePersistenceError("Disk write failed")):
+            res_fail = client.post(
+                "/api/v2/rules",
+                json={"rule_id": "R-FAIL", "name": "Fail Test", "condition": {"field": "x", "operator": "EQ", "value": 1}, "expected_behavior": {"behavior_type": "ACCEPT"}},
+                headers=headers,
+            )
+            assert res_fail.status_code == 500
+            assert "Database persistence failure" in res_fail.json()["detail"]
+

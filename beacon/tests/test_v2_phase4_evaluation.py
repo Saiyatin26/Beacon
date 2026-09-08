@@ -71,7 +71,9 @@ from execution.evidence import (
 
 @pytest.fixture
 def auth_client():
-    token = create_access_token({"sub": "admin", "role": "admin"})
+    from auth.repository import auth_repository
+    admin_user = auth_repository.get_user_by_username("admin")
+    token = create_access_token(user=admin_user)
     return TestClient(app, headers={"Authorization": f"Bearer {token}"})
 
 

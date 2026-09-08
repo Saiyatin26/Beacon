@@ -250,7 +250,11 @@ def evaluate_controlled_endpoint(
             )
             conn.commit()
     except Exception as db_exc:
-        logger.warning(f"Could not persist controlled evaluation '{result.evaluation_id}' to SQLite: {db_exc}")
+        logger.error(f"Could not persist controlled evaluation '{result.evaluation_id}' to SQLite: {db_exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Controlled evaluation database persistence failure: {db_exc}",
+        )
 
     return result
 
