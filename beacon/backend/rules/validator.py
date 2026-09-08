@@ -1,7 +1,7 @@
 """BEACON V2 — Phase 5 Business Rule Validator.
 
 Performs static validation of rule schemas, condition AST syntax, operator semantics,
-type compatibility, and expected behavior definitions.
+type compatibility, and behavior-specific expectation requirements.
 """
 
 from typing import Any, Union
@@ -131,28 +131,52 @@ class RuleValidator:
         return errors
 
     def validate_expected_behavior(self, exp: Any) -> list[str]:
-        """Validates ExpectedBehavior specification."""
+        """Validates ExpectedBehavior specification with behavior-specific requirements."""
         errors: list[str] = []
         if isinstance(exp, ExpectedBehavior):
             b_type = exp.behavior_type
             status_code = exp.expected_status_code
+            target_field = exp.target_field
+            expected_val = exp.expected_value
+            workflow_event = exp.expected_workflow_event
         elif isinstance(exp, dict):
             b_type = exp.get("behavior_type")
             status_code = exp.get("expected_status_code")
+            target_field = exp.get("target_field")
+            expected_val = exp.get("expected_value")
+            workflow_event = exp.get("expected_workflow_event")
         else:
             return ["Expected behavior must be an ExpectedBehavior model or dictionary."]
 
         # Check behavior type enum
+        b_type_enum = None
         if isinstance(b_type, ExpectedBehaviorType):
-            pass
+            b_type_enum = b_type
         elif isinstance(b_type, str):
-            if b_type.upper() not in ExpectedBehaviorType.__members__:
+            if b_type.upper() in ExpectedBehaviorType.__members__:
+                b_type_enum = ExpectedBehaviorType[b_type.upper()]
+            else:
                 errors.append(f"Invalid expected behavior type: '{b_type}'.")
         elif b_type is None:
             errors.append("Expected behavior must specify 'behavior_type'.")
 
         if status_code is not None and not isinstance(status_code, int):
             errors.append(f"Expected status code must be an integer, got {type(status_code).__name__}.")
+
+        # Behavior-specific requirement validation
+        if b_type_enum == ExpectedBehaviorType.RETURN_VALUE:
+            if not target_field or not str(target_field).strip():
+                errors.append("Expected behavior RETURN_VALUE requires a non-empty 'target_field'.")
+            if expected_val is None:
+                errors.append("Expected behavior RETURN_VALUE requires 'expected_value' to be specified.")
+
+        elif b_type_enum == ExpectedBehaviorType.RETURN_STATUS:
+            if status_code is None:
+                errors.append("Expected behavior RETURN_STATUS requires 'expected_status_code' to be specified.")
+
+        elif b_type_enum == ExpectedBehaviorType.WORKFLOW_STEP:
+            if not workflow_event or not str(workflow_event).strip():
+                errors.append("Expected behavior WORKFLOW_STEP requires a non-empty 'expected_workflow_event'.")
 
         return errors
 

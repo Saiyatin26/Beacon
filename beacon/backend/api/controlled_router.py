@@ -1,10 +1,14 @@
 """BEACON V2 — Phase 5 Controlled Mode & Business Rules REST API Router.
 
 Provides endpoints to manage business rules (CRUD, versioning, validation) and execute
-Controlled Mode evaluations combining user-defined rules, Phase 3 evidence, and Phase 4 results.
+Controlled Mode evaluations combining user-defined rules, Phase 3 evidence, and Phase 4 results
+with durable audit persistence.
 """
 
+from datetime import datetime, timezone
+import json
 import logging
+import sqlite3
 from typing import Any, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
@@ -19,15 +23,16 @@ from rules.models import (
     ControlledEvaluationResult,
     RuleStatus,
 )
-from rules.registry import rule_registry
+from rules.registry import RulePersistenceError, rule_registry
 from rules.validator import rule_validator
 
 logger = logging.getLogger("beacon.api.controlled")
 
 controlled_router = APIRouter(prefix="/api/v2", tags=["v2-controlled-business-rules"])
 
-# In-memory cache for controlled evaluation results
+# In-memory cache for controlled evaluation results (complemented by SQLite persistence)
 _controlled_evaluations_cache: dict[str, ControlledEvaluationResult] = {}
+_EVAL_DB_PATH = "beacon.sqlite3"
 
 
 class EvaluateControlledRequest(BaseModel):
@@ -72,7 +77,13 @@ def create_rule_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Rule validation failed: {'; '.join(errors)}",
         )
-    return rule_registry.register_rule(rule)
+    try:
+        return rule_registry.register_rule(rule)
+    except RulePersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database persistence failure: {exc}",
+        )
 
 
 @controlled_router.get("/rules", response_model=list[BusinessRule])
@@ -125,6 +136,11 @@ def update_rule_endpoint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Rule '{rule_id}' not found.",
+        )
+    except RulePersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database persistence failure: {exc}",
         )
     except Exception as exc:
         raise HTTPException(
@@ -210,6 +226,32 @@ def evaluate_controlled_endpoint(
         )
 
     _controlled_evaluations_cache[result.evaluation_id] = result
+
+    # Persist evaluation result to SQLite for durable auditability
+    try:
+        with sqlite3.connect(_EVAL_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO beacon_controlled_evaluations (
+                    evaluation_id, bundle_id, application_id, overall_verdict,
+                    evaluation_fingerprint, evaluation_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.evaluation_id,
+                    result.bundle_id or "",
+                    result.application_id or "",
+                    result.overall_verdict.value,
+                    result.evaluation_fingerprint,
+                    result.model_dump_json(),
+                    result.timestamp.isoformat(),
+                ),
+            )
+            conn.commit()
+    except Exception as db_exc:
+        logger.warning(f"Could not persist controlled evaluation '{result.evaluation_id}' to SQLite: {db_exc}")
+
     return result
 
 
@@ -219,10 +261,27 @@ def get_controlled_evaluation_endpoint(
     current_user: User = Depends(require_project_permission(Permission.AUDIT)),
 ):
     """Retrieves an existing Controlled Mode evaluation result by its ID."""
-    res = _controlled_evaluations_cache.get(evaluation_id)
-    if not res:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Controlled evaluation result '{evaluation_id}' not found.",
-        )
-    return res
+    if evaluation_id in _controlled_evaluations_cache:
+        return _controlled_evaluations_cache[evaluation_id]
+
+    # Try lookup from SQLite
+    try:
+        with sqlite3.connect(_EVAL_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT evaluation_json FROM beacon_controlled_evaluations WHERE evaluation_id = ?",
+                (evaluation_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                res_data = json.loads(row[0])
+                res = ControlledEvaluationResult(**res_data)
+                _controlled_evaluations_cache[evaluation_id] = res
+                return res
+    except Exception as exc:
+        logger.debug(f"SQLite evaluation lookup failed: {exc}")
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Controlled evaluation result '{evaluation_id}' not found.",
+    )

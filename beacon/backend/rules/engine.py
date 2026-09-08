@@ -2,7 +2,8 @@
 
 Coordinates the evaluation of user-defined business rules against Phase 3 EvidenceBundles
 and Phase 4 Behavioral Evaluation results, assessing compliance independently for
-Reference and Target implementations with full cryptographic traceability.
+Reference and Target implementations with strict three-valued applicability,
+evidence sufficiency preconditions, and cryptographic auditability.
 """
 
 from datetime import datetime, timezone
@@ -15,9 +16,14 @@ from typing import Any, Optional, Union
 from evaluation.evidence_status import EvidenceSufficiency
 from evaluation.input_adapter import evaluation_input_adapter
 from evaluation.models import EvaluationResult, EvaluationVerdict
-from execution.evidence_models import EvidenceBundle, EvidenceType
+from execution.evidence_models import (
+    EvidenceBundle,
+    EvidenceCaptureStatus,
+    EvidenceRecord,
+    EvidenceType,
+)
 
-from .evaluator import _MISSING, rule_condition_evaluator
+from .evaluator import _MISSING, TriState, rule_condition_evaluator
 from .models import (
     BusinessRule,
     ControlledEvaluationResult,
@@ -68,7 +74,6 @@ class ControlledAssessmentEngine:
 
         # 2. Correlate Phase 3 evidence by input_id
         correlated_items, issues = evaluation_input_adapter.adapt_bundle(bundle=bundle, verify_integrity=False)
-        items_by_input = {item.input_id: item for item in correlated_items}
 
         # 3. Map Phase 4 input verdicts if provided
         phase4_input_verdicts: dict[str, EvaluationVerdict] = {}
@@ -153,7 +158,13 @@ class ControlledAssessmentEngine:
         phase4_verdict: Optional[EvaluationVerdict],
         phase4_id: Optional[str],
     ) -> RuleAssessment:
-        """Evaluates applicability and expected behavior compliance for a single rule and input."""
+        """Evaluates applicability and expected behavior compliance for a single rule and input.
+
+        Follows strict three-valued logic:
+        - TRUE -> APPLICABLE -> Check Evidence Sufficiency -> Evaluate Behavior
+        - FALSE -> NOT_APPLICABLE
+        - UNKNOWN -> INCONCLUSIVE
+        """
         inp_id = item.input_id
         ref_eids = [r.evidence_id for r in item.reference_records if hasattr(r, "evidence_id")]
         tgt_eids = [r.evidence_id for r in item.target_records if hasattr(r, "evidence_id")]
@@ -161,12 +172,13 @@ class ControlledAssessmentEngine:
         # Build combined input context from records and payloads
         input_context = self._build_input_context(item)
 
-        # 1. Evaluate Condition Applicability
-        is_sat, cond_expl, observed_cond_values = rule_condition_evaluator.evaluate_condition(
+        # 1. Evaluate Condition Applicability using three-valued logic
+        tri_state, cond_expl, observed_cond_values = rule_condition_evaluator.evaluate_condition(
             rule.condition, input_context
         )
 
-        if not is_sat:
+        # CASE A: Condition evaluates to FALSE -> NOT_APPLICABLE
+        if tri_state == TriState.FALSE:
             return RuleAssessment(
                 assessment_id=f"assm_{uuid.uuid4().hex[:12]}",
                 rule_id=rule.rule_id,
@@ -183,27 +195,55 @@ class ControlledAssessmentEngine:
                 reference_evidence_ids=ref_eids,
                 target_evidence_ids=tgt_eids,
                 phase4_evaluation_id=phase4_id,
-                explanation=f"Rule condition not satisfied: {cond_expl}",
+                explanation=f"Rule condition evaluated to FALSE (NOT_APPLICABLE): {cond_expl}",
                 observed_values=observed_cond_values,
             )
 
-        # 2. Rule is APPLICABLE -> Evaluate Expected Behavior on Reference and Target
+        # CASE B: Condition evaluates to UNKNOWN -> INCONCLUSIVE
+        if tri_state == TriState.UNKNOWN:
+            return RuleAssessment(
+                assessment_id=f"assm_{uuid.uuid4().hex[:12]}",
+                rule_id=rule.rule_id,
+                rule_name=rule.name,
+                rule_version=rule.version,
+                rule_fingerprint=rule.fingerprint,
+                input_id=inp_id,
+                applicability="UNKNOWN",
+                condition_satisfied=False,
+                reference_compliance=RuleComplianceVerdict.INCONCLUSIVE,
+                target_compliance=RuleComplianceVerdict.INCONCLUSIVE,
+                overall_rule_status=RuleComplianceVerdict.INCONCLUSIVE,
+                behavioral_equivalence=phase4_verdict,
+                reference_evidence_ids=ref_eids,
+                target_evidence_ids=tgt_eids,
+                phase4_evaluation_id=phase4_id,
+                explanation=f"Rule condition applicability is UNKNOWN (INCONCLUSIVE due to missing referenced input fields): {cond_expl}",
+                observed_values=observed_cond_values,
+            )
+
+        # CASE C: Condition evaluates to TRUE -> APPLICABLE
+        # Check evidence sufficiency BEFORE evaluating behavior compliance
+        ref_sufficient, ref_suff_reason = self._check_evidence_sufficiency(item, is_reference=True, expected=rule.expected_behavior)
+        tgt_sufficient, tgt_suff_reason = self._check_evidence_sufficiency(item, is_reference=False, expected=rule.expected_behavior)
+
         ref_obs = self._build_observation_context(item, is_reference=True)
         tgt_obs = self._build_observation_context(item, is_reference=False)
 
-        ref_compliance, ref_expl, ref_vals = self._evaluate_behavior_compliance(rule.expected_behavior, ref_obs)
-        tgt_compliance, tgt_expl, tgt_vals = self._evaluate_behavior_compliance(rule.expected_behavior, tgt_obs)
+        # Evaluate Reference compliance
+        if not ref_sufficient:
+            ref_compliance = RuleComplianceVerdict.INCONCLUSIVE
+            ref_expl = f"Reference evidence insufficient: {ref_suff_reason}"
+            ref_vals = {}
+        else:
+            ref_compliance, ref_expl, ref_vals = self._evaluate_behavior_compliance(rule.expected_behavior, ref_obs)
 
-        # Check for evidence insufficiency (PARTIAL, CAPTURE_ERROR, etc.)
-        if self._has_insufficient_evidence(item, is_reference=True):
-            if ref_compliance != RuleComplianceVerdict.FAIL:
-                ref_compliance = RuleComplianceVerdict.INCONCLUSIVE
-                ref_expl = f"Reference evidence capture status is insufficient; {ref_expl}"
-
-        if self._has_insufficient_evidence(item, is_reference=False):
-            if tgt_compliance != RuleComplianceVerdict.FAIL:
-                tgt_compliance = RuleComplianceVerdict.INCONCLUSIVE
-                tgt_expl = f"Target evidence capture status is insufficient; {tgt_expl}"
+        # Evaluate Target compliance
+        if not tgt_sufficient:
+            tgt_compliance = RuleComplianceVerdict.INCONCLUSIVE
+            tgt_expl = f"Target evidence insufficient: {tgt_suff_reason}"
+            tgt_vals = {}
+        else:
+            tgt_compliance, tgt_expl, tgt_vals = self._evaluate_behavior_compliance(rule.expected_behavior, tgt_obs)
 
         # Combine overall status for this rule and input
         if ref_compliance == RuleComplianceVerdict.ERROR or tgt_compliance == RuleComplianceVerdict.ERROR:
@@ -248,8 +288,96 @@ class ControlledAssessmentEngine:
             details={
                 "reference_explanation": ref_expl,
                 "target_explanation": tgt_expl,
+                "reference_sufficient": ref_sufficient,
+                "target_sufficient": tgt_sufficient,
             },
         )
+
+    def _check_evidence_sufficiency(
+        self, item: Any, is_reference: bool, expected: ExpectedBehavior
+    ) -> tuple[bool, str]:
+        """Checks if observation evidence for the given role is sufficient to evaluate the expected behavior."""
+        recs = item.reference_records if is_reference else item.target_records
+        b_type = expected.behavior_type
+
+        out = item.reference_output if is_reference else item.target_output
+        err = item.reference_error if is_reference else item.target_error
+        db = item.reference_database if is_reference else item.target_database
+        fs = item.reference_file if is_reference else item.target_file
+        http_ev = item.reference_http if is_reference else item.target_http
+        tr = item.reference_trace if is_reference else item.target_trace
+
+        # 1. ACCEPT behavior requires captured output or HTTP evidence
+        if b_type == ExpectedBehaviorType.ACCEPT:
+            if out is None and http_ev is None:
+                # Check if there is an explicit record of type OUTPUT or HTTP
+                has_out_rec = any(getattr(r, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.HTTP) for r in recs)
+                if not has_out_rec:
+                    return False, "Output and HTTP execution evidence are missing; cannot prove ACCEPT"
+            if out is not None:
+                st = getattr(out, "capture_status", EvidenceCaptureStatus.CAPTURED)
+                if EvidenceSufficiency.is_insufficient(st):
+                    return False, f"Output evidence capture status '{st}' is insufficient"
+
+        # 2. REJECT behavior requires observable output or error or HTTP record
+        elif b_type == ExpectedBehaviorType.REJECT:
+            if out is None and err is None and http_ev is None:
+                has_exec_rec = any(getattr(r, "evidence_type", None) in (EvidenceType.OUTPUT, EvidenceType.ERROR, EvidenceType.HTTP) for r in recs)
+                if not has_exec_rec:
+                    return False, "Execution evidence (output/error/HTTP) is missing; cannot evaluate REJECT"
+
+        # 3. RETURN_VALUE behavior requires captured output evidence
+        elif b_type == ExpectedBehaviorType.RETURN_VALUE:
+            if out is None:
+                return False, "Output evidence is completely missing; cannot evaluate RETURN_VALUE"
+            st = getattr(out, "capture_status", EvidenceCaptureStatus.CAPTURED)
+            if EvidenceSufficiency.is_insufficient(st):
+                return False, f"Output evidence capture status '{st}' is insufficient"
+
+        # 4. RETURN_STATUS behavior requires captured HTTP or process output evidence
+        elif b_type == ExpectedBehaviorType.RETURN_STATUS:
+            if http_ev is None and out is None:
+                return False, "HTTP and output evidence are missing; cannot evaluate RETURN_STATUS"
+            if http_ev is not None:
+                st = getattr(http_ev, "capture_status", EvidenceCaptureStatus.CAPTURED)
+                if EvidenceSufficiency.is_insufficient(st):
+                    return False, f"HTTP evidence capture status '{st}' is insufficient"
+
+        # 5. STATE_CHANGE behavior requires DB, File, or HTTP call state evidence
+        elif b_type == ExpectedBehaviorType.STATE_CHANGE:
+            if db is None and fs is None and http_ev is None:
+                return False, "Database and filesystem state evidence is missing; cannot evaluate STATE_CHANGE"
+            if db is not None:
+                st = getattr(db, "capture_status", EvidenceCaptureStatus.CAPTURED)
+                if EvidenceSufficiency.is_insufficient(st):
+                    return False, f"Database evidence capture status '{st}' is insufficient"
+
+        # 6. NO_STATE_CHANGE requires complete before/after state evidence
+        elif b_type == ExpectedBehaviorType.NO_STATE_CHANGE:
+            if db is None and fs is None:
+                return False, "State evidence is missing; cannot verify NO_STATE_CHANGE"
+            if db is not None:
+                st = getattr(db, "capture_status", EvidenceCaptureStatus.CAPTURED)
+                if EvidenceSufficiency.is_insufficient(st):
+                    return False, f"Database evidence capture status '{st}' is insufficient"
+                # If snapshots before/after are completely missing, evidence is insufficient to guarantee no state change
+                if getattr(db, "snapshot_before", None) is None and getattr(db, "snapshot_after", None) is None and not hasattr(db, "delta_detected"):
+                    return False, "Database snapshots are missing; insufficient to prove NO_STATE_CHANGE"
+
+        # 7. WORKFLOW_STEP behavior requires trace evidence
+        elif b_type == ExpectedBehaviorType.WORKFLOW_STEP:
+            if tr is None:
+                return False, "Trace evidence is missing; cannot evaluate WORKFLOW_STEP"
+            st = getattr(tr, "capture_status", EvidenceCaptureStatus.CAPTURED)
+            if EvidenceSufficiency.is_insufficient(st):
+                return False, f"Trace evidence capture status '{st}' is insufficient"
+
+        # 8. ERROR behavior requires error or output evidence
+        elif b_type == ExpectedBehaviorType.ERROR:
+            if err is None and out is None and http_ev is None:
+                return False, "Error and output evidence are missing; cannot evaluate ERROR behavior"
+
+        return True, "Evidence is sufficient"
 
     def _evaluate_behavior_compliance(
         self, expected: ExpectedBehavior, obs_ctx: dict[str, Any]
@@ -261,7 +389,7 @@ class ControlledAssessmentEngine:
         # 1. ACCEPT: Execution succeeded without error
         if b_type == ExpectedBehaviorType.ACCEPT:
             exit_code = obs_ctx.get("exit_code")
-            http_status = obs_ctx.get("http_status") or obs_ctx.get("status_code")
+            http_status = obs_ctx.get("http_status") if obs_ctx.get("http_status") is not None else obs_ctx.get("status_code")
             has_error = obs_ctx.get("has_error", False)
 
             observed["exit_code"] = exit_code
@@ -275,7 +403,7 @@ class ControlledAssessmentEngine:
         # 2. REJECT: Execution failed / rejected
         elif b_type == ExpectedBehaviorType.REJECT:
             exit_code = obs_ctx.get("exit_code")
-            http_status = obs_ctx.get("http_status") or obs_ctx.get("status_code")
+            http_status = obs_ctx.get("http_status") if obs_ctx.get("http_status") is not None else obs_ctx.get("status_code")
             has_error = obs_ctx.get("has_error", False)
 
             observed["exit_code"] = exit_code
@@ -288,16 +416,16 @@ class ControlledAssessmentEngine:
 
         # 3. ERROR: Specific error attributes produced
         elif b_type == ExpectedBehaviorType.ERROR:
-            err_obj = obs_ctx.get("error") or {}
+            err_obj = obs_ctx.get("error") if isinstance(obs_ctx.get("error"), dict) else {}
             err_code = err_obj.get("error_code") or err_obj.get("code")
-            status_code = obs_ctx.get("http_status") or obs_ctx.get("status_code") or err_obj.get("status_code")
+            status_code = obs_ctx.get("http_status") if obs_ctx.get("http_status") is not None else (obs_ctx.get("status_code") if obs_ctx.get("status_code") is not None else err_obj.get("status_code"))
 
             observed["error_code"] = err_code
             observed["status_code"] = status_code
 
             if expected.expected_error_code and err_code != expected.expected_error_code:
                 return RuleComplianceVerdict.FAIL, f"Expected error_code '{expected.expected_error_code}', got '{err_code}'", observed
-            if expected.expected_status_code and status_code != expected.expected_status_code:
+            if expected.expected_status_code is not None and status_code != expected.expected_status_code:
                 return RuleComplianceVerdict.FAIL, f"Expected status_code {expected.expected_status_code}, got {status_code}", observed
             if not obs_ctx.get("has_error") and (status_code is None or status_code < 400):
                 return RuleComplianceVerdict.FAIL, "Expected ERROR but execution succeeded without error", observed
@@ -307,11 +435,12 @@ class ControlledAssessmentEngine:
         # 4. RETURN_VALUE: Specific output field matches expected value
         elif b_type == ExpectedBehaviorType.RETURN_VALUE:
             target_field = expected.target_field or "value"
-            output_ctx = obs_ctx.get("output") or {}
-            actual_val = rule_condition_evaluator.extract_field_value(output_ctx, target_field)
+            output_ctx = obs_ctx.get("output")
+            if output_ctx is None:
+                output_ctx = obs_ctx
 
-            if actual_val is _MISSING:
-                # Also check root obs_ctx
+            actual_val = rule_condition_evaluator.extract_field_value(output_ctx, target_field)
+            if actual_val is _MISSING and output_ctx is not obs_ctx:
                 actual_val = rule_condition_evaluator.extract_field_value(obs_ctx, target_field)
 
             observed[target_field] = None if actual_val is _MISSING else actual_val
@@ -325,8 +454,11 @@ class ControlledAssessmentEngine:
 
         # 5. RETURN_STATUS: Status code matches
         elif b_type == ExpectedBehaviorType.RETURN_STATUS:
-            status_code = obs_ctx.get("http_status") or obs_ctx.get("status_code") or obs_ctx.get("exit_code")
+            status_code = obs_ctx.get("http_status") if obs_ctx.get("http_status") is not None else (obs_ctx.get("status_code") if obs_ctx.get("status_code") is not None else obs_ctx.get("exit_code"))
             observed["status_code"] = status_code
+
+            if status_code is None:
+                return RuleComplianceVerdict.INCONCLUSIVE, "Status code not present in observation", observed
 
             if expected.expected_status_code is not None and status_code != expected.expected_status_code:
                 return RuleComplianceVerdict.FAIL, f"Expected status {expected.expected_status_code}, got {status_code}", observed
@@ -400,12 +532,22 @@ class ControlledAssessmentEngine:
             if isinstance(payload_data, dict):
                 obs.update(payload_data)
 
-            http_st = getattr(out, "http_status", None) or getattr(out, "status_code", None) or obs.get("http_status") or obs.get("status_code")
-            obs["http_status"] = http_st
-            obs["status_code"] = http_st
-            obs["exit_code"] = getattr(out, "exit_code", None) if getattr(out, "exit_code", None) is not None else obs.get("exit_code")
-            obs["stdout"] = getattr(out, "stdout", None) if getattr(out, "stdout", None) is not None else obs.get("stdout")
-            obs["stderr"] = getattr(out, "stderr", None) if getattr(out, "stderr", None) is not None else obs.get("stderr")
+            http_st = getattr(out, "http_status", None) if getattr(out, "http_status", None) is not None else getattr(out, "status_code", None)
+            if http_st is not None:
+                obs["http_status"] = http_st
+                obs["status_code"] = http_st
+            if getattr(out, "exit_code", None) is not None:
+                obs["exit_code"] = getattr(out, "exit_code")
+            if getattr(out, "stdout", None) is not None:
+                obs["stdout"] = getattr(out, "stdout")
+            if getattr(out, "stderr", None) is not None:
+                obs["stderr"] = getattr(out, "stderr")
+
+        # HTTP evidence extraction
+        if http_ev is not None:
+            if getattr(http_ev, "status_code", None) is not None:
+                obs["http_status"] = getattr(http_ev, "status_code")
+                obs["status_code"] = getattr(http_ev, "status_code")
 
         # Error extraction
         has_error = False
@@ -413,8 +555,9 @@ class ControlledAssessmentEngine:
             has_error = True
             err_dict = err.model_dump() if hasattr(err, "model_dump") else (err if isinstance(err, dict) else {})
             obs["error"] = err_dict
-            obs["status_code"] = err_dict.get("status_code") or obs.get("status_code")
-            obs["http_status"] = obs["status_code"]
+            if err_dict.get("status_code") is not None:
+                obs["status_code"] = err_dict["status_code"]
+                obs["http_status"] = err_dict["status_code"]
 
         if obs.get("exit_code") not in (0, None) or (obs.get("status_code") is not None and obs.get("status_code") >= 400):
             has_error = True
@@ -453,15 +596,6 @@ class ControlledAssessmentEngine:
         obs["workflow_events"] = events
         return obs
 
-    def _has_insufficient_evidence(self, item: Any, is_reference: bool) -> bool:
-        """Checks if any evidence record for this role had an insufficient capture status."""
-        recs = item.reference_records if is_reference else item.target_records
-        for r in recs:
-            st = getattr(r, "capture_status", getattr(r, "status", None))
-            if st and EvidenceSufficiency.is_insufficient(st):
-                return True
-        return False
-
     def _compute_summary(
         self, assessments: list[RuleAssessment], rules: list[BusinessRule]
     ) -> ControlledEvaluationSummary:
@@ -469,6 +603,7 @@ class ControlledAssessmentEngine:
         total_assm = len(assessments)
         app_count = sum(1 for a in assessments if a.applicability == "APPLICABLE")
         na_count = sum(1 for a in assessments if a.applicability == "NOT_APPLICABLE")
+        unknown_app_count = sum(1 for a in assessments if a.applicability == "UNKNOWN")
         passed_count = sum(1 for a in assessments if a.overall_rule_status == RuleComplianceVerdict.PASS)
         failed_count = sum(1 for a in assessments if a.overall_rule_status == RuleComplianceVerdict.FAIL)
         inconcl_count = sum(1 for a in assessments if a.overall_rule_status == RuleComplianceVerdict.INCONCLUSIVE)

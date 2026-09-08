@@ -80,87 +80,84 @@ Both results are preserved in the certification dossier.
 
 ---
 
-## 3. Generic BusinessRule Schema
+## 3. Strict Three-Valued Condition Semantics
 
-Rules are defined as structured AST objects without domain-specific assumptions:
+To eliminate silent false-passes or incorrect applicability calculations, Phase 5 implements explicit **three-valued logic**:
+- **`TRUE`**: The condition is definitely satisfied by the input/context.
+- **`FALSE`**: The condition is definitely not satisfied by the input/context.
+- **`UNKNOWN`**: The condition cannot be evaluated (e.g. referenced input fields are `MISSING`).
 
-```json
-{
-  "rule_id": "R-001",
-  "name": "Minimum Age Requirement",
-  "description": "Requests with customer_age >= 18 must be accepted",
-  "version": 1,
-  "source": "USER_DEFINED",
-  "severity": "CRITICAL",
-  "status": "ACTIVE",
-  "condition": {
-    "field": "customer_age",
-    "operator": "GTE",
-    "value": 18
-  },
-  "expected_behavior": {
-    "type": "ACCEPT"
-  },
-  "referenced_fields": ["customer_age"],
-  "metadata": {}
-}
-```
+### Applicability Mapping
+- $\text{TRUE} \longrightarrow \mathbf{APPLICABLE}$
+- $\text{FALSE} \longrightarrow \mathbf{NOT\_APPLICABLE}$
+- $\text{UNKNOWN} \longrightarrow \mathbf{INCONCLUSIVE}$ (Rule condition applicability is uncertain; never collapsed to `NOT_APPLICABLE` or `PASS`).
 
-### Supported AST Condition Operators
-- **Comparison**: `EQ` (`==`), `NE` (`!=`), `GT` (`>`), `GTE` (`>=`), `LT` (`<`), `LTE` (`<=`)
-- **Membership**: `IN`, `NOT_IN`, `CONTAINS`, `NOT_CONTAINS`
-- **Existence & Nullability**: `IS_NULL`, `IS_NOT_NULL`, `EXISTS`, `NOT_EXISTS`
-- **Logical Composition**: Recursive `AND`, `OR`, `NOT` nodes
+### Three-Valued Truth Tables
+- **`AND`**:
+  - `TRUE AND TRUE = TRUE`
+  - `TRUE AND FALSE = FALSE`
+  - `TRUE AND UNKNOWN = UNKNOWN`
+  - `FALSE AND UNKNOWN = FALSE` (False dominates)
+  - `UNKNOWN AND UNKNOWN = UNKNOWN`
+- **`OR`**:
+  - `TRUE OR FALSE = TRUE` (True dominates)
+  - `TRUE OR UNKNOWN = TRUE`
+  - `FALSE OR FALSE = FALSE`
+  - `FALSE OR UNKNOWN = UNKNOWN`
+  - `UNKNOWN OR UNKNOWN = UNKNOWN`
+- **`NOT`**:
+  - `NOT TRUE = FALSE`
+  - `NOT FALSE = TRUE`
+  - `NOT UNKNOWN = UNKNOWN`
 
-### Expected Behavior Types
-- `ACCEPT`: HTTP 2xx / success return / non-error outcome
-- `REJECT`: HTTP 4xx / rejection status / input rejection
-- `RETURN_STATUS`: Explicit expected status code (e.g. `400`, `403`)
-- `RETURN_VALUE`: Specific field/payload equality
-- `ERROR`: Exception / HTTP 5xx error
-- `STATE_CHANGE`: Valid database/state mutation
-- `NO_STATE_CHANGE`: Absence of database/state mutation
-- `WORKFLOW_STEP`: Specific workflow event transition
+### Exact Value State Preservation
+The condition evaluator strictly distinguishes between:
+1. `MISSING` (absent from dictionary context)
+2. `NULL` (`None`)
+3. `ZERO` (`0`)
+4. `FALSE` (`False`)
+5. `EMPTY STRING` (`""`)
+6. `EMPTY ARRAY` (`[]`)
+7. `ACTUAL VALUE`
 
 ---
 
-## 4. Evaluation Semantics
+## 4. Evidence Sufficiency as a Mandatory Precondition
 
-1. **Applicability Evaluation**:
-   - The condition is evaluated against canonical input fields and initial state.
-   - If the condition evaluates to `False`, the rule is **`NOT_APPLICABLE`** for that input (it does not generate a false `PASS`).
-   - If a referenced field is completely absent from the input payload, the condition evaluates to `UNKNOWN`, yielding an **`ERROR`** or **`INCONCLUSIVE`** assessment depending on policy.
+Before evaluating behavioral compliance for an applicable rule, the engine executes an **evidence sufficiency check**:
+1. **`ACCEPT`**: Requires captured output/HTTP execution evidence proving success.
+2. **`REJECT`**: Requires observable output/error/HTTP execution evidence.
+3. **`RETURN_VALUE`**: Requires captured output evidence containing the requested field.
+4. **`RETURN_STATUS`**: Requires captured HTTP or process exit status evidence.
+5. **`STATE_CHANGE`**: Requires database, filesystem, or HTTP call mutation evidence.
+6. **`NO_STATE_CHANGE`**: Requires complete before/after state snapshots proving no state change occurred.
+7. **`WORKFLOW_STEP`**: Requires captured trace evidence.
+8. **`ERROR`**: Requires captured error/output evidence.
 
-2. **Compliance Evaluation (when Applicable)**:
-   - Evaluated independently for Reference and Target observable outcomes.
-   - **`PASS`**: Observed behavior matches expected behavior.
-   - **`FAIL`**: Observed behavior explicitly contradicts expected behavior.
-   - **`INCONCLUSIVE`**: Evidence required to verify expected behavior is missing, partial, or unverified.
-   - **`ERROR`**: Invalid rule structure, unresolvable field references, or incompatible operand types.
-
-3. **Conservative Aggregation Policy**:
-   - `ERROR` > `FAIL` > `INCONCLUSIVE` > `PASS` > `NOT_APPLICABLE`
-   - If any rule assessment results in `ERROR`, overall status is `ERROR`.
-   - Else if any applicable rule fails, overall status is `FAIL`.
-   - Else if any rule is `INCONCLUSIVE`, overall status is `INCONCLUSIVE`.
-   - Else if all applicable rules pass, overall status is `PASS`.
-   - If no rules applied across the input set, overall status is `NOT_APPLICABLE`.
+If evidence is **`INSUFFICIENT`**, the rule assessment immediately yields **`INCONCLUSIVE`** (preventing false passes).
 
 ---
 
-## 5. LLM Boundary & Security Guarantees
+## 5. Conservative Aggregation Policy
 
-- **No Execution of User Code**: Rule evaluation is strictly executed via deterministic Python AST traversal in `RuleConditionEvaluator`. `eval()`, `exec()`, and `shell=True` are strictly prohibited.
-- **Optional LLM Translation**: If an LLM or natural language interface is used to translate text like *"If age is below 18, reject"* into a rule, the translation is:
-  1. Translated into the validated `BusinessRule` schema.
-  2. Normalized and checked by `RuleValidator`.
-  3. Audited with rule fingerprints.
-  4. **Never** given authority to issue a certification verdict directly.
-- **Offline & Deterministic**: The entire Controlled Mode engine operates offline without requiring external network calls or LLM dependencies.
+$$\mathbf{ERROR} \succ \mathbf{FAIL} \succ \mathbf{INCONCLUSIVE} \succ \mathbf{PASS} \succ \mathbf{NOT\_APPLICABLE}$$
+- If any assessment results in `ERROR`, overall status is `ERROR`.
+- Else if any applicable rule fails, overall status is `FAIL`.
+- Else if any rule is `INCONCLUSIVE`, overall status is `INCONCLUSIVE`.
+- Else if all applicable rules pass, overall status is `PASS`.
+- If no rules applied across the input set, overall status is `NOT_APPLICABLE`.
 
 ---
 
-## 6. Phase Boundary Audit Notice
+## 6. LLM Boundary & Security Guarantees
+
+- **No Execution of User Code**: Rule condition evaluation uses a deterministic AST walker without `eval()`, `exec()`, or `shell=True`.
+- **Optional LLM Translation**: Any natural-language interpreter is strictly an optional translation adapter into the validated `BusinessRule` schema. The LLM is **never** the final certification authority.
+- **Durable Persistence**: Rules and evaluation audits are stored in SQLite (`beacon_business_rules` and `beacon_controlled_evaluations`) ensuring immutable versioning and surviving process restarts.
+
+---
+
+## 7. Phase Boundary Audit Notice
 
 > [!IMPORTANT]
 > **Phase 6+ Feature Deferral Notice**

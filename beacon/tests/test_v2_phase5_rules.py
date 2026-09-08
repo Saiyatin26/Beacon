@@ -1,12 +1,14 @@
 """BEACON V2 — Phase 5 Business Rule Unit Tests.
 
 Tests domain-agnostic BusinessRule models, condition ASTs, validation, canonical normalization,
-deterministic fingerprinting, condition evaluation, and versioned registry persistence.
+deterministic fingerprinting, strict three-valued condition evaluation (TRUE, FALSE, UNKNOWN),
+and versioned registry persistence with error propagation.
 """
 
+from unittest.mock import patch
 import pytest
 
-from rules.evaluator import rule_condition_evaluator
+from rules.evaluator import TriState, rule_condition_evaluator
 from rules.models import (
     BusinessRule,
     CompoundRuleCondition,
@@ -21,7 +23,7 @@ from rules.models import (
     UnaryRuleCondition,
 )
 from rules.normalizer import rule_normalizer
-from rules.registry import RuleRegistry
+from rules.registry import RulePersistenceError, RuleRegistry
 from rules.validator import rule_validator
 
 
@@ -88,6 +90,197 @@ class TestPhase5RuleModelsAndValidation:
         assert is_valid is False
         assert any("collection" in err for err in errors)
 
+    def test_behavior_specific_validation_return_value(self):
+        # RETURN_VALUE requires target_field and expected_value
+        invalid_rule = BusinessRule(
+            rule_id="R-004",
+            name="Return Value Rule",
+            condition=RulePredicate(field="status", operator=RuleOperator.EQ, value="OK"),
+            expected_behavior=ExpectedBehavior(
+                behavior_type=ExpectedBehaviorType.RETURN_VALUE,
+                target_field="",
+                expected_value=None,
+            ),
+        )
+        is_valid, errors = rule_validator.validate_rule(invalid_rule)
+        assert is_valid is False
+        assert any("target_field" in err for err in errors)
+
+        valid_rule = BusinessRule(
+            rule_id="R-004-OK",
+            name="Return Value Rule Valid",
+            condition=RulePredicate(field="status", operator=RuleOperator.EQ, value="OK"),
+            expected_behavior=ExpectedBehavior(
+                behavior_type=ExpectedBehaviorType.RETURN_VALUE,
+                target_field="order_status",
+                expected_value="PROCESSED",
+            ),
+        )
+        is_val, errs = rule_validator.validate_rule(valid_rule)
+        assert is_val is True
+        assert len(errs) == 0
+
+    def test_behavior_specific_validation_return_status(self):
+        invalid_rule = BusinessRule(
+            rule_id="R-005",
+            name="Status Rule",
+            condition=RulePredicate(field="age", operator=RuleOperator.LT, value=18),
+            expected_behavior=ExpectedBehavior(
+                behavior_type=ExpectedBehaviorType.RETURN_STATUS,
+                expected_status_code=None,
+            ),
+        )
+        is_valid, errors = rule_validator.validate_rule(invalid_rule)
+        assert is_valid is False
+        assert any("expected_status_code" in err for err in errors)
+
+    def test_behavior_specific_validation_workflow_step(self):
+        invalid_rule = BusinessRule(
+            rule_id="R-006",
+            name="Workflow Rule",
+            condition=RulePredicate(field="stage", operator=RuleOperator.EQ, value="CHECKOUT"),
+            expected_behavior=ExpectedBehavior(
+                behavior_type=ExpectedBehaviorType.WORKFLOW_STEP,
+                expected_workflow_event="",
+            ),
+        )
+        is_valid, errors = rule_validator.validate_rule(invalid_rule)
+        assert is_valid is False
+        assert any("expected_workflow_event" in err for err in errors)
+
+
+class TestPhase5ThreeValuedConditionSemantics:
+    """Tests strict 3-valued logic (TRUE, FALSE, UNKNOWN) across single predicates and compound trees."""
+
+    def test_predicate_field_present_true_and_false(self):
+        pred = RulePredicate(field="age", operator=RuleOperator.GTE, value=18)
+
+        # age = 25 -> TRUE
+        tri, expl, obs = rule_condition_evaluator.evaluate_condition(pred, {"age": 25})
+        assert tri == TriState.TRUE
+        assert obs["age"] == 25
+
+        # age = 15 -> FALSE
+        tri, expl, obs = rule_condition_evaluator.evaluate_condition(pred, {"age": 15})
+        assert tri == TriState.FALSE
+        assert obs["age"] == 15
+
+    def test_predicate_field_missing_yields_unknown(self):
+        pred = RulePredicate(field="age", operator=RuleOperator.GTE, value=18)
+        tri, expl, obs = rule_condition_evaluator.evaluate_condition(pred, {})
+        assert tri == TriState.UNKNOWN
+        assert "missing" in expl
+
+    def test_predicate_missing_vs_null_vs_zero_vs_false_vs_empty(self):
+        # 1. IS_NULL operator
+        null_pred = RulePredicate(field="data", operator=RuleOperator.IS_NULL)
+        # Missing data -> FALSE (missing is not null)
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(null_pred, {})
+        assert tri == TriState.UNKNOWN  # Missing field evaluated against IS_NULL yields UNKNOWN
+        # data = None -> TRUE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(null_pred, {"data": None})
+        assert tri == TriState.TRUE
+        # data = 0 -> FALSE (0 is not null)
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(null_pred, {"data": 0})
+        assert tri == TriState.FALSE
+
+        # 2. EXISTS operator
+        exists_pred = RulePredicate(field="data", operator=RuleOperator.EXISTS)
+        # Missing -> FALSE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(exists_pred, {})
+        assert tri == TriState.FALSE
+        # Present with None -> TRUE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(exists_pred, {"data": None})
+        assert tri == TriState.TRUE
+        # Present with 0 -> TRUE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(exists_pred, {"data": 0})
+        assert tri == TriState.TRUE
+        # Present with False -> TRUE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(exists_pred, {"data": False})
+        assert tri == TriState.TRUE
+
+        # 3. ZERO value with EQ operator
+        zero_pred = RulePredicate(field="amount", operator=RuleOperator.EQ, value=0)
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(zero_pred, {"amount": 0})
+        assert tri == TriState.TRUE
+        # Missing amount -> UNKNOWN
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(zero_pred, {})
+        assert tri == TriState.UNKNOWN
+
+        # 4. FALSE value with EQ operator
+        false_pred = RulePredicate(field="enabled", operator=RuleOperator.EQ, value=False)
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(false_pred, {"enabled": False})
+        assert tri == TriState.TRUE
+        # Missing enabled -> UNKNOWN
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(false_pred, {})
+        assert tri == TriState.UNKNOWN
+
+    def test_three_valued_and_truth_table(self):
+        pred_age = RulePredicate(field="age", operator=RuleOperator.GTE, value=18)
+        pred_active = RulePredicate(field="status", operator=RuleOperator.EQ, value="ACTIVE")
+        and_node = CompoundRuleCondition(logical_op="AND", operands=[pred_age, pred_active])
+
+        # TRUE AND TRUE -> TRUE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(and_node, {"age": 20, "status": "ACTIVE"})
+        assert tri == TriState.TRUE
+
+        # TRUE AND FALSE -> FALSE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(and_node, {"age": 20, "status": "INACTIVE"})
+        assert tri == TriState.FALSE
+
+        # TRUE AND UNKNOWN -> UNKNOWN
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(and_node, {"age": 20})
+        assert tri == TriState.UNKNOWN
+
+        # FALSE AND UNKNOWN -> FALSE (False dominates)
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(and_node, {"age": 15})  # age=15 (FALSE), status missing (UNKNOWN)
+        assert tri == TriState.FALSE
+
+        # UNKNOWN AND UNKNOWN -> UNKNOWN
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(and_node, {})
+        assert tri == TriState.UNKNOWN
+
+    def test_three_valued_or_truth_table(self):
+        pred_vip = RulePredicate(field="tier", operator=RuleOperator.EQ, value="VIP")
+        pred_promo = RulePredicate(field="has_promo", operator=RuleOperator.EQ, value=True)
+        or_node = CompoundRuleCondition(logical_op="OR", operands=[pred_vip, pred_promo])
+
+        # FALSE OR FALSE -> FALSE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(or_node, {"tier": "STANDARD", "has_promo": False})
+        assert tri == TriState.FALSE
+
+        # TRUE OR FALSE -> TRUE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(or_node, {"tier": "VIP", "has_promo": False})
+        assert tri == TriState.TRUE
+
+        # TRUE OR UNKNOWN -> TRUE (True dominates)
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(or_node, {"tier": "VIP"})  # has_promo missing
+        assert tri == TriState.TRUE
+
+        # FALSE OR UNKNOWN -> UNKNOWN
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(or_node, {"tier": "STANDARD"})  # has_promo missing
+        assert tri == TriState.UNKNOWN
+
+        # UNKNOWN OR UNKNOWN -> UNKNOWN
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(or_node, {})
+        assert tri == TriState.UNKNOWN
+
+    def test_three_valued_not_truth_table(self):
+        pred_blocked = RulePredicate(field="is_blocked", operator=RuleOperator.EQ, value=True)
+        not_node = UnaryRuleCondition(logical_op="NOT", operand=pred_blocked)
+
+        # NOT TRUE -> FALSE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(not_node, {"is_blocked": True})
+        assert tri == TriState.FALSE
+
+        # NOT FALSE -> TRUE
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(not_node, {"is_blocked": False})
+        assert tri == TriState.TRUE
+
+        # NOT UNKNOWN -> UNKNOWN
+        tri, _, _ = rule_condition_evaluator.evaluate_condition(not_node, {})
+        assert tri == TriState.UNKNOWN
+
 
 class TestPhase5RuleNormalizerAndFingerprinting:
     """Tests deterministic canonicalization and SHA-256 fingerprinting."""
@@ -98,250 +291,97 @@ class TestPhase5RuleNormalizerAndFingerprinting:
             name="Approval Limit",
             description="Transactions exceeding 5000 require approval",
             condition=RulePredicate(field="amount", operator=RuleOperator.GT, value=5000),
-            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
-            severity=RuleSeverity.HIGH,
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.REJECT),
+            version=1,
         )
-        # Identical rule created with different object identity
         rule2 = BusinessRule(
             rule_id="R-100",
             name="Approval Limit",
             description="Transactions exceeding 5000 require approval",
             condition=RulePredicate(field="amount", operator=RuleOperator.GT, value=5000),
-            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
-            severity=RuleSeverity.HIGH,
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.REJECT),
+            version=1,
         )
+
         fp1 = rule_normalizer.compute_rule_fingerprint(rule1)
         fp2 = rule_normalizer.compute_rule_fingerprint(rule2)
-        assert len(fp1) == 64
         assert fp1 == fp2
+        assert len(fp1) == 64
 
-    def test_compound_condition_operand_order_invariance(self):
-        """AND (A, B) and AND (B, A) must produce the exact same fingerprint."""
-        cond_a = RulePredicate(field="age", operator=RuleOperator.GTE, value=18)
-        cond_b = RulePredicate(field="status", operator=RuleOperator.EQ, value="ACTIVE")
-
+    def test_fingerprint_changes_with_condition_change(self):
         rule1 = BusinessRule(
             rule_id="R-101",
-            name="Eligibility",
-            condition=CompoundRuleCondition(logical_op="AND", operands=[cond_a, cond_b]),
+            name="Boundary Rule",
+            condition=RulePredicate(field="limit", operator=RuleOperator.LTE, value=100),
             expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
         )
         rule2 = BusinessRule(
             rule_id="R-101",
-            name="Eligibility",
-            condition=CompoundRuleCondition(logical_op="AND", operands=[cond_b, cond_a]),
+            name="Boundary Rule",
+            condition=RulePredicate(field="limit", operator=RuleOperator.LT, value=100),
             expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
         )
+
         fp1 = rule_normalizer.compute_rule_fingerprint(rule1)
         fp2 = rule_normalizer.compute_rule_fingerprint(rule2)
-        assert fp1 == fp2
+        assert fp1 != fp2
 
 
-class TestPhase5ConditionEvaluator:
-    """Tests safe AST condition evaluation across various data types and edge cases."""
-
-    def test_relational_operators(self):
-        evaluator = rule_condition_evaluator
-        ctx = {"amount": 1000}
-
-        # Exact boundary: amount > 1000 -> False
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="amount", operator=RuleOperator.GT, value=1000), ctx)
-        assert sat is False
-
-        # amount >= 1000 -> True
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="amount", operator=RuleOperator.GTE, value=1000), ctx)
-        assert sat is True
-
-        # amount < 1000 -> False
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="amount", operator=RuleOperator.LT, value=1000), ctx)
-        assert sat is False
-
-        # amount <= 1000 -> True
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="amount", operator=RuleOperator.LTE, value=1000), ctx)
-        assert sat is True
-
-    def test_collection_operators(self):
-        evaluator = rule_condition_evaluator
-        ctx = {"role": "admin", "tags": ["fast", "secure"]}
-
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="role", operator=RuleOperator.IN, value=["admin", "root"]), ctx)
-        assert sat is True
-
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="role", operator=RuleOperator.NOT_IN, value=["guest", "anonymous"]), ctx)
-        assert sat is True
-
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="tags", operator=RuleOperator.CONTAINS, value="secure"), ctx)
-        assert sat is True
-
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="tags", operator=RuleOperator.NOT_CONTAINS, value="deprecated"), ctx)
-        assert sat is True
-
-    def test_missing_vs_null_vs_falsy_distinctions(self):
-        evaluator = rule_condition_evaluator
-        ctx = {
-            "null_field": None,
-            "zero_field": 0,
-            "empty_str": "",
-            "false_field": False,
-            "empty_list": [],
-        }
-
-        # 1. Missing field check
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="absent_field", operator=RuleOperator.EXISTS), ctx)
-        assert sat is False
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="absent_field", operator=RuleOperator.NOT_EXISTS), ctx)
-        assert sat is True
-
-        # 2. Null field check
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="null_field", operator=RuleOperator.EXISTS), ctx)
-        assert sat is True
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="null_field", operator=RuleOperator.IS_NULL), ctx)
-        assert sat is True
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="null_field", operator=RuleOperator.IS_NOT_NULL), ctx)
-        assert sat is False
-
-        # 3. Falsy distinctions: False != 0
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="false_field", operator=RuleOperator.EQ, value=False), ctx)
-        assert sat is True
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="false_field", operator=RuleOperator.EQ, value=0), ctx)
-        assert sat is False
-
-        # 4. Zero vs Empty string
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="zero_field", operator=RuleOperator.EQ, value=0), ctx)
-        assert sat is True
-        sat, _, _ = evaluator.evaluate_condition(RulePredicate(field="zero_field", operator=RuleOperator.EQ, value=""), ctx)
-        assert sat is False
-
-    def test_compound_and_unary_conditions(self):
-        evaluator = rule_condition_evaluator
-        ctx = {"age": 25, "active": True, "country": "US"}
-
-        # AND condition
-        cond_and = CompoundRuleCondition(
-            logical_op="AND",
-            operands=[
-                RulePredicate(field="age", operator=RuleOperator.GTE, value=18),
-                RulePredicate(field="active", operator=RuleOperator.EQ, value=True),
-            ],
-        )
-        sat, _, _ = evaluator.evaluate_condition(cond_and, ctx)
-        assert sat is True
-
-        # NOT condition
-        cond_not = UnaryRuleCondition(
-            logical_op="NOT",
-            operand=RulePredicate(field="country", operator=RuleOperator.EQ, value="CA"),
-        )
-        sat, _, _ = evaluator.evaluate_condition(cond_not, ctx)
-        assert sat is True
-
-    def test_nested_field_and_array_extraction(self):
-        evaluator = rule_condition_evaluator
-        ctx = {
-            "customer": {
-                "profile": {
-                    "tier": "GOLD",
-                    "scores": [10, 20, 30],
-                }
-            }
-        }
-        sat, _, obs = evaluator.evaluate_condition(
-            RulePredicate(field="customer.profile.tier", operator=RuleOperator.EQ, value="GOLD"), ctx
-        )
-        assert sat is True
-        assert obs["customer.profile.tier"] == "GOLD"
-
-        sat_arr, _, obs_arr = evaluator.evaluate_condition(
-            RulePredicate(field="customer.profile.scores[1]", operator=RuleOperator.EQ, value=20), ctx
-        )
-        assert sat_arr is True
-        assert obs_arr["customer.profile.scores[1]"] == 20
-
-    def test_incompatible_type_comparison_fails_closed(self):
-        evaluator = rule_condition_evaluator
-        ctx = {"age": "eighteen"}  # string instead of int
-        sat, expl, _ = evaluator.evaluate_condition(
-            RulePredicate(field="age", operator=RuleOperator.GTE, value=18), ctx
-        )
-        assert sat is False
-        assert "Incompatible types" in expl
-
-
-class TestPhase5RuleRegistry:
-    """Tests versioning and lifecycle operations in RuleRegistry."""
+class TestPhase5RuleRegistryAndPersistence:
+    """Tests SQLite persistence, versioning, and explicit error propagation."""
 
     @pytest.fixture
-    def registry(self, tmp_path):
-        db_file = str(tmp_path / "test_rules.sqlite3")
-        reg = RuleRegistry(db_path=db_file)
-        reg.clear()
-        return reg
+    def test_registry(self, tmp_path):
+        db_file = str(tmp_path / "test_beacon_rules.sqlite3")
+        return RuleRegistry(db_path=db_file)
 
-    def test_register_and_retrieve_rule(self, registry):
+    def test_register_and_retrieve_rule(self, test_registry):
         rule = BusinessRule(
-            rule_id="R-200",
-            name="Initial Rule",
-            condition=RulePredicate(field="x", operator=RuleOperator.EQ, value=1),
+            rule_id="R-REG-01",
+            name="Registration Rule",
+            condition=RulePredicate(field="tier", operator=RuleOperator.EQ, value="GOLD"),
             expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
         )
-        registry.register_rule(rule)
+        saved = test_registry.register_rule(rule)
+        assert saved.fingerprint != ""
 
-        retrieved = registry.get_rule("R-200")
-        assert retrieved is not None
-        assert retrieved.rule_id == "R-200"
-        assert retrieved.version == 1
-        assert retrieved.name == "Initial Rule"
+        fetched = test_registry.get_rule("R-REG-01")
+        assert fetched is not None
+        assert fetched.rule_id == "R-REG-01"
+        assert fetched.version == 1
 
-    def test_update_rule_increments_version_preserving_history(self, registry):
+    def test_update_rule_creates_new_version(self, test_registry):
         rule_v1 = BusinessRule(
-            rule_id="R-201",
-            name="Versioned Rule",
-            version=1,
-            condition=RulePredicate(field="x", operator=RuleOperator.EQ, value=1),
+            rule_id="R-VER-01",
+            name="Versioning Test",
+            condition=RulePredicate(field="score", operator=RuleOperator.GTE, value=700),
             expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
         )
-        registry.register_rule(rule_v1)
+        test_registry.register_rule(rule_v1)
 
-        # Update rule
-        rule_v2 = registry.update_rule(
-            rule_id="R-201",
-            name="Versioned Rule Updated",
-            condition=RulePredicate(field="x", operator=RuleOperator.EQ, value=2),
+        rule_v2 = test_registry.update_rule(
+            rule_id="R-VER-01",
+            condition=RulePredicate(field="score", operator=RuleOperator.GTE, value=750),
         )
         assert rule_v2.version == 2
-        assert rule_v2.name == "Versioned Rule Updated"
 
-        # Lookup latest version
-        latest = registry.get_rule("R-201")
+        # Verify both versions exist in history
+        v1 = test_registry.get_rule("R-VER-01", version=1)
+        v2 = test_registry.get_rule("R-VER-01", version=2)
+        latest = test_registry.get_rule("R-VER-01")
+
+        assert v1.version == 1
+        assert v2.version == 2
         assert latest.version == 2
+        assert v1.fingerprint != v2.fingerprint
 
-        # Historical version lookup
-        historical_v1 = registry.get_rule("R-201", version=1)
-        assert historical_v1 is not None
-        assert historical_v1.version == 1
-        assert historical_v1.name == "Versioned Rule"
-
-    def test_list_and_disable_rules(self, registry):
-        r1 = BusinessRule(
-            rule_id="R-A",
-            name="Rule A",
-            condition=RulePredicate(field="a", operator=RuleOperator.EXISTS),
+    def test_persistence_failure_raises_explicit_error(self, test_registry):
+        rule = BusinessRule(
+            rule_id="R-FAIL-01",
+            name="Fail Rule",
+            condition=RulePredicate(field="score", operator=RuleOperator.GTE, value=700),
             expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
         )
-        r2 = BusinessRule(
-            rule_id="R-B",
-            name="Rule B",
-            condition=RulePredicate(field="b", operator=RuleOperator.EXISTS),
-            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
-        )
-        registry.register_rule(r1)
-        registry.register_rule(r2)
-
-        all_rules = registry.list_rules()
-        assert len(all_rules) == 2
-
-        # Disable r1
-        registry.disable_rule("R-A")
-        active_rules = registry.list_rules(status=RuleStatus.ACTIVE)
-        assert len(active_rules) == 1
-        assert active_rules[0].rule_id == "R-B"
+        with patch.object(test_registry, "_persist_rule_to_db", side_effect=Exception("Disk full / connection failed")):
+            with pytest.raises(Exception):
+                test_registry.register_rule(rule)

@@ -1,7 +1,7 @@
 """BEACON V2 — Phase 5 Business Rule Registry & Persistence.
 
 Provides CRUD operations, version history tracking, status management, and SQLite persistence
-for domain-independent BusinessRule objects.
+for domain-independent BusinessRule objects with explicit persistence failure propagation.
 """
 
 from datetime import datetime, timezone
@@ -22,6 +22,11 @@ from .normalizer import rule_normalizer
 from .validator import rule_validator
 
 logger = logging.getLogger("beacon.rules.registry")
+
+
+class RulePersistenceError(RuntimeError):
+    """Raised when writing or updating a rule in persistent storage fails."""
+    pass
 
 
 class RuleRegistry:
@@ -57,12 +62,29 @@ class RuleRegistry:
                     )
                     """
                 )
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS beacon_controlled_evaluations (
+                        evaluation_id TEXT PRIMARY KEY,
+                        bundle_id TEXT,
+                        application_id TEXT,
+                        overall_verdict TEXT NOT NULL,
+                        evaluation_fingerprint TEXT NOT NULL,
+                        evaluation_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
                 conn.commit()
         except Exception as exc:
             logger.warning(f"Could not initialize SQLite table for rules (using in-memory): {exc}")
 
     def register_rule(self, rule: BusinessRule) -> BusinessRule:
-        """Validates, computes fingerprint, and registers a new BusinessRule or initial version."""
+        """Validates, computes fingerprint, and registers a new BusinessRule or initial version.
+
+        Raises:
+            RulePersistenceError if database write fails.
+        """
         is_valid, errors = rule_validator.validate_rule(rule)
         if not is_valid:
             rule.status = RuleStatus.INVALID
@@ -72,12 +94,12 @@ class RuleRegistry:
             rule.fingerprint = rule_normalizer.compute_rule_fingerprint(rule)
 
         with self._lock:
+            # Persist to SQLite first to guarantee durable storage
+            self._persist_rule_to_db(rule)
+
             if rule.rule_id not in self._memory_rules:
                 self._memory_rules[rule.rule_id] = {}
             self._memory_rules[rule.rule_id][rule.version] = rule
-
-            # Persist to SQLite
-            self._persist_rule_to_db(rule)
 
         return rule
 
@@ -223,7 +245,7 @@ class RuleRegistry:
                 return True
             except Exception as exc:
                 logger.error(f"Error deleting rule '{rule_id}': {exc}")
-                return False
+                raise RulePersistenceError(f"Failed to delete rule '{rule_id}': {exc}") from exc
 
     def clear(self) -> None:
         """Clears all rules from memory and SQLite (useful for testing)."""
@@ -233,12 +255,13 @@ class RuleRegistry:
                 with sqlite3.connect(self._db_path) as conn:
                     cursor = conn.cursor()
                     cursor.execute("DELETE FROM beacon_business_rules")
+                    cursor.execute("DELETE FROM beacon_controlled_evaluations")
                     conn.commit()
             except Exception:
                 pass
 
     def _persist_rule_to_db(self, rule: BusinessRule) -> None:
-        """Saves a single BusinessRule record to SQLite."""
+        """Saves a single BusinessRule record to SQLite. Raises RulePersistenceError on DB failure."""
         try:
             rule_json = rule.model_dump_json()
             with sqlite3.connect(self._db_path) as conn:
@@ -267,7 +290,8 @@ class RuleRegistry:
                 )
                 conn.commit()
         except Exception as exc:
-            logger.debug(f"SQLite persist failed for rule '{rule.rule_id}': {exc}")
+            logger.error(f"SQLite persist failed for rule '{rule.rule_id}': {exc}")
+            raise RulePersistenceError(f"Failed to persist rule '{rule.rule_id}' to database: {exc}") from exc
 
 
 rule_registry = RuleRegistry()

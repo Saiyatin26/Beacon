@@ -2,8 +2,11 @@
 
 Provides safe, data-driven AST evaluation of rule conditions and expected behaviors
 against execution observations without using eval() or exec().
+Implements strict three-valued logic (TRUE, FALSE, UNKNOWN) and preserves exact
+distinctions between MISSING, NULL, EMPTY, ZERO, and FALSE.
 """
 
+from enum import Enum
 import math
 from typing import Any, Optional, Union
 from .models import (
@@ -16,22 +19,34 @@ from .models import (
     UnaryRuleCondition,
 )
 
-# Sentinel object to strictly distinguish missing fields from None / False / 0 / ""
+# Sentinel object to strictly distinguish missing fields from None / False / 0 / "" / [] / {}
 _MISSING = object()
 
 
+class TriState(str, Enum):
+    """Explicit three-valued logic outcome for condition evaluation."""
+    TRUE = "TRUE"
+    FALSE = "FALSE"
+    UNKNOWN = "UNKNOWN"
+
+
 class RuleConditionEvaluator:
-    """Evaluates rule condition AST nodes against structured observation contexts."""
+    """Evaluates rule condition AST nodes against structured observation contexts using three-valued logic."""
 
     def extract_field_value(self, context: dict[str, Any], field_path: str) -> Any:
         """Safely extracts a nested field path (e.g. 'user.age' or 'items[0].id') from context.
 
         Returns _MISSING if the field is absent.
+        Preserves None, False, 0, '', [], {} as valid actual values.
         """
         if not field_path or not isinstance(context, dict):
             return _MISSING
 
-        # Support direct dot-notation paths
+        # Support direct key match first if field_path exists directly in context
+        if field_path in context:
+            return context[field_path]
+
+        # Support dot-notation paths
         parts = field_path.split(".")
         current = context
 
@@ -72,11 +87,11 @@ class RuleConditionEvaluator:
 
     def evaluate_condition(
         self, node: RuleConditionNode, context: dict[str, Any]
-    ) -> tuple[bool, str, dict[str, Any]]:
-        """Evaluates condition AST against observation context.
+    ) -> tuple[TriState, str, dict[str, Any]]:
+        """Evaluates condition AST against observation context using deterministic three-valued logic.
 
         Returns:
-            (is_satisfied: bool, explanation: str, observed_values: dict)
+            (outcome: TriState, explanation: str, observed_values: dict)
         """
         observed: dict[str, Any] = {}
 
@@ -96,96 +111,129 @@ class RuleConditionEvaluator:
             actual_val = self.extract_field_value(context, field)
             observed[field] = None if actual_val is _MISSING else actual_val
 
-            sat, expl = self._evaluate_predicate(field, op, target_val, actual_val)
-            return sat, expl, observed
+            tri_state, expl = self._evaluate_predicate(field, op, target_val, actual_val)
+            return tri_state, expl, observed
 
         elif isinstance(node, CompoundRuleCondition) or (isinstance(node, dict) and "operands" in node):
             log_op = getattr(node, "logical_op", None) if isinstance(node, CompoundRuleCondition) else node.get("logical_op")
             operands = getattr(node, "operands", None) if isinstance(node, CompoundRuleCondition) else node.get("operands")
 
             if log_op == "AND":
-                all_sat = True
+                # Three-valued AND:
+                # - If ANY operand is FALSE -> FALSE (False dominates)
+                # - Else if ANY operand is UNKNOWN -> UNKNOWN
+                # - Else ALL operands are TRUE -> TRUE
+                child_outcomes = []
                 explanations = []
                 for idx, child in enumerate(operands):
-                    child_sat, child_expl, child_obs = self.evaluate_condition(child, context)
+                    child_tri, child_expl, child_obs = self.evaluate_condition(child, context)
                     observed.update(child_obs)
-                    explanations.append(child_expl)
-                    if not child_sat:
-                        all_sat = False
-                        break
-                return all_sat, "; AND ".join(explanations), observed
+                    child_outcomes.append(child_tri)
+                    explanations.append(f"[{child_tri.value}] {child_expl}")
+
+                if any(o == TriState.FALSE for o in child_outcomes):
+                    return TriState.FALSE, f"AND failed: {'; '.join(explanations)}", observed
+                elif any(o == TriState.UNKNOWN for o in child_outcomes):
+                    return TriState.UNKNOWN, f"AND unknown: {'; '.join(explanations)}", observed
+                else:
+                    return TriState.TRUE, f"AND satisfied: {'; '.join(explanations)}", observed
 
             elif log_op == "OR":
-                any_sat = False
+                # Three-valued OR:
+                # - If ANY operand is TRUE -> TRUE (True dominates)
+                # - Else if ANY operand is UNKNOWN -> UNKNOWN
+                # - Else ALL operands are FALSE -> FALSE
+                child_outcomes = []
                 explanations = []
                 for idx, child in enumerate(operands):
-                    child_sat, child_expl, child_obs = self.evaluate_condition(child, context)
+                    child_tri, child_expl, child_obs = self.evaluate_condition(child, context)
                     observed.update(child_obs)
-                    explanations.append(child_expl)
-                    if child_sat:
-                        any_sat = True
-                        break
-                return any_sat, "; OR ".join(explanations), observed
+                    child_outcomes.append(child_tri)
+                    explanations.append(f"[{child_tri.value}] {child_expl}")
+
+                if any(o == TriState.TRUE for o in child_outcomes):
+                    return TriState.TRUE, f"OR satisfied: {'; '.join(explanations)}", observed
+                elif any(o == TriState.UNKNOWN for o in child_outcomes):
+                    return TriState.UNKNOWN, f"OR unknown: {'; '.join(explanations)}", observed
+                else:
+                    return TriState.FALSE, f"OR failed: {'; '.join(explanations)}", observed
 
             else:
-                return False, f"Unknown logical operator '{log_op}'", observed
+                return TriState.UNKNOWN, f"Unknown logical operator '{log_op}'", observed
 
         elif isinstance(node, UnaryRuleCondition) or (isinstance(node, dict) and "operand" in node and "operands" not in node):
             operand = getattr(node, "operand", None) if isinstance(node, UnaryRuleCondition) else node.get("operand")
-            child_sat, child_expl, child_obs = self.evaluate_condition(operand, context)
+            child_tri, child_expl, child_obs = self.evaluate_condition(operand, context)
             observed.update(child_obs)
-            return (not child_sat), f"NOT ({child_expl})", observed
+
+            # Three-valued NOT:
+            # - NOT TRUE = FALSE
+            # - NOT FALSE = TRUE
+            # - NOT UNKNOWN = UNKNOWN
+            if child_tri == TriState.TRUE:
+                return TriState.FALSE, f"NOT ({child_expl}) -> FALSE", observed
+            elif child_tri == TriState.FALSE:
+                return TriState.TRUE, f"NOT ({child_expl}) -> TRUE", observed
+            else:
+                return TriState.UNKNOWN, f"NOT ({child_expl}) -> UNKNOWN", observed
 
         else:
-            return False, f"Unsupported condition node type: {type(node)}", observed
+            return TriState.UNKNOWN, f"Unsupported condition node type: {type(node)}", observed
 
     def _evaluate_predicate(
         self, field: str, op: RuleOperator, target_val: Any, actual_val: Any
-    ) -> tuple[bool, str]:
-        """Evaluates an atomic predicate against the extracted actual value."""
+    ) -> tuple[TriState, str]:
+        """Evaluates an atomic predicate against the extracted actual value with 3-valued semantics."""
         # 1. Existence operators
         if op == RuleOperator.EXISTS:
-            is_present = actual_val is not _MISSING
-            return is_present, f"Field '{field}' exists: {is_present}"
+            if actual_val is not _MISSING:
+                return TriState.TRUE, f"Field '{field}' exists in context (value: {actual_val})"
+            return TriState.FALSE, f"Field '{field}' does not exist in context"
 
         if op == RuleOperator.NOT_EXISTS:
-            is_absent = actual_val is _MISSING
-            return is_absent, f"Field '{field}' absent: {is_absent}"
+            if actual_val is _MISSING:
+                return TriState.TRUE, f"Field '{field}' is absent from context"
+            return TriState.FALSE, f"Field '{field}' exists in context (value: {actual_val})"
 
-        # If field is missing for value-based operators, condition cannot be satisfied
+        # If field is missing for non-existence operators, value is UNKNOWN
         if actual_val is _MISSING:
-            return False, f"Field '{field}' is missing from observation context"
+            return TriState.UNKNOWN, f"Field '{field}' is missing from observation context"
 
-        # 2. Nullity operators
+        # 2. Nullity operators (field is present, so we check if its value is None)
         if op == RuleOperator.IS_NULL:
-            is_null = actual_val is None
-            return is_null, f"Field '{field}' is null: {is_null}"
+            if actual_val is None:
+                return TriState.TRUE, f"Field '{field}' is null (None)"
+            return TriState.FALSE, f"Field '{field}' is not null (value: {actual_val})"
 
         if op == RuleOperator.IS_NOT_NULL:
-            is_not_null = actual_val is not None
-            return is_not_null, f"Field '{field}' is not null: {is_not_null}"
+            if actual_val is not None:
+                return TriState.TRUE, f"Field '{field}' is not null (value: {actual_val})"
+            return TriState.FALSE, f"Field '{field}' is null (None)"
 
-        # If actual_val is None but operator requires a value
+        # If actual_val is explicitly None and operator requires a non-null comparison
         if actual_val is None and target_val is not None:
             if op == RuleOperator.NE:
-                return True, f"Field '{field}' (null) != {target_val}"
-            return False, f"Field '{field}' is null, cannot satisfy {op.value} {target_val}"
+                return TriState.TRUE, f"Field '{field}' (null) != {target_val}"
+            elif op == RuleOperator.EQ:
+                return TriState.FALSE, f"Field '{field}' (null) == {target_val}: False"
+            else:
+                return TriState.UNKNOWN, f"Field '{field}' is null, cannot compare {op.value} with {target_val}"
 
         # 3. Equality / Inequality
         if op == RuleOperator.EQ:
-            # Handle strict boolean vs int (in Python True == 1, but in rules we check types strictly)
+            # Handle strict boolean vs integer equality (in Python True == 1, but in rules boolean and integer are distinct)
             if isinstance(actual_val, bool) or isinstance(target_val, bool):
                 is_eq = (type(actual_val) is type(target_val)) and (actual_val == target_val)
             else:
                 is_eq = (actual_val == target_val)
-            return is_eq, f"Field '{field}' ({actual_val}) == {target_val}: {is_eq}"
+            return (TriState.TRUE if is_eq else TriState.FALSE), f"Field '{field}' ({actual_val}) == {target_val}: {is_eq}"
 
         if op == RuleOperator.NE:
             if isinstance(actual_val, bool) or isinstance(target_val, bool):
                 is_ne = (type(actual_val) is not type(target_val)) or (actual_val != target_val)
             else:
                 is_ne = (actual_val != target_val)
-            return is_ne, f"Field '{field}' ({actual_val}) != {target_val}: {is_ne}"
+            return (TriState.TRUE if is_ne else TriState.FALSE), f"Field '{field}' ({actual_val}) != {target_val}: {is_ne}"
 
         # 4. Relational comparisons (GT, GTE, LT, LTE)
         if op in (RuleOperator.GT, RuleOperator.GTE, RuleOperator.LT, RuleOperator.LTE):
@@ -200,7 +248,7 @@ class RuleConditionEvaluator:
                     sat = a_num < t_num
                 else:
                     sat = a_num <= t_num
-                return sat, f"Field '{field}' ({actual_val}) {op.value} {target_val}: {sat}"
+                return (TriState.TRUE if sat else TriState.FALSE), f"Field '{field}' ({actual_val}) {op.value} {target_val}: {sat}"
             elif isinstance(actual_val, str) and isinstance(target_val, str):
                 if op == RuleOperator.GT:
                     sat = actual_val > target_val
@@ -210,36 +258,36 @@ class RuleConditionEvaluator:
                     sat = actual_val < target_val
                 else:
                     sat = actual_val <= target_val
-                return sat, f"Field '{field}' ('{actual_val}') {op.value} '{target_val}': {sat}"
+                return (TriState.TRUE if sat else TriState.FALSE), f"Field '{field}' ('{actual_val}') {op.value} '{target_val}': {sat}"
             else:
-                return False, f"Incompatible types for {op.value} on field '{field}': {type(actual_val).__name__} vs {type(target_val).__name__}"
+                return TriState.UNKNOWN, f"Incompatible types for {op.value} on field '{field}': {type(actual_val).__name__} vs {type(target_val).__name__}"
 
         # 5. Collection operators (IN, NOT_IN, CONTAINS, NOT_CONTAINS)
         if op == RuleOperator.IN:
             if isinstance(target_val, (list, tuple, set)):
                 sat = actual_val in target_val
-                return sat, f"Field '{field}' ({actual_val}) IN {target_val}: {sat}"
-            return False, f"Target value for IN operator on '{field}' must be a collection"
+                return (TriState.TRUE if sat else TriState.FALSE), f"Field '{field}' ({actual_val}) IN {target_val}: {sat}"
+            return TriState.UNKNOWN, f"Target value for IN operator on '{field}' must be a collection"
 
         if op == RuleOperator.NOT_IN:
             if isinstance(target_val, (list, tuple, set)):
                 sat = actual_val not in target_val
-                return sat, f"Field '{field}' ({actual_val}) NOT IN {target_val}: {sat}"
-            return False, f"Target value for NOT_IN operator on '{field}' must be a collection"
+                return (TriState.TRUE if sat else TriState.FALSE), f"Field '{field}' ({actual_val}) NOT IN {target_val}: {sat}"
+            return TriState.UNKNOWN, f"Target value for NOT_IN operator on '{field}' must be a collection"
 
         if op == RuleOperator.CONTAINS:
             if isinstance(actual_val, (list, tuple, set, str)):
                 sat = target_val in actual_val
-                return sat, f"Field '{field}' ({actual_val}) CONTAINS {target_val}: {sat}"
-            return False, f"Field '{field}' ({type(actual_val).__name__}) is not a collection or string"
+                return (TriState.TRUE if sat else TriState.FALSE), f"Field '{field}' ({actual_val}) CONTAINS {target_val}: {sat}"
+            return TriState.UNKNOWN, f"Field '{field}' ({type(actual_val).__name__}) is not a collection or string"
 
         if op == RuleOperator.NOT_CONTAINS:
             if isinstance(actual_val, (list, tuple, set, str)):
                 sat = target_val not in actual_val
-                return sat, f"Field '{field}' ({actual_val}) NOT CONTAINS {target_val}: {sat}"
-            return False, f"Field '{field}' ({type(actual_val).__name__}) is not a collection or string"
+                return (TriState.TRUE if sat else TriState.FALSE), f"Field '{field}' ({actual_val}) NOT CONTAINS {target_val}: {sat}"
+            return TriState.UNKNOWN, f"Field '{field}' ({type(actual_val).__name__}) is not a collection or string"
 
-        return False, f"Unsupported operator '{op}'"
+        return TriState.UNKNOWN, f"Unsupported operator '{op}'"
 
 
 rule_condition_evaluator = RuleConditionEvaluator()
