@@ -218,6 +218,10 @@ app.include_router(evaluation_router)
 from api.controlled_router import controlled_router
 app.include_router(controlled_router)
 
+# Phase 6 (V2) Behavioral Rule & Invariant Discovery Routes
+from api.discovery_router import discovery_router
+app.include_router(discovery_router)
+
 
 
 
