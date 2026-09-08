@@ -1836,3 +1836,392 @@ class TestPhase5ControlledModeAssessment:
         assert assm.reference_compliance == RuleComplianceVerdict.PASS
         assert assm.target_compliance == RuleComplianceVerdict.PASS
 
+    # 35. FALSE PASS: ROW_COUNT=0 WITHOUT SNAPSHOTS YIELDS INCONCLUSIVE (Section 9, 28, 44)
+    def test_false_pass_row_count_zero_without_snapshots_yields_inconclusive(self):
+        """Database evidence with row_count=0 but missing before/after snapshots yields INCONCLUSIVE for NO_STATE_CHANGE."""
+        session_id = "sess_p5_rc0"
+        app_id = "app_p5_rc0"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_rc0",
+            session_id=session_id,
+            input_id="inp_rc0",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"row_count": 0},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_rc0",
+            session_id=session_id,
+            input_id="inp_rc0",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"row_count": 0},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc0",
+            session_id=session_id,
+            correlation_id="c_p5_rc0",
+            application_id=app_id,
+            input_set_id="is_p5_rc0",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rc0", application_id=app_id, input_set_id="is_p5_rc0", input_set_hash="h_rc0", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-RC0-NO-CHANGE",
+            name="No State Change Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+        assm = res.rule_assessments[0]
+        assert assm.overall_rule_status == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 36. FALSE PASS: ROW_COUNT=10 WITHOUT SNAPSHOTS YIELDS INCONCLUSIVE (Section 9, 28)
+    def test_false_pass_row_count_ten_without_snapshots_yields_inconclusive(self):
+        """Database evidence with row_count=10 but missing before/after snapshots yields INCONCLUSIVE for NO_STATE_CHANGE."""
+        session_id = "sess_p5_rc10"
+        app_id = "app_p5_rc10"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_rc10",
+            session_id=session_id,
+            input_id="inp_rc10",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"row_count": 10},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_rc10",
+            session_id=session_id,
+            input_id="inp_rc10",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"row_count": 10},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc10",
+            session_id=session_id,
+            correlation_id="c_p5_rc10",
+            application_id=app_id,
+            input_set_id="is_p5_rc10",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rc10", application_id=app_id, input_set_id="is_p5_rc10", input_set_hash="h_rc10", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-RC10-NO-CHANGE",
+            name="No State Change Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 37. FALSE PASS: SELECT QUERY ONLY YIELDS INCONCLUSIVE FOR NO_STATE_CHANGE (Section 11, 28, 45)
+    def test_false_pass_select_query_only_yields_inconclusive_for_no_state_change(self):
+        """Read-only SELECT query without before/after snapshots yields INCONCLUSIVE for NO_STATE_CHANGE."""
+        session_id = "sess_p5_sel_nc"
+        app_id = "app_p5_sel_nc"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_sel_nc",
+            session_id=session_id,
+            input_id="inp_sel_nc",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["SELECT * FROM accounts WHERE user_id = 123"]},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_sel_nc",
+            session_id=session_id,
+            input_id="inp_sel_nc",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["SELECT * FROM accounts WHERE user_id = 123"]},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_sel_nc",
+            session_id=session_id,
+            correlation_id="c_p5_selnc",
+            application_id=app_id,
+            input_set_id="is_p5_selnc",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_selnc", application_id=app_id, input_set_id="is_p5_selnc", input_set_hash="h_selnc", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-SEL-NO-CHANGE",
+            name="No State Change Rule",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 38. FALSE PASS: SELECT QUERY ONLY YIELDS INCONCLUSIVE FOR STATE_CHANGE (Section 11, 28)
+    def test_false_pass_select_query_only_yields_inconclusive_for_state_change(self):
+        """Read-only SELECT query without before/after snapshots yields INCONCLUSIVE for STATE_CHANGE."""
+        session_id = "sess_p5_sel_sc"
+        app_id = "app_p5_sel_sc"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_sel_sc",
+            session_id=session_id,
+            input_id="inp_sel_sc",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["SELECT * FROM accounts WHERE user_id = 123"]},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_sel_sc",
+            session_id=session_id,
+            input_id="inp_sel_sc",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["SELECT * FROM accounts WHERE user_id = 123"]},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_sel_sc",
+            session_id=session_id,
+            correlation_id="c_p5_selsc",
+            application_id=app_id,
+            input_set_id="is_p5_selsc",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_selsc", application_id=app_id, input_set_id="is_p5_selsc", input_set_hash="h_selsc", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-SEL-CHANGE",
+            name="State Change Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.INCONCLUSIVE
+
+    # 39. MUTATION QUERY YIELDS STATE_CHANGE PASS (Section 11, 30)
+    def test_mutation_query_yields_state_change_pass(self):
+        """Explicit state-mutating UPDATE statement proves STATE_CHANGE as PASS."""
+        session_id = "sess_p5_mut_q"
+        app_id = "app_p5_mut_q"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_mut_q",
+            session_id=session_id,
+            input_id="inp_mut_q",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = balance - 100 WHERE id = 42"]},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_mut_q",
+            session_id=session_id,
+            input_id="inp_mut_q",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"queries": ["UPDATE accounts SET balance = balance - 100 WHERE id = 42"]},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_mut_q",
+            session_id=session_id,
+            correlation_id="c_p5_mutq",
+            application_id=app_id,
+            input_set_id="is_p5_mutq",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_mutq", application_id=app_id, input_set_id="is_p5_mutq", input_set_hash="h_mutq", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-MUT-CHANGE",
+            name="Mutation Query Required",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 40. ROW_COUNT AS FIELD EVALUATION IN CONDITION REMAINS VALID (Section 10, 29)
+    def test_row_count_as_field_condition_evaluation_remains_valid(self):
+        """row_count is not rejected when explicitly evaluated by predicate conditions on state.row_count."""
+        session_id = "sess_p5_rc_cond"
+        app_id = "app_p5_rc_cond"
+
+        rec_r = EvidenceRecord(
+            evidence_id="r_rc_cd",
+            session_id=session_id,
+            input_id="inp_rc_cd",
+            role="reference",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"row_count": 0},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_rc_cd",
+            session_id=session_id,
+            input_id="inp_rc_cd",
+            role="target",
+            evidence_type=EvidenceType.DATABASE,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"row_count": 0},
+        )
+        rec_r_out = EvidenceRecord(
+            evidence_id="r_rc_out",
+            session_id=session_id,
+            input_id="inp_rc_cd",
+            role="reference",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "SUCCESS"}, "http_status": 200},
+        )
+        rec_t_out = EvidenceRecord(
+            evidence_id="t_rc_out",
+            session_id=session_id,
+            input_id="inp_rc_cd",
+            role="target",
+            evidence_type=EvidenceType.OUTPUT,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"raw_output": {"status": "SUCCESS"}, "http_status": 200},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_rc_cd",
+            session_id=session_id,
+            correlation_id="c_p5_rccd",
+            application_id=app_id,
+            input_set_id="is_p5_rccd",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_rccd", application_id=app_id, input_set_id="is_p5_rccd", input_set_hash="h_rccd", records=[rec_r, rec_t, rec_r_out, rec_t_out]),
+            records=[rec_r, rec_t, rec_r_out, rec_t_out],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-STATE-ROWCOUNT-0",
+            name="Zero Row Count Check",
+            condition=RulePredicate(field="row_count", field_source="state", operator=RuleOperator.EQ, value=0),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assm = res.rule_assessments[0]
+        # Condition row_count == 0 evaluated to TRUE on state_dict
+        assert assm.details["reference_applicability"] == "TRUE"
+        assert assm.details["target_applicability"] == "TRUE"
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+
+    # 41. FILESYSTEM EXPLICIT FILE ABSENCE YIELDS NO_STATE_CHANGE PASS (Section 15, 29)
+    def test_filesystem_explicit_file_absence_yields_no_state_change_pass(self):
+        """Explicitly captured absence (exists=False before and after) proves NO_STATE_CHANGE as PASS."""
+        session_id = "sess_p5_fs_abs"
+        app_id = "app_p5_fs_abs"
+
+        file_absent = {"/var/run/app.lock": {"path": "/var/run/app.lock", "exists": False, "size_bytes": 0}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_abs",
+            session_id=session_id,
+            input_id="inp_fs_abs",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": file_absent, "after_state": file_absent},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_abs",
+            session_id=session_id,
+            input_id="inp_fs_abs",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": file_absent, "after_state": file_absent},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fs_abs",
+            session_id=session_id,
+            correlation_id="c_p5_fsabs",
+            application_id=app_id,
+            input_set_id="is_p5_fsabs",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fsabs", application_id=app_id, input_set_id="is_p5_fsabs", input_set_hash="h_fsabs", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FS-ABSENCE-NO-CHANGE",
+            name="No Lock File Mutation",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.NO_STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+    # 42. FILESYSTEM FILE CREATION (ABSENT -> PRESENT) YIELDS STATE_CHANGE PASS (Section 15, 29)
+    def test_filesystem_file_creation_yields_state_change_pass(self):
+        """Explicitly captured file creation (exists: False -> True) proves STATE_CHANGE as PASS."""
+        session_id = "sess_p5_fs_create"
+        app_id = "app_p5_fs_create"
+
+        b_fs = {"/var/run/app.lock": {"path": "/var/run/app.lock", "exists": False, "size_bytes": 0}}
+        a_fs = {"/var/run/app.lock": {"path": "/var/run/app.lock", "exists": True, "size_bytes": 12, "sha256_hash": "h_created"}}
+        rec_r = EvidenceRecord(
+            evidence_id="r_fs_crt",
+            session_id=session_id,
+            input_id="inp_fs_crt",
+            role="reference",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": b_fs, "after_state": a_fs},
+        )
+        rec_t = EvidenceRecord(
+            evidence_id="t_fs_crt",
+            session_id=session_id,
+            input_id="inp_fs_crt",
+            role="target",
+            evidence_type=EvidenceType.FILESYSTEM,
+            capture_status=EvidenceCaptureStatus.CAPTURED,
+            payload={"before_state": b_fs, "after_state": a_fs},
+        )
+        bundle = EvidenceBundle(
+            bundle_id="bnd_p5_fs_crt",
+            session_id=session_id,
+            correlation_id="c_p5_fscrt",
+            application_id=app_id,
+            input_set_id="is_p5_fscrt",
+            manifest=EvidenceManifest(session_id=session_id, correlation_id="c_p5_fscrt", application_id=app_id, input_set_id="is_p5_fscrt", input_set_hash="h_fscrt", records=[rec_r, rec_t]),
+            records=[rec_r, rec_t],
+        )
+
+        rule = BusinessRule(
+            rule_id="RULE-FS-CREATE-CHANGE",
+            name="Lock File Created",
+            condition=RulePredicate(field="input_id", operator=RuleOperator.EXISTS),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.STATE_CHANGE),
+        )
+
+        res = controlled_assessment_engine.evaluate_controlled_mode(rules=[rule], bundle=bundle)
+        assert res.overall_verdict == RuleComplianceVerdict.PASS
+        assm = res.rule_assessments[0]
+        assert assm.reference_compliance == RuleComplianceVerdict.PASS
+        assert assm.target_compliance == RuleComplianceVerdict.PASS
+
+

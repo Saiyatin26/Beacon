@@ -37,6 +37,35 @@ from .models import (
 from .normalizer import rule_normalizer
 from .validator import rule_validator
 
+MUTATION_SQL_PREFIXES = (
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "MERGE",
+    "DROP",
+    "ALTER",
+    "CREATE",
+    "TRUNCATE",
+    "REPLACE",
+)
+
+
+def _is_mutation_query(q: Any) -> bool:
+    """Checks if a SQL query string represents a state-mutating statement."""
+    if not isinstance(q, str):
+        return False
+    clean = q.strip().upper()
+    return any(clean.startswith(prefix) for prefix in MUTATION_SQL_PREFIXES)
+
+
+def _is_readonly_query(q: Any) -> bool:
+    """Checks if a SQL query string represents a read-only query statement."""
+    if not isinstance(q, str):
+        return False
+    clean = q.strip().upper()
+    return clean.startswith("SELECT") or clean.startswith("EXPLAIN") or clean.startswith("SHOW") or clean.startswith("DESCRIBE")
+
+
 logger = logging.getLogger("beacon.rules.engine")
 
 
@@ -411,7 +440,7 @@ class ControlledAssessmentEngine:
                     return False, f"HTTP evidence capture status '{st}' is insufficient"
 
         elif b_type in (ExpectedBehaviorType.STATE_CHANGE, ExpectedBehaviorType.NO_STATE_CHANGE):
-            return self._is_state_evidence_sufficient(item, is_reference=is_reference)
+            return self.is_state_evidence_sufficient_for(item, is_reference=is_reference, requested_behavior=b_type)
 
         elif b_type == ExpectedBehaviorType.WORKFLOW_STEP:
             if tr_status and EvidenceSufficiency.is_insufficient(tr_status):
@@ -525,18 +554,28 @@ class ControlledAssessmentEngine:
 
         # 6. STATE_CHANGE / NO_STATE_CHANGE
         elif b_type == ExpectedBehaviorType.STATE_CHANGE:
+            state_behavior = obs_ctx.get("state_behavior", "UNKNOWN")
             state_mutated = obs_ctx.get("state_mutated", False)
+            observed["state_behavior"] = state_behavior
             observed["state_mutated"] = state_mutated
-            if not state_mutated:
-                return RuleComplianceVerdict.FAIL, "Expected STATE_CHANGE but no state mutation detected", observed
-            return RuleComplianceVerdict.PASS, "State mutation detected as expected", observed
+            if state_behavior == "CHANGE" or state_mutated:
+                return RuleComplianceVerdict.PASS, "State mutation detected as expected", observed
+            elif state_behavior == "NO_CHANGE":
+                return RuleComplianceVerdict.FAIL, "Expected STATE_CHANGE but state was observed unchanged", observed
+            else:
+                return RuleComplianceVerdict.INCONCLUSIVE, "State mutation could not be conclusively determined", observed
 
         elif b_type == ExpectedBehaviorType.NO_STATE_CHANGE:
+            state_behavior = obs_ctx.get("state_behavior", "UNKNOWN")
             state_mutated = obs_ctx.get("state_mutated", False)
+            observed["state_behavior"] = state_behavior
             observed["state_mutated"] = state_mutated
-            if state_mutated:
+            if state_behavior == "NO_CHANGE" and not state_mutated:
+                return RuleComplianceVerdict.PASS, "No state mutation as expected", observed
+            elif state_behavior == "CHANGE" or state_mutated:
                 return RuleComplianceVerdict.FAIL, "Expected NO_STATE_CHANGE but state mutation occurred", observed
-            return RuleComplianceVerdict.PASS, "No state mutation as expected", observed
+            else:
+                return RuleComplianceVerdict.INCONCLUSIVE, "Absence of state mutation could not be conclusively determined", observed
 
         # 7. WORKFLOW_STEP
         elif b_type == ExpectedBehaviorType.WORKFLOW_STEP:
@@ -549,12 +588,8 @@ class ControlledAssessmentEngine:
 
         return RuleComplianceVerdict.ERROR, f"Unsupported expected behavior type '{b_type}'", observed
 
-    def _is_state_evidence_sufficient(self, item: Any, is_reference: bool) -> tuple[bool, str]:
-        """Validates that genuine observational state evidence (database and/or filesystem) exists.
-
-        Model defaults (e.g. delta_detected=False) without actual snapshots or mutation records
-        are strictly treated as insufficient (INCONCLUSIVE).
-        """
+    def is_state_evidence_captured(self, item: Any, is_reference: bool) -> tuple[bool, str]:
+        """Checks if state evidence (database or filesystem) was captured and is not of an insufficient status."""
         role_str = "reference" if is_reference else "target"
         recs = item.reference_records if is_reference else item.target_records
 
@@ -589,48 +624,271 @@ class ControlledAssessmentEngine:
             if not state_recs:
                 return False, "Database and filesystem state evidence is missing; cannot evaluate state behavior"
 
-        has_db_obs = False
         if db is not None:
             db_st = getattr(db, "status", getattr(db, "capture_status", EvidenceCaptureStatus.CAPTURED))
             if EvidenceSufficiency.is_insufficient(db_st):
                 return False, f"Database evidence status '{db_st}' is insufficient"
 
-            # Check for real observations (snapshots, row counts, queries, records)
-            has_snapshots = (getattr(db, "snapshot_before", None) is not None and getattr(db, "snapshot_after", None) is not None)
-            has_row_counts = bool(getattr(db, "table_row_counts_before", None) or getattr(db, "table_row_counts_after", None))
-            has_queries = bool(getattr(db, "queries", None) or (hasattr(db, "records") and db.records is not None) or getattr(db, "row_count", None) is not None)
-
-            if has_snapshots or has_row_counts or has_queries:
-                has_db_obs = True
-
-        has_fs_obs = False
         if fs is not None:
             fs_st = getattr(fs, "status", getattr(fs, "capture_status", EvidenceCaptureStatus.CAPTURED))
             if EvidenceSufficiency.is_insufficient(fs_st):
                 return False, f"Filesystem evidence status '{fs_st}' is insufficient"
 
-            # Check for real filesystem observations (snapshots, file lists)
-            has_file_states = bool(getattr(fs, "before_state", None) or getattr(fs, "after_state", None))
-            has_file_lists = (getattr(fs, "created_files", None) is not None or getattr(fs, "modified_files", None) is not None or getattr(fs, "deleted_files", None) is not None)
+        return True, "State evidence is captured"
 
-            if has_file_states or has_file_lists:
-                has_fs_obs = True
+    def is_state_evidence_sufficient_for(
+        self, item: Any, is_reference: bool, requested_behavior: ExpectedBehaviorType
+    ) -> tuple[bool, str]:
+        """Validates that genuine observational state evidence exists sufficient to prove the requested behavior.
 
-        # Check raw records for explicit observational payload
+        Strictly enforces:
+        - Model defaults (e.g. delta_detected=False, changed=False) without snapshots or mutation proof are insufficient.
+        - Single row_count (e.g. row_count=0 or 10) without before/after state cannot prove NO_STATE_CHANGE or STATE_CHANGE.
+        - SELECT queries alone cannot prove state mutation or no state mutation.
+        """
+        captured, cap_reason = self.is_state_evidence_captured(item, is_reference)
+        if not captured:
+            return False, cap_reason
+
+        recs = item.reference_records if is_reference else item.target_records
+        db = item.reference_database if is_reference else item.target_database
+        fs = item.reference_file if is_reference else item.target_file
+
+        has_db_sufficient = False
+        has_fs_sufficient = False
+        db_reasons: list[str] = []
+        fs_reasons: list[str] = []
+
+        # ----------------------------------------------------
+        # Database Evidence Sufficiency
+        # ----------------------------------------------------
+        if db is not None:
+            # 1. Snapshots: both before and after must be present
+            has_snapshots = (
+                getattr(db, "snapshot_before", None) is not None
+                and getattr(db, "snapshot_after", None) is not None
+            )
+            # 2. Table row counts: both before and after dictionaries must be present and non-empty
+            has_row_count_snapshots = bool(
+                getattr(db, "table_row_counts_before", None)
+                and getattr(db, "table_row_counts_after", None)
+            )
+            # 3. Mutation queries / records
+            queries = getattr(db, "queries", []) or []
+            has_mutation_queries = any(_is_mutation_query(q) for q in queries)
+            has_mutation_records = bool(hasattr(db, "records") and db.records)
+
+            if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
+                # To prove NO_STATE_CHANGE, we MUST have before/after snapshots or before/after row count snapshots
+                if has_snapshots or has_row_count_snapshots:
+                    has_db_sufficient = True
+                else:
+                    db_reasons.append("lacks before/after database snapshots or row-count deltas required to prove NO_STATE_CHANGE")
+            elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
+                # To prove STATE_CHANGE, we can have before/after snapshots, before/after row counts, or explicit mutation queries/records
+                if has_snapshots or has_row_count_snapshots or has_mutation_queries or has_mutation_records:
+                    has_db_sufficient = True
+                else:
+                    db_reasons.append("lacks before/after database snapshots or mutation queries/records required to prove STATE_CHANGE")
+            else:
+                has_db_sufficient = True
+
+        # Check raw database records
         for r in recs:
             if getattr(r, "evidence_type", None) == EvidenceType.DATABASE:
                 p = getattr(r, "payload", {})
-                if isinstance(p, dict) and ("snapshot_before" in p or "queries" in p or "row_count" in p or "table_row_counts_before" in p or "records" in p):
-                    has_db_obs = True
-            elif getattr(r, "evidence_type", None) == EvidenceType.FILESYSTEM:
+                if isinstance(p, dict):
+                    has_raw_snapshots = ("snapshot_before" in p and "snapshot_after" in p and p["snapshot_before"] is not None and p["snapshot_after"] is not None)
+                    has_raw_counts = bool(p.get("table_row_counts_before") and p.get("table_row_counts_after"))
+                    raw_queries = p.get("queries", []) if isinstance(p.get("queries"), list) else []
+                    has_raw_mut_queries = any(_is_mutation_query(q) for q in raw_queries)
+                    has_raw_mut_records = bool(p.get("records"))
+
+                    if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
+                        if has_raw_snapshots or has_raw_counts:
+                            has_db_sufficient = True
+                    elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
+                        if has_raw_snapshots or has_raw_counts or has_raw_mut_queries or has_raw_mut_records:
+                            has_db_sufficient = True
+
+        # ----------------------------------------------------
+        # Filesystem Evidence Sufficiency
+        # ----------------------------------------------------
+        if fs is not None:
+            # 1. File state snapshots: both before and after must be present
+            b_fs = getattr(fs, "before_state", None)
+            a_fs = getattr(fs, "after_state", None)
+            has_fs_snapshots = bool(b_fs is not None and a_fs is not None and (b_fs or a_fs))
+
+            # 2. Explicit file mutation lists
+            has_file_lists = bool(
+                getattr(fs, "created_files", None)
+                or getattr(fs, "modified_files", None)
+                or getattr(fs, "deleted_files", None)
+            )
+
+            if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
+                if has_fs_snapshots:
+                    has_fs_sufficient = True
+                else:
+                    fs_reasons.append("lacks before/after filesystem state snapshots required to prove NO_STATE_CHANGE")
+            elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
+                if has_fs_snapshots or has_file_lists:
+                    has_fs_sufficient = True
+                else:
+                    fs_reasons.append("lacks before/after filesystem state snapshots or file mutation lists required to prove STATE_CHANGE")
+            else:
+                has_fs_sufficient = True
+
+        # Check raw filesystem records
+        for r in recs:
+            if getattr(r, "evidence_type", None) == EvidenceType.FILESYSTEM:
                 p = getattr(r, "payload", {})
-                if isinstance(p, dict) and ("before_state" in p or "created_files" in p or "files" in p or "modified_files" in p):
-                    has_fs_obs = True
+                if isinstance(p, dict):
+                    has_raw_fs_snaps = bool(p.get("before_state") is not None and p.get("after_state") is not None and (p.get("before_state") or p.get("after_state")))
+                    has_raw_fs_lists = bool(p.get("created_files") or p.get("modified_files") or p.get("deleted_files"))
 
-        if not has_db_obs and not has_fs_obs:
-            return False, "State evidence exists but lacks observational before/after snapshots or mutation records (model defaults alone are insufficient)"
+                    if requested_behavior == ExpectedBehaviorType.NO_STATE_CHANGE:
+                        if has_raw_fs_snaps:
+                            has_fs_sufficient = True
+                    elif requested_behavior == ExpectedBehaviorType.STATE_CHANGE:
+                        if has_raw_fs_snaps or has_raw_fs_lists:
+                            has_fs_sufficient = True
 
-        return True, "State evidence is sufficient"
+        if not has_db_sufficient and not has_fs_sufficient:
+            reasons = db_reasons + fs_reasons
+            msg = "; ".join(reasons) if reasons else "State evidence lacks sufficient observational proof for requested behavior"
+            return False, f"State evidence is insufficient: {msg}"
+
+        return True, "State evidence is sufficient for requested behavior"
+
+    def _is_state_evidence_sufficient(
+        self, item: Any, is_reference: bool, requested_behavior: Optional[ExpectedBehaviorType] = None
+    ) -> tuple[bool, str]:
+        """Backwards-compatible wrapper delegating to is_state_evidence_sufficient_for."""
+        if requested_behavior is not None:
+            return self.is_state_evidence_sufficient_for(item, is_reference, requested_behavior)
+        return self.is_state_evidence_sufficient_for(item, is_reference, ExpectedBehaviorType.NO_STATE_CHANGE)
+
+    def determine_observed_state_behavior(
+        self, item: Any, is_reference: bool
+    ) -> tuple[str, dict[str, Any]]:
+        """Determines observed state behavior ('CHANGE', 'NO_CHANGE', or 'UNKNOWN') from observational evidence."""
+        recs = item.reference_records if is_reference else item.target_records
+        db = item.reference_database if is_reference else item.target_database
+        fs = item.reference_file if is_reference else item.target_file
+
+        state_mutated = False
+        has_comparison = False
+        details: dict[str, Any] = {}
+
+        # 1. Database comparison
+        if db is not None:
+            b_snap = getattr(db, "snapshot_before", None)
+            a_snap = getattr(db, "snapshot_after", None)
+            if b_snap is not None and a_snap is not None:
+                has_comparison = True
+                if b_snap != a_snap:
+                    state_mutated = True
+                    details["db_snapshot_diff"] = True
+
+            rc_b = getattr(db, "table_row_counts_before", {})
+            rc_a = getattr(db, "table_row_counts_after", {})
+            if rc_b and rc_a:
+                has_comparison = True
+                if rc_b != rc_a:
+                    state_mutated = True
+                    details["db_row_count_diff"] = True
+
+            queries = getattr(db, "queries", []) or []
+            for q in queries:
+                if _is_mutation_query(q):
+                    state_mutated = True
+                    has_comparison = True
+                    details["db_mutation_query"] = q
+                    break
+
+            if hasattr(db, "records") and db.records:
+                state_mutated = True
+                has_comparison = True
+                details["db_mutation_records"] = True
+
+        # Check raw database records
+        for r in recs:
+            if getattr(r, "evidence_type", None) == EvidenceType.DATABASE and isinstance(r.payload, dict):
+                p = r.payload
+                if "snapshot_before" in p and "snapshot_after" in p and p["snapshot_before"] is not None and p["snapshot_after"] is not None:
+                    has_comparison = True
+                    if p["snapshot_before"] != p["snapshot_after"]:
+                        state_mutated = True
+                        details["raw_db_snapshot_diff"] = True
+                if "table_row_counts_before" in p and "table_row_counts_after" in p and p["table_row_counts_before"] and p["table_row_counts_after"]:
+                    has_comparison = True
+                    if p["table_row_counts_before"] != p["table_row_counts_after"]:
+                        state_mutated = True
+                        details["raw_db_row_count_diff"] = True
+                raw_queries = p.get("queries", []) if isinstance(p.get("queries"), list) else []
+                for q in raw_queries:
+                    if _is_mutation_query(q):
+                        state_mutated = True
+                        has_comparison = True
+                        details["raw_db_mutation_query"] = q
+                        break
+                if p.get("records"):
+                    state_mutated = True
+                    has_comparison = True
+                    details["raw_db_records"] = True
+
+        # 2. Filesystem comparison
+        if fs is not None:
+            if getattr(fs, "created_files", None) or getattr(fs, "modified_files", None) or getattr(fs, "deleted_files", None):
+                state_mutated = True
+                has_comparison = True
+                details["fs_file_mutations"] = True
+
+            b_fs = getattr(fs, "before_state", {})
+            a_fs = getattr(fs, "after_state", {})
+            if b_fs is not None and a_fs is not None and (b_fs or a_fs):
+                has_comparison = True
+                all_paths = set(b_fs.keys()) | set(a_fs.keys())
+                for path in all_paths:
+                    bs = b_fs.get(path)
+                    as_ = a_fs.get(path)
+                    if bs is None or as_ is None:
+                        state_mutated = True
+                        details["fs_path_missing"] = path
+                        break
+                    bh = getattr(bs, "sha256_hash", None) or (bs.get("sha256_hash") if isinstance(bs, dict) else None)
+                    ah = getattr(as_, "sha256_hash", None) or (as_.get("sha256_hash") if isinstance(as_, dict) else None)
+                    be = getattr(bs, "exists", True) if not isinstance(bs, dict) else bs.get("exists", True)
+                    ae = getattr(as_, "exists", True) if not isinstance(as_, dict) else as_.get("exists", True)
+                    bsz = getattr(bs, "size_bytes", 0) if not isinstance(bs, dict) else bs.get("size_bytes", 0)
+                    asz = getattr(as_, "size_bytes", 0) if not isinstance(as_, dict) else as_.get("size_bytes", 0)
+                    if be != ae or bh != ah or bsz != asz:
+                        state_mutated = True
+                        details["fs_file_diff"] = path
+                        break
+
+        # Check raw filesystem records
+        for r in recs:
+            if getattr(r, "evidence_type", None) == EvidenceType.FILESYSTEM and isinstance(r.payload, dict):
+                p = r.payload
+                if ("created_files" in p and p["created_files"]) or ("modified_files" in p and p["modified_files"]) or ("deleted_files" in p and p["deleted_files"]):
+                    state_mutated = True
+                    has_comparison = True
+                    details["raw_fs_file_mutations"] = True
+                if "before_state" in p and "after_state" in p and (p["before_state"] or p["after_state"]):
+                    has_comparison = True
+                    b_raw = p["before_state"]
+                    a_raw = p["after_state"]
+                    if b_raw != a_raw:
+                        state_mutated = True
+                        details["raw_fs_snapshot_diff"] = True
+
+        if not has_comparison:
+            return "UNKNOWN", details
+
+        return "CHANGE" if state_mutated else "NO_CHANGE", details
 
     def _build_evaluation_context(self, item: Any, is_reference: bool = True) -> dict[str, Any]:
         """Assembles an isolated evaluation context for a specific role (Reference or Target).
@@ -832,62 +1090,10 @@ class ControlledAssessmentEngine:
         obs["has_error"] = has_error
 
         # State mutation extraction from observational evidence
-        state_mutated = False
-
-        if db is not None:
-            # 1. Snapshot comparison
-            b_snap = getattr(db, "snapshot_before", None)
-            a_snap = getattr(db, "snapshot_after", None)
-            if b_snap is not None and a_snap is not None:
-                if b_snap != a_snap:
-                    state_mutated = True
-            # 2. Row count comparison
-            rc_b = getattr(db, "table_row_counts_before", {})
-            rc_a = getattr(db, "table_row_counts_after", {})
-            if rc_b and rc_a and rc_b != rc_a:
-                state_mutated = True
-            # 3. Explicit mutation queries / records
-            if getattr(db, "queries", None) or (hasattr(db, "records") and db.records):
-                state_mutated = True
-            elif getattr(db, "row_count", None) is not None and getattr(db, "row_count") > 0:
-                state_mutated = True
-
-        if fs is not None:
-            if getattr(fs, "created_files", None) or getattr(fs, "modified_files", None) or getattr(fs, "deleted_files", None):
-                state_mutated = True
-            b_fs = getattr(fs, "before_state", {})
-            a_fs = getattr(fs, "after_state", {})
-            if b_fs or a_fs:
-                all_paths = set(b_fs.keys()) | set(a_fs.keys())
-                for path in all_paths:
-                    bs = b_fs.get(path)
-                    as_ = a_fs.get(path)
-                    if bs is None or as_ is None:
-                        state_mutated = True
-                        break
-                    bh = getattr(bs, "sha256_hash", None) or (bs.get("sha256_hash") if isinstance(bs, dict) else None)
-                    ah = getattr(as_, "sha256_hash", None) or (as_.get("sha256_hash") if isinstance(as_, dict) else None)
-                    be = getattr(bs, "exists", True) if not isinstance(bs, dict) else bs.get("exists", True)
-                    ae = getattr(as_, "exists", True) if not isinstance(as_, dict) else as_.get("exists", True)
-                    bsz = getattr(bs, "size_bytes", 0) if not isinstance(bs, dict) else bs.get("size_bytes", 0)
-                    asz = getattr(as_, "size_bytes", 0) if not isinstance(as_, dict) else as_.get("size_bytes", 0)
-                    if be != ae or bh != ah or bsz != asz:
-                        state_mutated = True
-                        break
-
-        for r in role_recs:
-            if getattr(r, "evidence_type", None) == EvidenceType.DATABASE and isinstance(r.payload, dict):
-                p = r.payload
-                if "queries" in p and p["queries"]:
-                    state_mutated = True
-                if "snapshot_before" in p and "snapshot_after" in p and p["snapshot_before"] != p["snapshot_after"]:
-                    state_mutated = True
-            elif getattr(r, "evidence_type", None) == EvidenceType.FILESYSTEM and isinstance(r.payload, dict):
-                p = r.payload
-                if ("created_files" in p and p["created_files"]) or ("modified_files" in p and p["modified_files"]):
-                    state_mutated = True
-
-        obs["state_mutated"] = state_mutated
+        state_behavior, state_details = self.determine_observed_state_behavior(item, is_reference)
+        obs["state_behavior"] = state_behavior
+        obs["state_mutated"] = (state_behavior == "CHANGE")
+        obs.update(state_details)
 
         # Workflow trace extraction
         events: list[str] = []
