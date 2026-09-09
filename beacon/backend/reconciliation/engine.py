@@ -350,6 +350,8 @@ class RuleReconciliationEngine:
         # ----------------------------------------------------------------------
         if persist:
             try:
+                # Ensure result_hash is computed prior to persistence
+                result.result_hash = result.compute_result_hash()
                 reconciliation_persistence.save_reconciliation_result(result)
                 result.persistence_status = "PERSISTED"
                 logger.info(f"[PHASE7] Persisted reconciliation result '{result.run_id}' and OracleSet '{oracle_set.oracle_set_id}'.")
@@ -362,6 +364,10 @@ class RuleReconciliationEngine:
                     severity="ERROR",
                     message=f"Reconciliation persistence failed: {exc}",
                 ))
+                # Re-finalize semantic result_hash after status modification
+                result.result_hash = result.compute_result_hash()
+        else:
+            result.result_hash = result.compute_result_hash()
 
         logger.info(
             f"[PHASE7] Reconciliation complete. Status: {result.overall_status}, "
