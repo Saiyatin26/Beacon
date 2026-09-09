@@ -212,21 +212,29 @@ class OracleSet(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     def compute_oracle_set_hash(self) -> str:
-        """Computes deterministic SHA-256 digest across canonical rule fingerprints and conflict hashes."""
+        """Computes deterministic SHA-256 digest across all canonical rule definitions, provenance, and conflict hashes."""
         ordered_rules = [
             {
                 "rule_id": r.rule_id,
                 "fingerprint": r.fingerprint,
                 "rule_type": r.rule_type,
                 "canonical_expression": r.canonical_expression,
+                "conditions": r.conditions,
+                "expected_behavior": r.expected_behavior,
                 "role_scope": r.role_scope,
                 "source": r.source.value,
                 "confidence": r.confidence,
                 "support_count": r.support_count,
                 "contradiction_count": r.contradiction_count,
+                "unknown_count": r.unknown_count,
+                "applicable_count": r.applicable_count,
                 "resolution_state": r.resolution_state.value,
+                "evidence_ids": sorted(r.evidence_ids),
+                "input_ids": sorted(r.input_ids),
                 "source_rule_ids": sorted(r.source_rule_ids),
                 "source_candidate_ids": sorted(r.source_candidate_ids),
+                "candidate_fingerprints": sorted(r.candidate_fingerprints),
+                "metadata": r.metadata,
             }
             for r in sorted(self.rules, key=lambda x: (x.fingerprint, x.role_scope, x.rule_id))
         ]
@@ -236,12 +244,17 @@ class OracleSet(BaseModel):
                 "fingerprint": c.fingerprint,
                 "rule_a_id": c.rule_a_id,
                 "rule_b_id": c.rule_b_id,
+                "rule_a_source": c.rule_a_source,
+                "rule_b_source": c.rule_b_source,
+                "relationship": c.relationship.value,
+                "reason": c.reason,
+                "evidence_ids": sorted(c.evidence_ids),
                 "resolution_status": c.resolution_status,
+                "resolution_metadata": c.resolution_metadata,
             }
             for c in sorted(self.conflicts, key=lambda x: x.fingerprint)
         ]
         payload = {
-            "oracle_set_id": self.oracle_set_id,
             "application_id": self.application_id,
             "version": self.version,
             "status": self.status.value,
@@ -303,16 +316,26 @@ class ReconciliationResult(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def compute_result_hash(self) -> str:
-        """Computes deterministic SHA-256 digest over the entire reconciliation outcome."""
+        """Computes deterministic SHA-256 digest over the entire semantic reconciliation outcome."""
+        ordered_rule_ids = [
+            {"rule_id": r.rule_id, "fingerprint": r.fingerprint, "role_scope": r.role_scope}
+            for r in sorted(self.rules, key=lambda x: (x.fingerprint, x.role_scope, x.rule_id))
+        ]
+        ordered_conflict_ids = [
+            {"conflict_id": c.conflict_id, "fingerprint": c.fingerprint}
+            for c in sorted(self.conflicts, key=lambda x: x.fingerprint)
+        ]
         payload = {
-            "run_id": self.run_id,
             "application_id": self.application_id,
             "policy_hash": self.policy_hash,
             "approved_count": self.approved_count,
             "rejected_count": self.rejected_count,
             "conflict_count": self.conflict_count,
+            "unresolved_conflict_count": self.unresolved_conflict_count,
             "oracle_set_hash": self.oracle_set.oracle_set_hash if self.oracle_set else "",
             "overall_status": self.overall_status,
+            "rules": ordered_rule_ids,
+            "conflicts": ordered_conflict_ids,
         }
         return compute_deterministic_hash(payload)
 

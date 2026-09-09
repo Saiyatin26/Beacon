@@ -123,7 +123,7 @@ class RuleNormalizer:
         )
 
     def clean_expression(self, expression: str) -> str:
-        """Standardizes whitespace, quotes, and operator spacing in a canonical expression."""
+        """Standardizes whitespace, quotes, operator spacing, and literal casing in a canonical expression."""
         if not expression:
             return ""
         s = expression.strip()
@@ -136,6 +136,11 @@ class RuleNormalizer:
         s = re.sub(r"(?<!<)\s*<\s*(?!=)", " < ", s)
         s = re.sub(r"(?<!>)\s*>\s*(?!=)", " > ", s)
         s = re.sub(r"\s*->\s*", " -> ", s)
+
+        # Canonicalize boolean and null literal casing
+        s = re.sub(r"\b(true|True|TRUE)\b", "true", s)
+        s = re.sub(r"\b(false|False|FALSE)\b", "false", s)
+        s = re.sub(r"\b(null|Null|NULL|none|None|NONE)\b", "null", s)
         return s.strip()
 
     def _normalize_condition_node(self, node: RuleConditionNode) -> dict[str, Any]:
@@ -154,7 +159,7 @@ class RuleNormalizer:
                 "field": node.field.strip(),
                 "operator": op_sym,
                 "value": val,
-                "field_source": node.field_source,
+                "field_source": "auto",
             }
         elif isinstance(node, CompoundRuleCondition):
             norm_ops = [self._normalize_condition_node(op) for op in node.operands]
@@ -249,7 +254,7 @@ class RuleNormalizer:
         cond_dict: dict[str, Any] = {}
         exp_dict: dict[str, Any] = {}
 
-        s = expr.strip()
+        s = self.clean_expression(expr)
         # Check for IF ... THEN ...
         m_if = re.match(r"^IF\s+(.+?)\s+THEN\s+(.+)$", s, re.IGNORECASE)
         if m_if:
@@ -264,17 +269,52 @@ class RuleNormalizer:
             field, op, val_str = m_eq.groups()
             val = self._parse_val(val_str)
             if field.startswith("input."):
-                cond_dict = {"type": "predicate", "field": field, "operator": op, "value": val}
+                cond_dict = {"type": "predicate", "field": field, "operator": op, "value": val, "field_source": "auto"}
             else:
-                exp_dict = {"behavior_type": "RETURN_VALUE", "target_field": field, "expected_value": val, "operator": op}
+                exp_dict = {
+                    "behavior_type": "RETURN_VALUE",
+                    "target_field": field,
+                    "expected_value": val,
+                    "expected_status_code": None,
+                    "expected_error_code": None,
+                    "expected_state_mutation": None,
+                    "expected_workflow_event": None,
+                }
         else:
-            exp_dict = {"behavior_type": "EXPRESSION", "expression": s}
+            exp_dict = {
+                "behavior_type": "EXPRESSION",
+                "target_field": "",
+                "expected_value": None,
+                "expected_status_code": None,
+                "expected_error_code": None,
+                "expected_state_mutation": None,
+                "expected_workflow_event": None,
+                "expression": s,
+            }
 
         return cond_dict, exp_dict
 
     def _parse_single_condition_str(self, s: str) -> dict[str, Any]:
-        """Parses condition string into condition dictionary."""
+        """Parses condition string (atomic or compound) into condition dictionary."""
         s = s.strip().strip("()")
+        if " AND " in s:
+            parts = s.split(" AND ")
+            operands = [self._parse_single_condition_str(p) for p in parts]
+            operands.sort(key=lambda x: compute_deterministic_hash(x))
+            return {
+                "type": "compound",
+                "logical_op": "AND",
+                "operands": operands,
+            }
+        if " OR " in s:
+            parts = s.split(" OR ")
+            operands = [self._parse_single_condition_str(p) for p in parts]
+            operands.sort(key=lambda x: compute_deterministic_hash(x))
+            return {
+                "type": "compound",
+                "logical_op": "OR",
+                "operands": operands,
+            }
         m = re.match(r"^([\w\.]+)\s*(==|!=|<=|>=|<|>)\s*(.+)$", s)
         if m:
             field, op, val_str = m.groups()
@@ -286,6 +326,7 @@ class RuleNormalizer:
                 "field_source": "auto",
             }
         return {"raw": s}
+
 
     def _parse_single_consequence_str(self, s: str) -> dict[str, Any]:
         """Parses consequence string into expected behavior dictionary."""

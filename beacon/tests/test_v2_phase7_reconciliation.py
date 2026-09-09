@@ -86,7 +86,7 @@ class TestPhase7RuleReconciliation:
         norm = rule_normalizer.normalize_user_rule(user_rule)
         assert norm.source_type == RuleProvenanceSource.USER_DEFINED
         assert "IF" in norm.canonical_expression
-        assert "THEN output.approved == True" in norm.canonical_expression
+        assert "THEN output.approved == true" in norm.canonical_expression
         assert norm.fingerprint != ""
 
         # Discovered candidate normalization
@@ -338,11 +338,11 @@ class TestPhase7RuleReconciliation:
     # --------------------------------------------------------------------------
     # 7. Specialization vs Conflict
     # --------------------------------------------------------------------------
-    def test_specialization_is_not_a_conflict(self):
-        """A sub-case rule (Gold AND amount > 1000 -> 15%) is a specialization of (Gold -> 10%) and does NOT conflict."""
+    def test_compatible_specialization_is_not_a_conflict(self):
+        """A sub-case rule with compatible consequence is a specialization and does NOT conflict."""
         engine = RuleReconciliationEngine()
 
-        # Base rule: Gold -> 10%
+        # Base rule: Gold -> 10% discount
         pred_base = RulePredicate(field="tier", operator=RuleOperator.EQ, value="Gold")
         u_base = BusinessRule(
             rule_id="rule_base",
@@ -352,7 +352,7 @@ class TestPhase7RuleReconciliation:
             status=RuleStatus.ACTIVE,
         )
 
-        # Specialized rule: Gold AND amount > 1000 -> 15%
+        # Compatible Specialized rule: Gold AND amount > 1000 -> 10% discount (compatible consequence)
         pred_sub1 = RulePredicate(field="tier", operator=RuleOperator.EQ, value="Gold")
         pred_sub2 = RulePredicate(field="amount", operator=RuleOperator.GT, value=1000)
         comp_sub = CompoundRuleCondition(logical_op="AND", operands=[pred_sub1, pred_sub2])
@@ -360,7 +360,7 @@ class TestPhase7RuleReconciliation:
             rule_id="rule_spec",
             name="Specialized VIP Gold Rule",
             condition=comp_sub,
-            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="discount", expected_value=0.15),
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="discount", expected_value=0.10),
             status=RuleStatus.ACTIVE,
         )
 
@@ -508,7 +508,7 @@ class TestPhase7RuleReconciliation:
         )
         assert res is not None
         # Must be normalized into a safe static string expression without execution
-        assert res.oracle_set.rules[0].canonical_expression == "__import__('os').system('echo hacked') == True"
+        assert res.oracle_set.rules[0].canonical_expression == "__import__('os').system('echo hacked') == true"
 
     # --------------------------------------------------------------------------
     # 12. REST API Verification
@@ -570,3 +570,138 @@ class TestPhase7RuleReconciliation:
         r_list = client.get("/api/v2/oraclesets?application_id=app_api_test", headers=headers)
         assert r_list.status_code == 200
         assert len(r_list.json()) >= 1
+
+    # --------------------------------------------------------------------------
+    # 13. Hardening: Result Hash Invariance to Random Run ID
+    # --------------------------------------------------------------------------
+    def test_result_hash_invariance_to_random_run_id(self):
+        """Reconciliation result_hash must be identical across runs with identical inputs regardless of run_id."""
+        engine = RuleReconciliationEngine()
+
+        cand = DiscoveredCandidate(
+            candidate_id="c_det",
+            rule_type=DiscoveredRuleType.INPUT_OUTPUT_RELATION,
+            canonical_expression="output.total == input.subtotal * 1.08",
+            normalized_expression="output.total == input.subtotal * 1.08",
+            description="Tax multiplier",
+            support_count=10,
+            confidence=1.0,
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+
+        res1 = engine.reconcile(application_id="app_det", discovered_candidates=[cand], persist=False)
+        res2 = engine.reconcile(application_id="app_det", discovered_candidates=[cand], persist=False)
+
+        # Run IDs must differ (unique execution tracing)
+        assert res1.run_id != res2.run_id
+        # Semantic result hashes MUST be identical
+        assert res1.result_hash == res2.result_hash
+        assert res1.oracle_set.oracle_set_hash == res2.oracle_set.oracle_set_hash
+
+    # --------------------------------------------------------------------------
+    # 14. Hardening: Never Fabricate Evidence Counts on Deduplication
+    # --------------------------------------------------------------------------
+    def test_never_fabricate_evidence_counts_on_merge(self):
+        """Merging duplicate candidates preserves exact unique evidence/input counts without arbitrary increments."""
+        engine = RuleReconciliationEngine()
+
+        cand_a = DiscoveredCandidate(
+            candidate_id="ca_count",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.valid == true",
+            normalized_expression="output.valid == true",
+            description="Valid output",
+            support_count=10,
+            confidence=1.0,
+            input_ids=[f"inp_{i}" for i in range(10)],
+            evidence_ids=[f"ev_{i}" for i in range(10)],
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+        cand_b = DiscoveredCandidate(
+            candidate_id="cb_count",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.valid == true",
+            normalized_expression="output.valid == true",
+            description="Valid output duplicate run with overlapping inputs",
+            support_count=15,
+            confidence=1.0,
+            input_ids=[f"inp_{i}" for i in range(5, 20)],  # 15 inputs, 5 overlapping (total 20 unique)
+            evidence_ids=[f"ev_{i}" for i in range(5, 20)],
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+
+        res = engine.reconcile(application_id="app_count", discovered_candidates=[cand_a, cand_b], persist=False)
+        assert res.approved_count == 1
+        rule = res.oracle_set.rules[0]
+        # Total unique input IDs is exactly 20, not 15 + 1 or 25
+        assert len(rule.input_ids) == 20
+        assert rule.support_count == 20
+
+    # --------------------------------------------------------------------------
+    # 15. Hardening: Incompatible Specialization is Classified as Conflict
+    # --------------------------------------------------------------------------
+    def test_specialization_with_incompatible_consequence_is_conflict(self):
+        """A narrower condition with contradictory output (e.g. Gold -> 10% vs Gold AND amount > 1000 -> 15%) is CONFLICT."""
+        engine = RuleReconciliationEngine()
+
+        # Rule A: Gold -> 10%
+        pred_a = RulePredicate(field="tier", operator=RuleOperator.EQ, value="Gold")
+        u_a = BusinessRule(
+            rule_id="rule_base_gold",
+            name="Base Gold Rule",
+            condition=pred_a,
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="discount", expected_value=0.10),
+            status=RuleStatus.ACTIVE,
+        )
+
+        # Rule B: Gold AND amount > 1000 with contradictory discount 15%
+        pred_b1 = RulePredicate(field="tier", operator=RuleOperator.EQ, value="Gold")
+        pred_b2 = RulePredicate(field="amount", operator=RuleOperator.GT, value=1000)
+        comp_b = CompoundRuleCondition(logical_op="AND", operands=[pred_b1, pred_b2])
+        cand_b = DiscoveredCandidate(
+            candidate_id="cand_spec_conflict",
+            rule_type=DiscoveredRuleType.INPUT_OUTPUT_RELATION,
+            canonical_expression="IF (tier == Gold AND amount > 1000) THEN discount == 0.15",
+            normalized_expression="IF (tier == Gold AND amount > 1000) THEN discount == 0.15",
+            description="Contradictory specialized discount",
+            support_count=5,
+            confidence=1.0,
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+
+        res = engine.reconcile(application_id="app_spec_conf", user_rules=[u_a], discovered_candidates=[cand_b], persist=False)
+        assert res.conflict_count == 1
+        assert res.oracle_set.status == OracleSetStatus.BLOCKED
+
+    # --------------------------------------------------------------------------
+    # 16. Hardening: Boolean and Null Normalization Invariance
+    # --------------------------------------------------------------------------
+    def test_boolean_and_null_canonical_normalization(self):
+        """Case variations in booleans and nulls normalize to identical canonical values."""
+        cand_t1 = DiscoveredCandidate(
+            candidate_id="c_t1",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.active == true",
+            normalized_expression="output.active == true",
+            description="true lower",
+            support_count=5,
+            confidence=1.0,
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+        cand_t2 = DiscoveredCandidate(
+            candidate_id="c_t2",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.active == True",
+            normalized_expression="output.active == True",
+            description="True capitalized",
+            support_count=5,
+            confidence=1.0,
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+
+        norm1 = rule_normalizer.normalize_discovered_candidate(cand_t1)
+        norm2 = rule_normalizer.normalize_discovered_candidate(cand_t2)
+        assert norm1.normalized_expected_behavior["expected_value"] is True
+        assert norm2.normalized_expected_behavior["expected_value"] is True
+        assert norm1.fingerprint == norm2.fingerprint
+

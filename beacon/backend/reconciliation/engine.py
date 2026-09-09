@@ -161,8 +161,15 @@ class RuleReconciliationEngine:
                     if existing.source_type != r.source_type or existing.source_type == RuleProvenanceSource.MERGED
                     else existing.source_type
                 )
-                fused_support = max(existing.support_count, r.support_count) + 1
-                fused_conf = max(existing.confidence, r.confidence)
+                # Aggregate empirical counts accurately without fabrication
+                if fused_in:
+                    fused_support = max(len(fused_in), max(existing.support_count, r.support_count))
+                else:
+                    fused_support = max(existing.support_count, r.support_count)
+                fused_contra = max(existing.contradiction_count, r.contradiction_count)
+                fused_unknown = max(existing.unknown_count, r.unknown_count)
+                fused_app = fused_support + fused_contra
+                fused_conf = round(fused_support / fused_app, 4) if fused_app > 0 else max(existing.confidence, r.confidence)
 
                 dedup_list[match_idx] = existing.model_copy(update={
                     "source_type": fused_source,
@@ -172,6 +179,9 @@ class RuleReconciliationEngine:
                     "source_candidate_ids": fused_cf,
                     "candidate_fingerprints": fused_fp,
                     "support_count": fused_support,
+                    "contradiction_count": fused_contra,
+                    "unknown_count": fused_unknown,
+                    "applicable_count": fused_app,
                     "confidence": fused_conf,
                 })
 
@@ -280,11 +290,12 @@ class RuleReconciliationEngine:
         approved_oracle_rules.sort(key=lambda r: (r.fingerprint, r.role_scope, r.rule_id))
 
         # ----------------------------------------------------------------------
-        # 6. OracleSet Construction
+        # 6. OracleSet Construction (Fail-Closed: Any unresolved conflict -> BLOCKED)
         # ----------------------------------------------------------------------
+        unresolved_conflicts = [c for c in conflicts if c.resolution_status == "UNRESOLVED"]
         oracle_set_status = (
             OracleSetStatus.BLOCKED
-            if (conflicts and not active_policy.allow_unresolved_conflicts_in_ready)
+            if unresolved_conflicts
             else OracleSetStatus.READY
         )
 

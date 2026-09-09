@@ -41,14 +41,26 @@ class RuleComparator:
             )
             return RuleRelationship.CONFLICT, reason
 
-        # 5. One rule is a specialization (narrower condition) with distinct or compatible outcome
+        # 5. One rule is a specialization (narrower condition)
         if cond_rel == "A_SPECIALIZES_B":
+            if exp_rel == "CONFLICT":
+                return RuleRelationship.CONFLICT, (
+                    f"Incompatible outcome in specialized condition: Rule '{rule_a.source_id}' expects "
+                    f"{rule_a.normalized_expected_behavior} while generalized Rule '{rule_b.source_id}' expects "
+                    f"{rule_b.normalized_expected_behavior}."
+                )
             return RuleRelationship.SPECIALIZATION, (
-                f"Rule '{rule_a.source_id}' specializes Rule '{rule_b.source_id}' with additional constraints."
+                f"Rule '{rule_a.source_id}' specializes Rule '{rule_b.source_id}' with compatible constraints."
             )
         if cond_rel == "B_SPECIALIZES_A":
+            if exp_rel == "CONFLICT":
+                return RuleRelationship.CONFLICT, (
+                    f"Incompatible outcome in specialized condition: Rule '{rule_b.source_id}' expects "
+                    f"{rule_b.normalized_expected_behavior} while generalized Rule '{rule_a.source_id}' expects "
+                    f"{rule_a.normalized_expected_behavior}."
+                )
             return RuleRelationship.GENERALIZATION, (
-                f"Rule '{rule_a.source_id}' generalizes Rule '{rule_b.source_id}' with broader applicability."
+                f"Rule '{rule_a.source_id}' generalizes Rule '{rule_b.source_id}' with compatible applicability."
             )
 
         # 6. Equivalent conditions and compatible outcomes
