@@ -222,6 +222,11 @@ app.include_router(controlled_router)
 from api.discovery_router import discovery_router
 app.include_router(discovery_router)
 
+# Phase 7 (V2) Rule Reconciliation & OracleSet Generation Routes
+from api.reconciliation_router import reconciliation_router
+app.include_router(reconciliation_router)
+
+
 
 
 
