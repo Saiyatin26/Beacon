@@ -184,18 +184,15 @@ class ReconciliationPolicy(BaseModel):
     # Deprecated fields retained for schema compatibility; fail-closed behavior is always enforced
     allow_unresolved_conflicts_in_ready: bool = False  # Deprecated: engine always marks unresolved conflicts as BLOCKED
     prefer_user_rules_on_conflict: bool = False        # Deprecated: engine always preserves both rules and flags conflict
-    auto_merge_equivalent_rules: bool = True
+    auto_merge_equivalent_rules: bool = True           # Deprecated: semantic merging of equivalent rules is mandatory
     policy_version: str = "1.0.0"
 
     def compute_policy_hash(self) -> str:
-        """Computes a deterministic SHA-256 fingerprint of the policy configuration."""
+        """Computes a deterministic SHA-256 fingerprint of the effective policy configuration."""
         d = {
             "require_validated_candidates": self.require_validated_candidates,
             "minimum_support_count": self.minimum_support_count,
             "minimum_confidence": self.minimum_confidence,
-            "allow_unresolved_conflicts_in_ready": self.allow_unresolved_conflicts_in_ready,
-            "prefer_user_rules_on_conflict": self.prefer_user_rules_on_conflict,
-            "auto_merge_equivalent_rules": self.auto_merge_equivalent_rules,
             "policy_version": self.policy_version,
         }
         return compute_deterministic_hash(d)

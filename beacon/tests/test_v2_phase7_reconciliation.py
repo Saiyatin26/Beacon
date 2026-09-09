@@ -862,4 +862,51 @@ class TestPhase7RuleReconciliation:
         if rel == RuleRelationship.CONFLICT:
             assert True
 
+    # --------------------------------------------------------------------------
+    # 20. Unresolved Conflicts Provenance Count (Final Fix #2)
+    # --------------------------------------------------------------------------
+    def test_unresolved_conflicts_provenance_count(self):
+        """OracleSet provenance accurately distinguishes total conflicts from unresolved conflicts."""
+        engine = RuleReconciliationEngine()
+
+        pred1 = RulePredicate(field="code", operator=RuleOperator.EQ, value="US")
+        u1 = BusinessRule(rule_id="u_conf1", name="U1", condition=pred1, expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="tax", expected_value=0.05), status=RuleStatus.ACTIVE)
+        u2 = BusinessRule(rule_id="u_conf2", name="U2", condition=pred1, expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="tax", expected_value=0.10), status=RuleStatus.ACTIVE)
+
+        res = engine.reconcile(application_id="app_unresolved_prov", user_rules=[u1, u2], persist=False)
+        assert res.oracle_set.provenance["total_conflicts"] == 1
+        assert res.oracle_set.provenance["unresolved_conflicts"] == 1
+
+    # --------------------------------------------------------------------------
+    # 21. Policy Hash Invariance to Deprecated Compatibility Fields (Final Fix #4 & #5)
+    # --------------------------------------------------------------------------
+    def test_effective_policy_hash_invariance_to_deprecated_fields(self):
+        """Deprecated compatibility fields do not alter the effective semantic policy hash."""
+        p_default = ReconciliationPolicy(
+            require_validated_candidates=True,
+            minimum_support_count=2,
+            minimum_confidence=0.8,
+            allow_unresolved_conflicts_in_ready=False,
+            prefer_user_rules_on_conflict=False,
+            auto_merge_equivalent_rules=True,
+        )
+        p_deprecated_flipped = ReconciliationPolicy(
+            require_validated_candidates=True,
+            minimum_support_count=2,
+            minimum_confidence=0.8,
+            allow_unresolved_conflicts_in_ready=True,
+            prefer_user_rules_on_conflict=True,
+            auto_merge_equivalent_rules=False,
+        )
+
+        assert p_default.compute_policy_hash() == p_deprecated_flipped.compute_policy_hash()
+
+        # Changing an effective parameter changes the hash
+        p_effective_changed = ReconciliationPolicy(
+            require_validated_candidates=True,
+            minimum_support_count=5,  # changed
+            minimum_confidence=0.8,
+        )
+        assert p_default.compute_policy_hash() != p_effective_changed.compute_policy_hash()
+
 

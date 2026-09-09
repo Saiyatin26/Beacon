@@ -317,7 +317,8 @@ class RuleReconciliationEngine:
                 "input_candidates": len(all_candidates),
                 "eligible_candidates": len(eligible_candidates),
                 "merged_rules": merged_count,
-                "unresolved_conflicts": len(conflicts),
+                "total_conflicts": len(conflicts),
+                "unresolved_conflicts": len(unresolved_conflicts),
             },
         )
 
