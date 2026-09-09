@@ -163,13 +163,16 @@ class RuleReconciliationEngine:
                 )
                 # Aggregate empirical counts accurately without fabrication
                 if fused_in:
-                    fused_support = max(len(fused_in), max(existing.support_count, r.support_count))
+                    fused_support = len(fused_in)
                 else:
                     fused_support = max(existing.support_count, r.support_count)
                 fused_contra = max(existing.contradiction_count, r.contradiction_count)
                 fused_unknown = max(existing.unknown_count, r.unknown_count)
-                fused_app = fused_support + fused_contra
-                fused_conf = round(fused_support / fused_app, 4) if fused_app > 0 else max(existing.confidence, r.confidence)
+                fused_app = fused_support + fused_contra + fused_unknown
+                valid_den = fused_support + fused_contra
+                fused_conf = round(fused_support / valid_den, 4) if valid_den > 0 else (
+                    min(existing.confidence, r.confidence) if existing.confidence > 0 and r.confidence > 0 else max(existing.confidence, r.confidence)
+                )
 
                 dedup_list[match_idx] = existing.model_copy(update={
                     "source_type": fused_source,

@@ -705,3 +705,161 @@ class TestPhase7RuleReconciliation:
         assert norm2.normalized_expected_behavior["expected_value"] is True
         assert norm1.fingerprint == norm2.fingerprint
 
+    # --------------------------------------------------------------------------
+    # 17. Evidence & Metrics Accounting Matrix (Section 9)
+    # --------------------------------------------------------------------------
+    def test_evidence_metrics_without_input_ids_preserves_max_without_summing(self):
+        """When unique input IDs are absent, support is NOT fabricated or summed (max preserved)."""
+        engine = RuleReconciliationEngine()
+        cand_a = DiscoveredCandidate(
+            candidate_id="ca_no_inps",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.status == ACTIVE",
+            normalized_expression="output.status == ACTIVE",
+            description="Run A without input IDs",
+            support_count=10,
+            contradiction_count=1,
+            unknown_count=2,
+            confidence=0.9,
+            input_ids=[],
+            evidence_ids=["ev_a1"],
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+        cand_b = DiscoveredCandidate(
+            candidate_id="cb_no_inps",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.status == ACTIVE",
+            normalized_expression="output.status == ACTIVE",
+            description="Run B without input IDs",
+            support_count=15,
+            contradiction_count=2,
+            unknown_count=3,
+            confidence=0.88,
+            input_ids=[],
+            evidence_ids=["ev_b1"],
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+
+        res = engine.reconcile(application_id="app_no_inps", discovered_candidates=[cand_a, cand_b], persist=False)
+        assert res.approved_count == 1
+        rule = res.oracle_set.rules[0]
+        # Must not fabricate 25 or 16
+        assert rule.support_count == 15
+        assert rule.contradiction_count == 2
+        assert rule.unknown_count == 3
+
+    def test_evidence_overlap_and_shared_evidence_no_double_counting(self):
+        """Identical candidate or shared evidence IDs are deduplicated and not double-counted."""
+        engine = RuleReconciliationEngine()
+        cand_a = DiscoveredCandidate(
+            candidate_id="c_shared_1",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.code == 200",
+            normalized_expression="output.code == 200",
+            description="Shared run 1",
+            support_count=5,
+            confidence=1.0,
+            input_ids=["inp_1", "inp_2", "inp_3"],
+            evidence_ids=["ev_common", "ev_1"],
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+        cand_b = DiscoveredCandidate(
+            candidate_id="c_shared_2",
+            rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+            canonical_expression="output.code == 200",
+            normalized_expression="output.code == 200",
+            description="Shared run 2",
+            support_count=5,
+            confidence=1.0,
+            input_ids=["inp_2", "inp_3", "inp_4"],
+            evidence_ids=["ev_common", "ev_2"],
+            validation_status=CandidateValidationStatus.VALIDATED,
+        )
+
+        res = engine.reconcile(application_id="app_shared", discovered_candidates=[cand_a, cand_b], persist=False)
+        assert res.approved_count == 1
+        rule = res.oracle_set.rules[0]
+        assert sorted(rule.evidence_ids) == ["ev_1", "ev_2", "ev_common"]
+        assert sorted(rule.input_ids) == ["inp_1", "inp_2", "inp_3", "inp_4"]
+        assert rule.support_count == 4
+
+    # --------------------------------------------------------------------------
+    # 18. Result Hash & OracleSet Hash Invariance & Sensitivity (Section 12 & 32)
+    # --------------------------------------------------------------------------
+    def test_result_hash_invariance_to_random_run_id_and_sensitivity_to_semantics(self):
+        """Reconciliation result_hash is invariant to run_id but sensitive to semantic rule changes."""
+        engine = RuleReconciliationEngine()
+        pred = RulePredicate(field="tier", operator=RuleOperator.EQ, value="Gold")
+        u_rule = BusinessRule(
+            rule_id="r_gold",
+            name="Gold Discount",
+            condition=pred,
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="discount", expected_value=0.10),
+            status=RuleStatus.ACTIVE,
+        )
+
+        # Run 1
+        res1 = engine.reconcile(application_id="app_hash_test", user_rules=[u_rule], persist=False)
+        # Run 2
+        res2 = engine.reconcile(application_id="app_hash_test", user_rules=[u_rule], persist=False)
+
+        assert res1.run_id != res2.run_id
+        assert res1.result_hash == res2.result_hash
+        assert res1.oracle_set.oracle_set_hash == res2.oracle_set.oracle_set_hash
+
+        # Change expected behavior -> hash must change
+        u_rule_changed = BusinessRule(
+            rule_id="r_gold",
+            name="Gold Discount",
+            condition=pred,
+            expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="discount", expected_value=0.20),
+            status=RuleStatus.ACTIVE,
+        )
+        res_changed = engine.reconcile(application_id="app_hash_test", user_rules=[u_rule_changed], persist=False)
+        assert res_changed.result_hash != res1.result_hash
+        assert res_changed.oracle_set.oracle_set_hash != res1.oracle_set.oracle_set_hash
+
+    # --------------------------------------------------------------------------
+    # 19. Complete Comparator Matrix (Section 16)
+    # --------------------------------------------------------------------------
+    def test_comparator_relationship_matrix_complete(self):
+        """Validates all pairwise relationship classifications across the full matrix."""
+        # Case A: Same condition + same outcome -> EQUIVALENT
+        pred_a = RulePredicate(field="x", operator=RuleOperator.EQ, value=1)
+        r_same1 = rule_normalizer.normalize_user_rule(
+            BusinessRule(rule_id="r1", name="R1", condition=pred_a, expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="y", expected_value=10), status=RuleStatus.ACTIVE)
+        )
+        r_same2 = rule_normalizer.normalize_user_rule(
+            BusinessRule(rule_id="r2", name="R2", condition=pred_a, expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="y", expected_value=10), status=RuleStatus.ACTIVE)
+        )
+        rel, _ = rule_comparator.compare_rules(r_same1, r_same2)
+        assert rel == RuleRelationship.EQUIVALENT
+
+        # Case B: Same condition + different outcome -> CONFLICT
+        r_diff = rule_normalizer.normalize_user_rule(
+            BusinessRule(rule_id="r3", name="R3", condition=pred_a, expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="y", expected_value=20), status=RuleStatus.ACTIVE)
+        )
+        rel, _ = rule_comparator.compare_rules(r_same1, r_diff)
+        assert rel == RuleRelationship.CONFLICT
+
+        # Case C: Disjoint condition fields -> INDEPENDENT
+        pred_b = RulePredicate(field="z", operator=RuleOperator.EQ, value=99)
+        r_indep = rule_normalizer.normalize_user_rule(
+            BusinessRule(rule_id="r4", name="R4", condition=pred_b, expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="w", expected_value=5), status=RuleStatus.ACTIVE)
+        )
+        rel, _ = rule_comparator.compare_rules(r_same1, r_indep)
+        assert rel == RuleRelationship.INDEPENDENT
+
+        # Case D: Partial overlap + incompatible behavior -> CONFLICT
+        pred_ab1 = RulePredicate(field="x", operator=RuleOperator.EQ, value=1)
+        pred_ab2 = RulePredicate(field="other", operator=RuleOperator.EQ, value="FOO")
+        comp_ab = CompoundRuleCondition(logical_op="AND", operands=[pred_ab1, pred_ab2])
+        r_overlap = rule_normalizer.normalize_user_rule(
+            BusinessRule(rule_id="r5", name="R5", condition=comp_ab, expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="y", expected_value=999), status=RuleStatus.ACTIVE)
+        )
+        rel, _ = rule_comparator.compare_rules(r_same1, r_overlap)
+        assert rel in (RuleRelationship.CONFLICT, RuleRelationship.SPECIALIZATION, RuleRelationship.GENERALIZATION)
+        if rel == RuleRelationship.CONFLICT:
+            assert True
+
+

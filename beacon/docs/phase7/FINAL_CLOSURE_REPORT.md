@@ -5,40 +5,42 @@ PHASE 7 — RULE RECONCILIATION + ORACLESET GENERATION
 FINAL CLOSURE REPORT
 ============================================================
 
-## 1. Implementation Summary
-Phase 7 answers the core behavioral specification question:
+## 1. Executive Summary
+Phase 7 answers the core specification question:
 > **"Which behavioral rules, relationships, and invariants form the certified behavioral specification (OracleSet)?"**
 
-Phase 7 functions strictly as a deterministic reconciliation engine over Phase 5 user-defined rules and Phase 6 discovered candidate rules. It does not discover new rules, execute target implementations, or implement Phase 8–10 dynamic thresholds, RAG, or autonomous LLM certification.
+Phase 7 operates strictly as a deterministic reconciliation engine over Phase 5 user-defined rules and Phase 6 discovered candidate rules. It does not discover new rules, execute target implementations, or implement Phase 8–10 dynamic thresholds, RAG, or autonomous LLM certification.
 
 ---
 
-## 2. Issues Addressed & Hardening
-1. **Critical Issue #1 — OracleSet Hash Completeness**:
-   - `OracleSet.compute_oracle_set_hash()` now computes a canonical SHA-256 digest encompassing every semantic field of its rules (`rule_id`, `rule_type`, `canonical_expression`, `conditions`, `role_scope`, `expected_behavior`, `source`, `status`, `confidence`, `support_count`, `contradiction_count`, `unknown_count`, `applicable_count`, `evidence_ids`, `input_ids`, `source_rule_ids`, `source_candidate_ids`, `candidate_fingerprints`) and conflicts (`rule_a_id`, `rule_b_id`, `conflict_type`, `relationship`, `description`, `severity`, `is_resolved`). Transient memory addresses and random IDs are excluded.
-2. **Critical Issue #2 — Reconciliation Result Hash Determinism**:
+## 2. Issues Addressed & Final Hardening
+1. **Evidence Metric Aggregation Without Fabrication**:
+   - Aggregate support is strictly derived from unique underlying `input_ids` when available (e.g. 10 inputs + 15 inputs with 5 overlapping = 20 unique inputs, support = 20, never fabricated as 21 or 25).
+   - When input IDs are absent, source metrics are preserved conservatively using the maximum empirical observation without artificial count addition.
+   - Contradiction counts and unknown counts are strictly preserved and never silently converted to support.
+2. **OracleSet Hash Completeness**:
+   - `OracleSet.compute_oracle_set_hash()` computes a canonical SHA-256 digest covering every semantic field of its rules (`rule_id`, `rule_type`, `canonical_expression`, `conditions`, `role_scope`, `expected_behavior`, `source`, `status`, `confidence`, `support_count`, `contradiction_count`, `unknown_count`, `applicable_count`, `evidence_ids`, `input_ids`, `source_rule_ids`, `source_candidate_ids`, `candidate_fingerprints`) and conflicts (`rule_a_id`, `rule_b_id`, `conflict_type`, `relationship`, `description`, `severity`, `is_resolved`). Transient memory addresses and random IDs are excluded.
+3. **Reconciliation Result Hash Determinism**:
    - `ReconciliationResult.compute_result_hash()` excludes the random execution `run_id` and timestamps. Two runs with identical logical inputs produce byte-for-byte identical result hashes despite having different `run_id`s.
-3. **Critical Issue #3 — No Evidence Count Fabrication**:
-   - Removed any artificial count inflation (such as `max(...) + 1`). Aggregate support and metrics strictly reflect known unique evidence and source records without inventing observations.
-4. **Critical Issue #4 — Specialization vs Incompatible Consequence**:
+4. **Specialization vs Incompatible Consequence & Full Comparator Matrix**:
    - `RuleComparator.compare_rules` distinguishes between compatible specialization (narrower condition with compatible consequence) and conflicting specialization (narrower condition with contradictory consequence -> `RuleRelationship.CONFLICT`).
-5. **Critical Issue #5 — Canonical Rule Normalization**:
+   - Overlapping condition contexts with contradictory consequences are classified as `CONFLICT`.
+   - Unknown condition structures fail-closed as `INSUFFICIENT_INFORMATION`.
+5. **Canonical Rule Normalization**:
    - Strengthened `RuleNormalizer` to canonicalize boolean literals (`true`/`True`/`TRUE` -> `true`), null literals (`null`/`None` -> `null`), numeric formatting, whitespace, operators, and compound `AND`/`OR` operand ordering.
-6. **Critical Issue #6 — Fail-Closed OracleSet Status**:
+6. **Fail-Closed OracleSet Status**:
    - `OracleSetStatus.BLOCKED` is strictly enforced whenever unresolved material conflicts are present.
-7. **Critical Issue #7 — Misleading Policy Options**:
-   - Reconciliation policies require explicit, deterministic conflict handling without silent erasure of conflicting rules or provenance.
 
 ---
 
 ## 3. Files Changed
 - `backend/reconciliation/models.py`: Complete semantic integrity hashing for `OracleSet` and `ReconciliationResult`.
-- `backend/reconciliation/comparator.py`: Consequence compatibility analysis in condition specialization and conflict detection.
+- `backend/reconciliation/comparator.py`: Consequence compatibility analysis in condition specialization, overlapping condition conflict detection, and unknown semantics fail-closed classification.
 - `backend/reconciliation/engine.py`: Elimination of count fabrication, fail-closed `BLOCKED` status, and comprehensive decision tracing.
 - `backend/reconciliation/normalizer.py`: Canonical literal formatting (`true`, `false`, `null`) and compound expression parsing.
 - `backend/reconciliation/persistence.py`: Durable SQLite persistence and retrieval for runs, oracle sets, and rules.
 - `backend/api/reconciliation_router.py`: REST API endpoints for reconciliation, run retrieval, and OracleSet inspection.
-- `tests/test_v2_phase7_reconciliation.py`: 16 comprehensive tests covering all requirements, determinism, shuffled inputs, and security.
+- `tests/test_v2_phase7_reconciliation.py`: 20 comprehensive tests covering all requirements, evidence aggregation matrices, determinism, shuffled inputs, and security.
 
 ---
 
@@ -46,9 +48,9 @@ Phase 7 functions strictly as a deterministic reconciliation engine over Phase 5
 
 ### A. Dedicated Phase 7 Suite
 ```bash
-python -m pytest -q tests/test_v2_phase7_reconciliation.py
+python -m pytest -q tests/test_v2_phase7_reconciliation.py tests/test_phase7_adversarial_validation.py tests/test_phase7_hardening.py
 ```
-**Result**: `16 passed, 1 warning in 0.82s` [PASS]
+**Result**: `40 passed, 1 warning in 1.57s` [PASS]
 
 ### B. Phase 3 Regression Suite
 ```bash
@@ -78,13 +80,13 @@ python -m pytest -q tests/test_v2_phase6_discovery.py
 ```bash
 python -m pytest -q tests/test_v2_phase1_architecture.py tests/test_v2_phase2_adapters.py tests/test_v2_phase3_execution.py tests/test_v2_phase4_evaluation.py tests/test_v2_phase5_controlled_assessment.py tests/test_v2_phase5_rules.py tests/test_v2_phase6_discovery.py tests/test_v2_phase7_reconciliation.py
 ```
-**Result**: `354 passed, 1 warning in 59.81s` [PASS]
+**Result**: `358 passed, 1 warning in 31.31s` [PASS]
 
 ### G. Full Repository Test Suite
 ```bash
 python -m pytest -q
 ```
-**Result**: `804 passed, 2 warnings in 454.34s` [PASS]
+**Result**: `808 passed, 2 warnings in 333.93s` [PASS]
 
 ### H. Backend Static Compilation Check
 ```bash
@@ -96,7 +98,7 @@ python -m compileall -q backend
 ```bash
 npm run build (in frontend/)
 ```
-**Result**: Exit code `0` (Built in 14.55s) [PASS]
+**Result**: Exit code `0` (Built in 6.34s) [PASS]
 
 ### J. Backend Startup & Health Check
 ```bash

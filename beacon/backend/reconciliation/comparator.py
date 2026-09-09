@@ -71,10 +71,27 @@ class RuleComparator:
         if cond_rel == "DISJOINT":
             return RuleRelationship.INDEPENDENT, "Rules operate on disjoint condition fields."
 
+        # 8. Overlapping conditions
+        if cond_rel == "OVERLAPPING":
+            if exp_rel == "CONFLICT":
+                return RuleRelationship.CONFLICT, (
+                    f"Conflicting outcomes for overlapping conditions on shared fields: "
+                    f"Rule '{rule_a.source_id}' expects {rule_a.normalized_expected_behavior} whereas "
+                    f"Rule '{rule_b.source_id}' expects {rule_b.normalized_expected_behavior}."
+                )
+            return RuleRelationship.COMPATIBLE, "Rules operate on overlapping conditions with compatible consequences."
+
+        # 9. Unknown condition semantics fail-closed
+        if cond_rel == "UNKNOWN":
+            return RuleRelationship.INSUFFICIENT_INFORMATION, (
+                f"Insufficient condition information to determine relationship between "
+                f"Rule '{rule_a.source_id}' and Rule '{rule_b.source_id}'."
+            )
+
         return RuleRelationship.COMPATIBLE, "Rules operate on compatible, non-conflicting behavioral scopes."
 
     def _compare_conditions(self, cond_a: dict[str, Any], cond_b: dict[str, Any]) -> str:
-        """Determines if condition A and B are SAME, A_SPECIALIZES_B, B_SPECIALIZES_A, or DISJOINT."""
+        """Determines if condition A and B are SAME, A_SPECIALIZES_B, B_SPECIALIZES_A, DISJOINT, OVERLAPPING, or UNKNOWN."""
         if not cond_a and not cond_b:
             return "SAME"
         if not cond_a and cond_b:
@@ -87,11 +104,20 @@ class RuleComparator:
             return "SAME"
 
         # Check atomic predicates
-        pred_a = self._extract_predicates(cond_a)
-        pred_b = self._extract_predicates(cond_b)
+        try:
+            pred_a = self._extract_predicates(cond_a)
+            pred_b = self._extract_predicates(cond_b)
+        except Exception:
+            return "UNKNOWN"
 
-        set_a = {(p.get("field"), p.get("operator"), str(p.get("value"))) for p in pred_a}
-        set_b = {(p.get("field"), p.get("operator"), str(p.get("value"))) for p in pred_b}
+        if not pred_a and not pred_b:
+            return "UNKNOWN"
+
+        set_a = {(p.get("field"), p.get("operator"), str(p.get("value"))) for p in pred_a if p.get("field")}
+        set_b = {(p.get("field"), p.get("operator"), str(p.get("value"))) for p in pred_b if p.get("field")}
+
+        if not set_a or not set_b:
+            return "UNKNOWN"
 
         if set_a == set_b:
             return "SAME"
