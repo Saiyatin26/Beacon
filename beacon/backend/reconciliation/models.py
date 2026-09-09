@@ -170,14 +170,20 @@ ReconciledRule = OracleRule
 
 
 class ReconciliationPolicy(BaseModel):
-    """Configuration governing Phase 7 candidate eligibility, deduplication, and approval."""
+    """Configuration governing Phase 7 candidate eligibility, deduplication, and approval.
+    
+    Fail-Closed Guarantees:
+    - Unresolved material conflicts ALWAYS result in OracleSetStatus.BLOCKED.
+    - No silent automatic overrides are permitted between conflicting rules.
+    """
     model_config = ConfigDict(extra="ignore")
 
     require_validated_candidates: bool = True  # Only admit Phase 6 VALIDATED candidates
     minimum_support_count: int = 2
     minimum_confidence: float = 0.8
-    allow_unresolved_conflicts_in_ready: bool = False  # Sets OracleSet to BLOCKED if conflicts exist
-    prefer_user_rules_on_conflict: bool = False        # If False, never silently override; record conflict
+    # Deprecated fields retained for schema compatibility; fail-closed behavior is always enforced
+    allow_unresolved_conflicts_in_ready: bool = False  # Deprecated: engine always marks unresolved conflicts as BLOCKED
+    prefer_user_rules_on_conflict: bool = False        # Deprecated: engine always preserves both rules and flags conflict
     auto_merge_equivalent_rules: bool = True
     policy_version: str = "1.0.0"
 
