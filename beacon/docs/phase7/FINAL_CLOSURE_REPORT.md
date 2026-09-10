@@ -40,7 +40,7 @@ Phase 7 operates strictly as a deterministic reconciliation engine over Phase 5 
 - `backend/reconciliation/normalizer.py`: Canonical literal formatting (`true`, `false`, `null`) and compound expression parsing.
 - `backend/reconciliation/persistence.py`: Durable SQLite persistence and retrieval for runs, oracle sets, and rules.
 - `backend/api/reconciliation_router.py`: REST API endpoints for reconciliation, run retrieval, and OracleSet inspection.
-- `tests/test_v2_phase7_reconciliation.py`: 20 comprehensive tests covering all requirements, evidence aggregation matrices, determinism, shuffled inputs, and security.
+- `tests/test_v2_phase7_reconciliation.py`: 22 comprehensive tests covering all requirements, evidence aggregation matrices, determinism, shuffled inputs, security, unresolved-conflicts provenance count, and deprecated policy hash invariance.
 
 ---
 
@@ -50,7 +50,7 @@ Phase 7 operates strictly as a deterministic reconciliation engine over Phase 5 
 ```bash
 python -m pytest -q tests/test_v2_phase7_reconciliation.py tests/test_phase7_adversarial_validation.py tests/test_phase7_hardening.py
 ```
-**Result**: `42 passed, 1 warning in 2.45s` [PASS]
+**Result**: `42 passed, 1 warning in 2.13s` [PASS]
 
 ### B. Phase 3 Regression Suite
 ```bash
@@ -80,13 +80,13 @@ python -m pytest -q tests/test_v2_phase6_discovery.py
 ```bash
 python -m pytest -q tests/test_v2_phase1_architecture.py tests/test_v2_phase2_adapters.py tests/test_v2_phase3_execution.py tests/test_v2_phase4_evaluation.py tests/test_v2_phase5_controlled_assessment.py tests/test_v2_phase5_rules.py tests/test_v2_phase6_discovery.py tests/test_v2_phase7_reconciliation.py
 ```
-**Result**: `360 passed, 1 warning in 27.71s` [PASS]
+**Result**: `360 passed, 1 warning in 34.24s` [PASS]
 
 ### G. Full Repository Test Suite
 ```bash
 python -m pytest -q
 ```
-**Result**: `810 passed, 2 warnings in 315.53s` [PASS]
+**Result**: `810 passed, 2 warnings in 296.53s (0:04:56)` [PASS]
 
 ### H. Backend Static Compilation Check
 ```bash
@@ -104,13 +104,13 @@ python -c "import pymongo; print(pymongo.__version__)"
 ```bash
 npm run build (in frontend/)
 ```
-**Result**: Exit code `0` (Built in 3.81s) [PASS]
+**Result**: Exit code `0` (Built in 17.34s, 829 modules transformed) [PASS]
 
 ### K. Backend Startup & Health Check
 ```bash
 python -c "from fastapi.testclient import TestClient; from backend.api.main import app; client = TestClient(app); r = client.get('/health'); assert r.status_code == 200; print(r.json())"
 ```
-**Result**: `HEALTH CHECK PASSED: {'status': 'ok'}` [PASS]
+**Result**: `200 {'status': 'ok', 'version': '1.0.0'}` [PASS]
 
 ---
 
