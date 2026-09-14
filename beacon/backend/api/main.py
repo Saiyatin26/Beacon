@@ -230,6 +230,10 @@ app.include_router(reconciliation_router)
 from api.threshold_router import threshold_router
 app.include_router(threshold_router)
 
+# Phase 9 (V2) Company Knowledge RAG Infrastructure Routes
+from api.knowledge_router import knowledge_router
+app.include_router(knowledge_router)
+
 
 
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import ControlledMode from "./ControlledMode";
 import ThresholdMode from "./ThresholdMode";
+import KnowledgeMode from "./KnowledgeMode";
 
 
 // Environment-based API Base URL with safe production & development defaults
@@ -1043,6 +1044,7 @@ export default function App() {
             { id: "benchmark", label: "🎯 Benchmark Certification", desc: "Select & Certify Applications" },
             { id: "controlled", label: "⚖️ Controlled Mode", desc: "Business Rules & Behavioral Compliance" },
             { id: "thresholds", label: "⚡ Dynamic Thresholds", desc: "Evidence-Driven & Bounded Evaluation" },
+            { id: "knowledge", label: "📚 Company Knowledge", desc: "Optional RAG Ingestion & Retrieval" },
             { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },
             { id: "dossier", label: "📑 Evidence Dossier", desc: "Explainability & Traceability" },
             { id: "operations", label: "⚙️ Operations & Reliability", desc: "System Health, Metrics & Jobs" },
@@ -3482,6 +3484,18 @@ export default function App() {
         {/* ========================================================================= */}
         {activeTab === "thresholds" && (
           <ThresholdMode
+            apiBase={API_BASE}
+            authFetch={authFetch}
+            badgeStyle={badgeStyle}
+            cardStyle={cardStyle}
+          />
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: COMPANY KNOWLEDGE (PHASE 9 OPTIONAL RAG INFRASTRUCTURE)               */}
+        {/* ========================================================================= */}
+        {activeTab === "knowledge" && (
+          <KnowledgeMode
             apiBase={API_BASE}
             authFetch={authFetch}
             badgeStyle={badgeStyle}
