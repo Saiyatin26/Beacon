@@ -291,7 +291,7 @@ export default function KnowledgeMode({ apiBase = "", authFetch, badgeStyle, car
               <input
                 id="knowledge-file-picker"
                 type="file"
-                accept=".pdf,.docx,.txt"
+                accept=".pdf,.docx"
                 onChange={(e) => setSelectedFile(e.target.files[0] || null)}
                 style={{
                   width: "100%",

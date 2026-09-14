@@ -28,6 +28,7 @@ from .security import (
     PathTraversalError,
     detect_document_type,
     sanitize_filename,
+    validate_application_id,
     validate_file_size,
     validate_path_containment,
 )
@@ -37,7 +38,6 @@ from .extraction import (
     DocumentExtractionError,
     EmptyDocumentError,
     PDFExtractor,
-    TextExtractor,
     TextNormalizer,
     extract_document_content,
 )
@@ -67,6 +67,7 @@ __all__ = [
     "DEFAULT_MAX_FILE_SIZE_MB",
     "detect_document_type",
     "sanitize_filename",
+    "validate_application_id",
     "validate_file_size",
     "validate_path_containment",
     "DeterministicChunker",
@@ -74,7 +75,6 @@ __all__ = [
     "EmptyDocumentError",
     "PDFExtractor",
     "DOCXExtractor",
-    "TextExtractor",
     "TextNormalizer",
     "extract_document_content",
     "KnowledgePersistenceStore",

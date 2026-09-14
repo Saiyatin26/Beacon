@@ -138,11 +138,17 @@ class DeterministicLexicalRetriever:
             )
 
         status = RetrievalStatus.SUCCESS_WITH_RESULTS if retrieved_list else RetrievalStatus.SUCCESS_NO_RESULTS
+        effective_policy = policy or RetrievalPolicy(
+            top_k=bounded_top_k,
+            min_relevance_score=effective_min_score,
+            retrieval_strategy="LEXICAL_BM25",
+        )
 
         context = KnowledgeContext(
             query=clean_query,
             application_id=application_id,
             status=status,
+            policy=effective_policy,
             retrieved_chunks=retrieved_list,
             total_chunks_evaluated=len(chunks),
             sources=sorted(list(source_filenames)),

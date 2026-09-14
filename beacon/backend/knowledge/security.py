@@ -42,6 +42,29 @@ DEFAULT_MAX_FILE_SIZE_BYTES = DEFAULT_MAX_FILE_SIZE_MB * 1024 * 1024
 DEFAULT_KNOWLEDGE_STORAGE_ROOT = Path(os.getenv("KNOWLEDGE_STORAGE_ROOT", "data/knowledge_store")).resolve()
 
 
+def validate_application_id(application_id: str) -> str:
+    """Validates untrusted application/scope identifier before filesystem or storage operations.
+    
+    Rejects dot segments, path separators, traversal characters, and non-alphanumeric identifiers.
+    """
+    if not application_id or not isinstance(application_id, str):
+        raise PathTraversalError("Invalid application identifier: application_id must be a non-empty string.")
+    
+    app_id = application_id.strip()
+    if not app_id or app_id in (".", ".."):
+        raise PathTraversalError("Invalid application identifier: empty or dot navigation identifier.")
+    
+    # Check for path traversal / directory separator characters
+    if "/" in app_id or "\\" in app_id or ".." in app_id:
+        raise PathTraversalError(f"Invalid application identifier: '{application_id}' contains directory traversal characters.")
+    
+    # Restrict to safe alphanumeric, underscores, hyphens, and dots (not starting or ending with dot)
+    if not re.match(r"^[a-zA-Z0-9_-][a-zA-Z0-9_\-\.]*$", app_id) or app_id.startswith(".") or app_id.endswith("."):
+        raise PathTraversalError(f"Invalid application identifier: '{application_id}' contains illegal characters.")
+        
+    return app_id
+
+
 def sanitize_filename(filename: str) -> str:
     """Sanitizes an untrusted user-supplied filename, stripping dangerous path characters."""
     if not filename or not filename.strip():
@@ -91,7 +114,10 @@ def validate_file_size(content: bytes, max_bytes: int = DEFAULT_MAX_FILE_SIZE_BY
 
 
 def detect_document_type(filename: str, content: bytes) -> DocumentType:
-    """Determines and validates the document type from filename extension and content signature."""
+    """Determines and validates the document type from filename extension and content signature.
+    
+    Phase 9 explicitly supports only PDF and DOCX documents.
+    """
     lower_fn = filename.lower().strip()
     
     if lower_fn.endswith(".pdf"):
@@ -100,8 +126,6 @@ def detect_document_type(filename: str, content: bytes) -> DocumentType:
     elif lower_fn.endswith(".docx"):
         validate_docx_signature(content)
         return DocumentType.DOCX
-    elif lower_fn.endswith(".txt") or lower_fn.endswith(".text"):
-        return DocumentType.TEXT
     else:
         raise KnowledgeSecurityError(
             f"Unsupported document format for '{filename}'. Only PDF and DOCX documents are supported."

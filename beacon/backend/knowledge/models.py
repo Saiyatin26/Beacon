@@ -17,7 +17,6 @@ class DocumentType(str, Enum):
     """Supported document formats for enterprise knowledge ingestion."""
     PDF = "PDF"
     DOCX = "DOCX"
-    TEXT = "TEXT"
 
 
 class DocumentStatus(str, Enum):
@@ -198,6 +197,7 @@ class KnowledgeContext(BaseModel):
     query: str
     application_id: str
     status: RetrievalStatus = RetrievalStatus.SUCCESS_NO_RESULTS
+    policy: Optional[RetrievalPolicy] = None
     retrieved_chunks: list[RetrievedChunk] = Field(default_factory=list)
     total_chunks_evaluated: int = 0
     sources: list[str] = Field(default_factory=list)  # Unique source filenames
@@ -207,15 +207,26 @@ class KnowledgeContext(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
 
     def compute_retrieval_fingerprint(self) -> str:
-        """Computes deterministic SHA-256 fingerprint over query, scope, and ordered matched chunks."""
+        """Computes deterministic SHA-256 fingerprint over query, scope, policy, and ordered matched chunks."""
         ordered_chunk_ids = [
-            {"chunk_id": c.chunk_id, "score": round(c.relevance_score, 6), "doc_id": c.document_id}
+            {
+                "chunk_id": c.chunk_id,
+                "score": round(c.relevance_score, 6),
+                "doc_id": c.document_id,
+                "content_hash": c.content_hash,
+            }
             for c in self.retrieved_chunks
         ]
+        policy_data = {
+            "top_k": self.policy.top_k if self.policy else 5,
+            "min_relevance_score": round(self.policy.min_relevance_score, 4) if self.policy else 0.01,
+            "retrieval_strategy": self.policy.retrieval_strategy if self.policy else "LEXICAL_BM25",
+        }
         payload = {
             "query": self.query.strip(),
             "application_id": self.application_id,
             "status": self.status.value,
+            "policy": policy_data,
             "chunks": ordered_chunk_ids,
         }
         return compute_deterministic_hash(payload)

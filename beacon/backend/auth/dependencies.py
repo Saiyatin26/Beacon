@@ -141,6 +141,10 @@ def require_project_permission(permission: Permission, project_id_param: str = "
             request.path_params.get("job_id")
             or request.query_params.get("job_id")
         )
+        doc_id = (
+            request.path_params.get("document_id")
+            or request.query_params.get("document_id")
+        )
 
         target_project_id: Optional[str] = None
 
@@ -176,12 +180,24 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                     target_project_id = job.project_id
             except Exception:
                 pass
+        elif doc_id:
+            try:
+                from knowledge.persistence import knowledge_persistence
+                kdoc = knowledge_persistence.get_document(doc_id)
+                if kdoc and kdoc.application_id:
+                    target_project_id = kdoc.application_id
+            except Exception:
+                pass
 
-        # 3. Direct project / benchmark parameters from query / path
+        # 3. Direct project / application / benchmark parameters from query / path
         if not target_project_id:
             target_project_id = (
                 request.query_params.get(project_id_param)
                 or request.path_params.get(project_id_param)
+                or request.query_params.get("application_id")
+                or request.path_params.get("application_id")
+                or request.query_params.get("project_id")
+                or request.path_params.get("project_id")
                 or request.query_params.get("benchmark_id")
                 or request.path_params.get("benchmark_id")
             )
@@ -197,6 +213,7 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                         b_cert_id = body_json.get("certification_id") or body_json.get("run_id")
                         b_ds_id = body_json.get("dataset_id")
                         b_job_id = body_json.get("job_id")
+                        b_doc_id = body_json.get("document_id")
 
                         if b_cert_id:
                             try:
@@ -222,10 +239,20 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                                     target_project_id = job.project_id
                             except Exception:
                                 pass
+                        elif b_doc_id:
+                            try:
+                                from knowledge.persistence import knowledge_persistence
+                                kdoc = knowledge_persistence.get_document(b_doc_id)
+                                if kdoc and kdoc.application_id:
+                                    target_project_id = kdoc.application_id
+                            except Exception:
+                                pass
 
                         if not target_project_id:
                             target_project_id = (
                                 body_json.get(project_id_param)
+                                or body_json.get("application_id")
+                                or body_json.get("project_id")
                                 or body_json.get("benchmark_id")
                             )
             except Exception:
@@ -319,3 +346,73 @@ async def require_system_admin(
             detail="Forbidden: System administrator privilege required",
         )
     return user
+
+
+def verify_user_project_permission(user: User, project_id: str, permission: Permission) -> None:
+    """Explicitly verifies that the authenticated user holds required permission in target project/application."""
+    if user.is_system_admin:
+        return
+
+    if not project_id or not project_id.strip():
+        audit_logger.log(
+            project_id="UNKNOWN",
+            action=AuditAction.ACCESS_DENIED,
+            status="FAIL",
+            details={
+                "user_id": user.user_id,
+                "username": user.username,
+                "reason": "Target project/application scope could not be determined",
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: Target project/application could not be resolved.",
+        )
+
+    target_pid = project_id.strip()
+    memberships = auth_repository.get_user_memberships(user.user_id)
+    proj_membership = next(
+        (
+            m for m in memberships
+            if m.project_id == target_pid
+            or m.project_id == f"benchmark_{target_pid}"
+            or (target_pid.startswith("benchmark_") and m.project_id == target_pid.replace("benchmark_", ""))
+        ),
+        None,
+    )
+
+    if not proj_membership:
+        audit_logger.log(
+            project_id=target_pid,
+            action=AuditAction.ACCESS_DENIED,
+            status="FAIL",
+            details={
+                "user_id": user.user_id,
+                "username": user.username,
+                "reason": "Not a member of project",
+                "target_project_id": target_pid,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: User '{user.username}' is not authorized for application/project '{target_pid}'",
+        )
+
+    if not role_has_permission(proj_membership.role, permission):
+        audit_logger.log(
+            project_id=target_pid,
+            action=AuditAction.ACCESS_DENIED,
+            status="FAIL",
+            details={
+                "user_id": user.user_id,
+                "username": user.username,
+                "role": proj_membership.role.value,
+                "required_permission": permission.value,
+                "reason": "Insufficient role permission",
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Forbidden: Role '{proj_membership.role.value}' lacks permission '{permission.value}'",
+        )
+

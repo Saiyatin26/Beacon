@@ -16,16 +16,30 @@ sys.path.insert(0, str(ROOT / "backend"))
 
 import docx
 from api.main import app
-from auth import create_access_token
+from auth import UserRole, auth_repository, create_access_token
 from knowledge.models import (
     DocumentMetadata,
     DocumentStatus,
     DocumentType,
     KnowledgeContext,
+    RetrievalPolicy,
     RetrievalStatus,
 )
 from knowledge.persistence import KnowledgePersistenceStore, knowledge_persistence
 from knowledge.service import KnowledgeService, knowledge_service
+
+
+def get_admin_headers() -> dict[str, str]:
+    """Ensures an active system admin exists and returns valid authorization headers."""
+    admin = auth_repository.get_user_by_username("admin")
+    if not admin:
+        admin = auth_repository.create_user(
+            username="admin",
+            password="AdminPassword2026!",
+            is_system_admin=True,
+        )
+    token = create_access_token(user=admin)
+    return {"Authorization": f"Bearer {token}"}
 
 
 def make_test_pdf(text: str = "Enterprise Reimbursement Policy. Section 1. Travel expenses require itemized receipts.") -> bytes:
@@ -200,8 +214,7 @@ class TestPhase9CompanyKnowledge:
 
     def test_rest_api_knowledge_endpoints(self):
         """FastAPI REST endpoints for upload, listing, retrieval, and deletion function correctly."""
-        token = create_access_token({"sub": "admin", "is_admin": True})
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = get_admin_headers()
         client = TestClient(app)
 
         pdf_bytes = make_test_pdf("API Enterprise Knowledge. Compliance requires annual certification renewal.")
@@ -246,3 +259,167 @@ class TestPhase9CompanyKnowledge:
         r_del = client.delete(f"/api/v2/knowledge/documents/{doc_id}", headers=headers)
         assert r_del.status_code == 200
         assert r_del.json()["deleted"] is True
+
+    def test_multi_tenant_authorization_isolation(self, tmp_path):
+        """Users can only access documents in applications they have project memberships for."""
+        import uuid
+        from auth import UserRole, auth_repository
+
+        client = TestClient(app)
+        admin_token = create_access_token({"sub": "admin", "is_admin": True})
+        admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+        # Create User A for app_tenant_alpha
+        user_a = auth_repository.create_user(
+            user_id=f"usr_a_{uuid.uuid4().hex[:6]}",
+            username=f"usera_{uuid.uuid4().hex[:6]}",
+            email="usera@example.com",
+            password="UserAPassword2026!",
+            full_name="User Alpha",
+        )
+        auth_repository.assign_user_to_project(user_a.user_id, "app_tenant_alpha", UserRole.CERTIFIER)
+        token_a = create_access_token(user=user_a)
+        headers_a = {"Authorization": f"Bearer {token_a}"}
+
+        # Create User B for app_tenant_beta
+        user_b = auth_repository.create_user(
+            user_id=f"usr_b_{uuid.uuid4().hex[:6]}",
+            username=f"userb_{uuid.uuid4().hex[:6]}",
+            email="userb@example.com",
+            password="UserBPassword2026!",
+            full_name="User Beta",
+        )
+        auth_repository.assign_user_to_project(user_b.user_id, "app_tenant_beta", UserRole.CERTIFIER)
+        token_b = create_access_token(user=user_b)
+        headers_b = {"Authorization": f"Bearer {token_b}"}
+
+        pdf_bytes = make_test_pdf("Confidential Alpha Guidelines. Internal secret ALPHA_TOKEN_12345.")
+
+        # 1. User A uploads to app_tenant_alpha -> ALLOW (200)
+        files = {"file": ("alpha_doc.pdf", pdf_bytes, "application/pdf")}
+        data_a = {"application_id": "app_tenant_alpha"}
+        r_up_a = client.post("/api/v2/knowledge/documents/upload", files=files, data=data_a, headers=headers_a)
+        assert r_up_a.status_code == 200
+        doc_a_id = r_up_a.json()["document_id"]
+
+        # 2. User B tries to upload to app_tenant_alpha -> DENY (403)
+        files_b = {"file": ("malicious_doc.pdf", pdf_bytes, "application/pdf")}
+        r_up_b_denied = client.post("/api/v2/knowledge/documents/upload", files=files_b, data=data_a, headers=headers_b)
+        assert r_up_b_denied.status_code == 403, f"Expected 403, got {r_up_b_denied.status_code}: {r_up_b_denied.text}"
+
+        # 3. User B tries to retrieve from app_tenant_alpha -> DENY (403)
+        ret_b_payload = {"application_id": "app_tenant_alpha", "query": "ALPHA_TOKEN_12345"}
+        r_ret_b_denied = client.post("/api/v2/knowledge/retrieve", json=ret_b_payload, headers=headers_b)
+        assert r_ret_b_denied.status_code == 403, f"Expected 403, got {r_ret_b_denied.status_code}: {r_ret_b_denied.text}"
+
+        # 4. User B tries to view or delete doc_a_id -> DENY (403)
+        r_get_b_denied = client.get(f"/api/v2/knowledge/documents/{doc_a_id}", headers=headers_b)
+        assert r_get_b_denied.status_code == 403
+        r_del_b_denied = client.delete(f"/api/v2/knowledge/documents/{doc_a_id}", headers=headers_b)
+        assert r_del_b_denied.status_code == 403
+
+        # 5. User A can retrieve from app_tenant_alpha -> ALLOW (200)
+        ret_a_payload = {"application_id": "app_tenant_alpha", "query": "ALPHA_TOKEN_12345"}
+        r_ret_a = client.post("/api/v2/knowledge/retrieve", json=ret_a_payload, headers=headers_a)
+        assert r_ret_a.status_code == 200
+        assert len(r_ret_a.json()["retrieved_chunks"]) >= 1
+
+        # Clean up
+        client.delete(f"/api/v2/knowledge/documents/{doc_a_id}", headers=admin_headers)
+
+    def test_txt_and_text_upload_rejected_by_api(self):
+        """API strictly rejects .txt and .text uploads with HTTP 400."""
+        headers = get_admin_headers()
+        client = TestClient(app)
+
+        files_txt = {"file": ("policy.txt", b"Some plain text rules.", "text/plain")}
+        r_txt = client.post("/api/v2/knowledge/documents/upload", files=files_txt, data={"application_id": "app_txt"}, headers=headers)
+        assert r_txt.status_code == 400
+        assert "Only PDF and DOCX documents are supported" in r_txt.json()["detail"]
+
+        files_text = {"file": ("policy.text", b"Some plain text rules.", "text/plain")}
+        r_text = client.post("/api/v2/knowledge/documents/upload", files=files_text, data={"application_id": "app_txt"}, headers=headers)
+        assert r_text.status_code == 400
+        assert "Only PDF and DOCX documents are supported" in r_text.json()["detail"]
+
+    def test_safe_error_masking_no_exception_leakage(self, monkeypatch):
+        """Internal server exceptions do not leak stack traces, database details, or filesystem paths."""
+        headers = get_admin_headers()
+        client = TestClient(app)
+
+        # Mock an unexpected crash in ingestion
+        def mock_ingest(*args, **kwargs):
+            raise RuntimeError("sqlite3.OperationalError: database disk image is malformed at /var/secrets/db.sqlite")
+
+        monkeypatch.setattr(knowledge_service, "ingest_document", mock_ingest)
+
+        pdf_bytes = make_test_pdf("Standard text content.")
+        files = {"file": ("doc.pdf", pdf_bytes, "application/pdf")}
+        resp = client.post("/api/v2/knowledge/documents/upload", files=files, data={"application_id": "app_err"}, headers=headers)
+        assert resp.status_code == 500
+        detail = resp.json()["detail"]
+        # Must be generic and safe
+        assert detail == "Document ingestion failed."
+        assert "sqlite3" not in detail
+        assert "malformed" not in detail
+        assert "/var/secrets" not in detail
+
+    def test_retrieval_fingerprint_policy_differentiation(self, tmp_path):
+        """Retrieval fingerprints are deterministic and differ when retrieval policy changes."""
+        from knowledge.models import KnowledgeQuery, RetrievalPolicy
+        store = KnowledgePersistenceStore(db_path=str(tmp_path / "test_fp.sqlite3"))
+        service = KnowledgeService(storage_root=tmp_path, persistence=store)
+
+        pdf_bytes = make_test_pdf("Corporate Refund Policy. Section 1. All refunds processed within 5 business days.")
+        service.ingest_document(pdf_bytes, "refund.pdf", "app_fp_test")
+
+        # 1. Retrieval with top_k = 3
+        ctx1 = service.retrieve(
+            query="refunds processed",
+            application_id="app_fp_test",
+            top_k=3,
+            policy=RetrievalPolicy(top_k=3, min_relevance_score=0.01),
+        )
+
+        # 2. Identical retrieval with top_k = 3 -> same fingerprint
+        ctx2 = service.retrieve(
+            query="refunds processed",
+            application_id="app_fp_test",
+            top_k=3,
+            policy=RetrievalPolicy(top_k=3, min_relevance_score=0.01),
+        )
+        assert ctx1.retrieval_fingerprint == ctx2.retrieval_fingerprint
+        assert len(ctx1.retrieval_fingerprint) == 64
+
+        # 3. Retrieval with top_k = 10 -> different fingerprint
+        ctx3 = service.retrieve(
+            query="refunds processed",
+            application_id="app_fp_test",
+            top_k=10,
+            policy=RetrievalPolicy(top_k=10, min_relevance_score=0.01),
+        )
+        assert ctx1.retrieval_fingerprint != ctx3.retrieval_fingerprint
+
+    def test_post_delete_retrieval_consistency(self, tmp_path):
+        """After a document is deleted, retrieval against its scope returns SUCCESS_NO_RESULTS."""
+        store = KnowledgePersistenceStore(db_path=str(tmp_path / "test_post_del.sqlite3"))
+        service = KnowledgeService(storage_root=tmp_path, persistence=store)
+
+        pdf_bytes = make_test_pdf("Exclusive Project Phoenix Blueprint and Architecture.")
+        doc = service.ingest_document(pdf_bytes, "phoenix.pdf", "app_phoenix")
+        assert doc.status == DocumentStatus.READY
+
+        # Prior to deletion -> found
+        ctx_before = service.retrieve(query="Phoenix Blueprint", application_id="app_phoenix")
+        assert ctx_before.status == RetrievalStatus.SUCCESS_WITH_RESULTS
+        assert len(ctx_before.retrieved_chunks) >= 1
+
+        # Delete document
+        deleted = service.delete_document(doc.document_id)
+        assert deleted is True
+
+        # After deletion -> no results
+        ctx_after = service.retrieve(query="Phoenix Blueprint", application_id="app_phoenix")
+        assert ctx_after.status == RetrievalStatus.SUCCESS_NO_RESULTS
+        assert len(ctx_after.retrieved_chunks) == 0
+

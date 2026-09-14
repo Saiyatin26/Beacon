@@ -183,6 +183,70 @@ class TestPhase9AdversarialValidation:
         # The retrieved chunk is simply an inert data object with text field
         assert isinstance(ctx.retrieved_chunks[0].text, str)
 
+    def test_txt_and_text_files_are_strictly_rejected(self, tmp_path):
+        """TXT and TEXT documents are rejected by Phase 9 boundary."""
+        store = KnowledgePersistenceStore(db_path=str(tmp_path / "test_txt.sqlite3"))
+        service = KnowledgeService(storage_root=tmp_path, persistence=store)
+
+        txt_content = b"This is a plain text document."
+        with pytest.raises(KnowledgeSecurityError, match="Only PDF and DOCX documents are supported"):
+            service.ingest_document(txt_content, "policy.txt", "app_txt_test")
+
+        with pytest.raises(KnowledgeSecurityError, match="Only PDF and DOCX documents are supported"):
+            service.ingest_document(txt_content, "policy.text", "app_txt_test")
+
+    def test_unsafe_application_id_path_traversal_rejection(self, tmp_path):
+        """Unsafe application IDs (../../outside, dot notation, absolute paths) are rejected before filesystem ops."""
+        storage_root = (tmp_path / "storage_root").resolve()
+        storage_root.mkdir()
+        store = KnowledgePersistenceStore(db_path=str(tmp_path / "test_appid.sqlite3"))
+        service = KnowledgeService(storage_root=storage_root, persistence=store)
+
+        pdf_bytes = make_test_pdf("Standard corporate policy.")
+
+        unsafe_app_ids = [
+            "../../outside",
+            "..",
+            ".",
+            "/absolute/path",
+            "app/nested",
+            "app\\backslash",
+            "app..traversal",
+            ".hidden_app",
+        ]
+
+        for bad_app_id in unsafe_app_ids:
+            with pytest.raises(PathTraversalError):
+                service.ingest_document(pdf_bytes, "doc.pdf", bad_app_id)
+
+            # Ensure no directories or files were created outside storage root
+            assert not (tmp_path / "outside").exists()
+            assert not (tmp_path / "absolute").exists()
+            assert not (tmp_path / "nested").exists()
+
+    def test_delete_failure_raises_ioerror_and_does_not_mask(self, tmp_path, monkeypatch):
+        """If physical file removal fails, delete_document raises IOError and does not mask failure."""
+        store = KnowledgePersistenceStore(db_path=str(tmp_path / "test_del_fail.sqlite3"))
+        service = KnowledgeService(storage_root=tmp_path, persistence=store)
+
+        pdf_bytes = make_test_pdf("Document for delete failure test.")
+        doc = service.ingest_document(pdf_bytes, "sample.pdf", "app_del_fail")
+        assert doc.status == DocumentStatus.READY
+
+        # Simulate permission/IO error on os.remove
+        def mock_remove(path):
+            raise PermissionError("File is locked by another process")
+
+        monkeypatch.setattr("os.remove", mock_remove)
+
+        with pytest.raises(IOError, match="Could not remove physical storage file"):
+            service.delete_document(doc.document_id)
+
+        # Confirm document and file still exist (not falsely claimed deleted)
+        monkeypatch.undo()
+        assert Path(doc.storage_path).exists()
+        assert service.get_document(doc.document_id) is not None
+
     def test_empty_document_rejection_no_fake_knowledge(self, tmp_path):
         """Empty documents (< 5 chars) fail extraction and are marked EMPTY without generating fake chunks."""
         store = KnowledgePersistenceStore(db_path=str(tmp_path / "test_emp.sqlite3"))
@@ -195,4 +259,5 @@ class TestPhase9AdversarialValidation:
 
         chunks = service.list_chunks(doc.document_id)
         assert len(chunks) == 0
+
 

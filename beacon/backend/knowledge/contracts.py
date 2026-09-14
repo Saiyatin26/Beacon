@@ -1,14 +1,29 @@
-"""BEACON V2 — Knowledge Retrieval & RAG Extension Boundary Contracts.
+"""BEACON V2 — Knowledge Retrieval & RAG Legacy Compatibility Boundary.
 
-Defines the clean boundary contracts for future knowledge ingestion and RAG retrieval
-(supporting future company documentation, specifications, and business rules).
-Actual vector databases, embeddings, and document parsers are deliberately deferred to later phases.
+NOTE: This module is retained for backward compatibility with early Phase 1 stub tests.
+The authoritative, canonical Phase 9 data contracts are defined in `knowledge.models`.
+Do not introduce new code against these legacy classes; use `knowledge.models` directly.
 """
 
 from abc import ABC, abstractmethod
 import hashlib
+import warnings
 from typing import Any, Optional
 from pydantic import BaseModel, Field
+
+# Re-export canonical Phase 9 types
+from .models import (
+    ChunkMetadata,
+    DocumentMetadata as CanonicalDocumentMetadata,
+    DocumentStatus,
+    DocumentType,
+    KnowledgeChunk as CanonicalKnowledgeChunk,
+    KnowledgeContext as CanonicalKnowledgeContext,
+    KnowledgeQuery as CanonicalKnowledgeQuery,
+    RetrievalPolicy,
+    RetrievalStatus,
+    RetrievedChunk,
+)
 
 
 class KnowledgeSource(BaseModel):
@@ -21,12 +36,12 @@ class KnowledgeSource(BaseModel):
 
 
 class KnowledgeDocument(BaseModel):
-    """A single ingested document representing enterprise domain knowledge."""
+    """Legacy model for ingested documents (deprecated, use DocumentMetadata)."""
     doc_id: str
     source_id: str
     title: str
     content: str = ""
-    doc_type: str = "text"  # "text", "markdown", "pdf", "docx"
+    doc_type: str = "pdf"  # "pdf", "docx"
     doc_hash: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -36,7 +51,7 @@ class KnowledgeDocument(BaseModel):
 
 
 class KnowledgeChunk(BaseModel):
-    """A granular chunk of knowledge context extracted from a KnowledgeDocument."""
+    """Legacy chunk model (deprecated, use knowledge.models.KnowledgeChunk)."""
     chunk_id: str
     doc_id: str
     text: str
@@ -47,7 +62,7 @@ class KnowledgeChunk(BaseModel):
 
 
 class KnowledgeContext(BaseModel):
-    """Synthesized context returned from a KnowledgeRetriever query."""
+    """Legacy context container (deprecated, use knowledge.models.KnowledgeContext)."""
     query: str
     chunks: list[KnowledgeChunk] = Field(default_factory=list)
     confidence: float = 1.0
@@ -73,3 +88,4 @@ class StubKnowledgeRetriever(KnowledgeRetriever):
             confidence=1.0,
             metadata={"retriever": "stub_phase1"},
         )
+

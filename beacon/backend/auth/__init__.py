@@ -6,6 +6,7 @@ from .dependencies import (
     get_current_user,
     require_project_permission,
     require_system_admin,
+    verify_user_project_permission,
 )
 from .models import (
     AssignProjectRoleRequest,
@@ -63,5 +64,6 @@ __all__ = [
     "get_current_active_user",
     "require_project_permission",
     "require_system_admin",
+    "verify_user_project_permission",
     "auth_router",
 ]

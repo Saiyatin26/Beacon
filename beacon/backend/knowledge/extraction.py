@@ -218,39 +218,11 @@ class DOCXExtractor:
             raise DocumentExtractionError(f"DOCX extraction failed: {exc}") from exc
 
 
-class TextExtractor:
-    """Extracts plain text from text/markdown files."""
-
-    @classmethod
-    def extract(cls, content: bytes) -> ExtractedDocument:
-        try:
-            text = content.decode("utf-8", errors="replace")
-            normalized = TextNormalizer.normalize(text)
-            if len(normalized) < 5:
-                raise EmptyDocumentError("Text document contains no meaningful content.")
-
-            page = DocumentPage(page_number=1, text=normalized, character_count=len(normalized))
-            return ExtractedDocument(
-                raw_text=text,
-                normalized_text=normalized,
-                page_count=1,
-                pages=[page],
-                sections=[],
-                metadata={"extractor": "text_utf8"},
-            )
-        except EmptyDocumentError:
-            raise
-        except Exception as exc:
-            raise DocumentExtractionError(f"Plain text extraction failed: {exc}") from exc
-
-
 def extract_document_content(content: bytes, doc_type: DocumentType) -> ExtractedDocument:
     """Routes document binary bytes to the appropriate extractor based on document type."""
     if doc_type == DocumentType.PDF:
         return PDFExtractor.extract(content)
     elif doc_type == DocumentType.DOCX:
         return DOCXExtractor.extract(content)
-    elif doc_type == DocumentType.TEXT:
-        return TextExtractor.extract(content)
     else:
-        raise DocumentExtractionError(f"Unsupported document type: {doc_type}")
+        raise DocumentExtractionError(f"Unsupported document type: {doc_type}. Only PDF and DOCX are supported.")

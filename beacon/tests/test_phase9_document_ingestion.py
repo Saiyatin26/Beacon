@@ -18,7 +18,6 @@ from knowledge.extraction import (
     DOCXExtractor,
     EmptyDocumentError,
     PDFExtractor,
-    TextExtractor,
     TextNormalizer,
     extract_document_content,
 )
