@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import ControlledMode from "./ControlledMode";
+import ThresholdMode from "./ThresholdMode";
+
 
 // Environment-based API Base URL with safe production & development defaults
 const API_BASE = import.meta.env.VITE_API_BASE_URL || (import.meta.env.PROD ? "" : "http://localhost:8000");
@@ -1040,6 +1042,7 @@ export default function App() {
           {[
             { id: "benchmark", label: "🎯 Benchmark Certification", desc: "Select & Certify Applications" },
             { id: "controlled", label: "⚖️ Controlled Mode", desc: "Business Rules & Behavioral Compliance" },
+            { id: "thresholds", label: "⚡ Dynamic Thresholds", desc: "Evidence-Driven & Bounded Evaluation" },
             { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },
             { id: "dossier", label: "📑 Evidence Dossier", desc: "Explainability & Traceability" },
             { id: "operations", label: "⚙️ Operations & Reliability", desc: "System Health, Metrics & Jobs" },
@@ -3467,6 +3470,18 @@ export default function App() {
         {/* ========================================================================= */}
         {activeTab === "controlled" && (
           <ControlledMode
+            apiBase={API_BASE}
+            authFetch={authFetch}
+            badgeStyle={badgeStyle}
+            cardStyle={cardStyle}
+          />
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: DYNAMIC THRESHOLDS (PHASE 8 ADVANCED BEHAVIORAL EVALUATION)          */}
+        {/* ========================================================================= */}
+        {activeTab === "thresholds" && (
+          <ThresholdMode
             apiBase={API_BASE}
             authFetch={authFetch}
             badgeStyle={badgeStyle}

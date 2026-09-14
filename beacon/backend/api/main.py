@@ -226,6 +226,11 @@ app.include_router(discovery_router)
 from api.reconciliation_router import reconciliation_router
 app.include_router(reconciliation_router)
 
+# Phase 8 (V2) Dynamic / Evidence-Driven Thresholds & Advanced Evaluation Routes
+from api.threshold_router import threshold_router
+app.include_router(threshold_router)
+
+
 
 
 
