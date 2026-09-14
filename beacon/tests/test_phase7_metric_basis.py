@@ -1,4 +1,4 @@
-﻿"""BEACON V2 — Phase 7 Evidence Metric Basis & Final Hardening Tests.
+"""BEACON V2 — Phase 7 Evidence Metric Basis & Final Hardening Tests.
 
 Focused tests for:
 - MEASURED / DERIVED / UNAVAILABLE metric_basis semantics
@@ -321,3 +321,75 @@ def test_disjoint_evidence_ids_sum_correctly_as_measured():
     assert rule.support_count == 7
     assert len(rule.input_ids) == 7
     assert rule.metric_basis == EvidenceMetricBasis.MEASURED
+
+
+def test_unavailable_evidence_does_not_fabricate_confidence():
+    """TEST 4: Unavailable evidence does not create fake confidence."""
+    cand = DiscoveredCandidate(
+        candidate_id="c_unavail_conf",
+        rule_type=DiscoveredRuleType.OUTPUT_CONSISTENCY,
+        canonical_expression="output.mode == standard",
+        normalized_expression="output.mode == standard",
+        description="No empirical evidence",
+        support_count=0,
+        contradiction_count=0,
+        unknown_count=0,
+        confidence=0.5,
+        input_ids=[],
+        validation_status=CandidateValidationStatus.VALIDATED,
+    )
+    norm = rule_normalizer.normalize_discovered_candidate(cand)
+    assert norm.metric_basis == EvidenceMetricBasis.UNAVAILABLE
+
+
+def test_duplicate_unresolved_conflict_references_count_once():
+    """TEST 5: Duplicate unresolved conflict references count once."""
+    engine = RuleReconciliationEngine()
+    pred = RulePredicate(field="status_code", operator=RuleOperator.EQ, value=200)
+    u1 = BusinessRule(
+        rule_id="u_dup_conf1",
+        name="U1",
+        condition=pred,
+        expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="ok", expected_value=True),
+        status=RuleStatus.ACTIVE,
+    )
+    u2 = BusinessRule(
+        rule_id="u_dup_conf2",
+        name="U2",
+        condition=pred,
+        expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="ok", expected_value=False),
+        status=RuleStatus.ACTIVE,
+    )
+    res = engine.reconcile(application_id="app_dup_conf", user_rules=[u1, u2], persist=False)
+    assert res.oracle_set.provenance["total_conflicts"] == 1
+    assert res.oracle_set.provenance["unresolved_conflicts"] == 1
+    assert res.unresolved_conflict_count == 1
+
+
+def test_unresolved_material_conflict_always_produces_blocked():
+    """TEST 8: Unresolved material conflict always produces OracleSetStatus.BLOCKED."""
+    from reconciliation.models import ReconciliationPolicy
+    engine = RuleReconciliationEngine()
+    pred = RulePredicate(field="rate_tier", operator=RuleOperator.EQ, value="PREMIUM")
+    u1 = BusinessRule(
+        rule_id="u_blk1",
+        name="U1 Premium",
+        condition=pred,
+        expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="discount", expected_value=0.20),
+        status=RuleStatus.ACTIVE,
+    )
+    u2 = BusinessRule(
+        rule_id="u_blk2",
+        name="U2 Premium",
+        condition=pred,
+        expected_behavior=ExpectedBehavior(behavior_type=ExpectedBehaviorType.RETURN_VALUE, target_field="discount", expected_value=0.30),
+        status=RuleStatus.ACTIVE,
+    )
+    # Even if deprecated flag allow_unresolved_conflicts_in_ready is True, status MUST be BLOCKED
+    policy = ReconciliationPolicy(allow_unresolved_conflicts_in_ready=True)
+    res = engine.reconcile(application_id="app_blocked_test", user_rules=[u1, u2], policy=policy, persist=False)
+    assert res.oracle_set.status == OracleSetStatus.BLOCKED
+    assert res.approved_count == 0
+    assert len(res.oracle_set.rules) == 0
+    assert len(res.conflicts) == 1
+
