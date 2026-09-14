@@ -18,7 +18,7 @@ from rules.models import (
     RulePredicate,
     UnaryRuleCondition,
 )
-from .models import OracleRule, ResolutionState, RuleProvenanceSource, compute_deterministic_hash
+from .models import EvidenceMetricBasis, OracleRule, ResolutionState, RuleProvenanceSource, compute_deterministic_hash
 
 
 class NormalizedRuleRepresentation(BaseModel):
@@ -43,6 +43,8 @@ class NormalizedRuleRepresentation(BaseModel):
     source_rule_ids: list[str]
     source_candidate_ids: list[str]
     fingerprint: str
+    # metric_basis: semantic precision classification of the aggregated empirical counts
+    metric_basis: EvidenceMetricBasis = EvidenceMetricBasis.UNAVAILABLE
 
 
 class RuleNormalizer:
@@ -84,6 +86,9 @@ class RuleNormalizer:
             source_rule_ids=[rule.rule_id],
             source_candidate_ids=[],
             fingerprint=fingerprint,
+            # User-defined rules are authoritative intent; empirical counts are not applicable.
+            # metric_basis is UNAVAILABLE because no observation-based evidence backs this rule.
+            metric_basis=EvidenceMetricBasis.UNAVAILABLE,
         )
 
     def normalize_discovered_candidate(self, cand: DiscoveredCandidate) -> NormalizedRuleRepresentation:
@@ -98,6 +103,17 @@ class RuleNormalizer:
             "role_scope": cand.role_scope,
         }
         fingerprint = compute_deterministic_hash(payload)
+
+        # Determine metric_basis for this candidate:
+        # MEASURED: unique input identifiers exist — support count is exact.
+        # DERIVED:  no unique IDs but aggregate counts are provided — conservative estimate.
+        # UNAVAILABLE: no counts and no IDs — cannot determine any trustworthy metric.
+        if cand.input_ids:
+            cand_metric_basis = EvidenceMetricBasis.MEASURED
+        elif cand.support_count > 0 or cand.contradiction_count > 0 or cand.unknown_count > 0:
+            cand_metric_basis = EvidenceMetricBasis.DERIVED
+        else:
+            cand_metric_basis = EvidenceMetricBasis.UNAVAILABLE
 
         return NormalizedRuleRepresentation(
             source_id=cand.candidate_id or cand.fingerprint[:16],
@@ -120,6 +136,7 @@ class RuleNormalizer:
             source_rule_ids=[],
             source_candidate_ids=[cand.candidate_id] if cand.candidate_id else [],
             fingerprint=fingerprint,
+            metric_basis=cand_metric_basis,
         )
 
     def clean_expression(self, expression: str) -> str:

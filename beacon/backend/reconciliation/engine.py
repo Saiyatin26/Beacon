@@ -15,6 +15,7 @@ from rules.models import BusinessRule, RuleStatus
 from .comparator import rule_comparator
 from .models import (
     DecisionTraceRecord,
+    EvidenceMetricBasis,
     OracleRule,
     OracleSet,
     OracleSetStatus,
@@ -161,18 +162,46 @@ class RuleReconciliationEngine:
                     if existing.source_type != r.source_type or existing.source_type == RuleProvenanceSource.MERGED
                     else existing.source_type
                 )
-                # Aggregate empirical counts accurately without fabrication
+
+                # --- Evidence Metric Aggregation with explicit basis semantics ---
+                # MEASURED: unique input_ids exist after dedup -> exact count, no fabrication.
+                # DERIVED:  no unique IDs but at least one source has aggregate counts -> conservative max().
+                # UNAVAILABLE: neither source has meaningful counts.
                 if fused_in:
+                    # Unique input identities available: support is exactly the unique set size.
                     fused_support = len(fused_in)
-                else:
+                    # Contradiction/unknown: use max() since we can't attribute contradictions to
+                    # specific inputs without per-input outcome labels (still conservative).
+                    fused_contra = max(existing.contradiction_count, r.contradiction_count)
+                    fused_unknown = max(existing.unknown_count, r.unknown_count)
+                    fused_app = fused_support + fused_contra + fused_unknown
+                    valid_den = fused_support + fused_contra
+                    # Confidence is computed from the exact measured support over known denominator.
+                    fused_conf = round(fused_support / valid_den, 4) if valid_den > 0 else 1.0
+                    fused_basis = EvidenceMetricBasis.MEASURED
+                elif (
+                    existing.support_count > 0 or r.support_count > 0
+                    or existing.contradiction_count > 0 or r.contradiction_count > 0
+                    or existing.unknown_count > 0 or r.unknown_count > 0
+                ):
+                    # No unique IDs. Preserve source aggregates conservatively via max().
+                    # This is DERIVED: do NOT treat it as an exact measured count.
                     fused_support = max(existing.support_count, r.support_count)
-                fused_contra = max(existing.contradiction_count, r.contradiction_count)
-                fused_unknown = max(existing.unknown_count, r.unknown_count)
-                fused_app = fused_support + fused_contra + fused_unknown
-                valid_den = fused_support + fused_contra
-                fused_conf = round(fused_support / valid_den, 4) if valid_den > 0 else (
-                    min(existing.confidence, r.confidence) if existing.confidence > 0 and r.confidence > 0 else max(existing.confidence, r.confidence)
-                )
+                    fused_contra = max(existing.contradiction_count, r.contradiction_count)
+                    fused_unknown = max(existing.unknown_count, r.unknown_count)
+                    fused_app = fused_support + fused_contra + fused_unknown
+                    # Use the more conservative (lower) source confidence since we cannot
+                    # reliably compute a precise ratio from non-unique observation sets.
+                    fused_conf = min(existing.confidence, r.confidence)
+                    fused_basis = EvidenceMetricBasis.DERIVED
+                else:
+                    # No counts and no IDs: metric is genuinely unavailable.
+                    fused_support = 0
+                    fused_contra = 0
+                    fused_unknown = 0
+                    fused_app = 0
+                    fused_conf = min(existing.confidence, r.confidence)
+                    fused_basis = EvidenceMetricBasis.UNAVAILABLE
 
                 dedup_list[match_idx] = existing.model_copy(update={
                     "source_type": fused_source,
@@ -186,6 +215,7 @@ class RuleReconciliationEngine:
                     "unknown_count": fused_unknown,
                     "applicable_count": fused_app,
                     "confidence": fused_conf,
+                    "metric_basis": fused_basis,
                 })
 
                 decision_traces.append(DecisionTraceRecord(
@@ -262,6 +292,7 @@ class RuleReconciliationEngine:
                 role_scope=norm.role_scope,
                 source=norm.source_type,
                 resolution_state=ResolutionState.APPROVED,
+                metric_basis=norm.metric_basis,
                 confidence=norm.confidence,
                 support_count=norm.support_count,
                 contradiction_count=norm.contradiction_count,

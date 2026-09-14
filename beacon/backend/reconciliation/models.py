@@ -20,6 +20,22 @@ class OracleSetStatus(str, Enum):
     SUPERSEDED = "SUPERSEDED"  # Replaced by a newer versioned OracleSet
 
 
+class EvidenceMetricBasis(str, Enum):
+    """Semantic precision classification of aggregated evidence/empirical metrics.
+
+    MEASURED:   Counts derived from uniquely identifiable observations (evidence_ids / input_ids).
+                Safe to treat as exact observation counts. No double-counting.
+    DERIVED:    Counts estimated from source-level aggregates without unique identity.
+                Conservative (e.g. max of sources), NOT an exact merged observation count.
+                Confidence computed from derived counts is also DERIVED, not measured precision.
+    UNAVAILABLE: Insufficient provenance to compute any trustworthy aggregate metric.
+                 Counts must not be treated as measured or safely estimated.
+    """
+    MEASURED = "MEASURED"
+    DERIVED = "DERIVED"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
 class RuleRelationship(str, Enum):
     """Pairwise semantic relationship classification between two behavioral rules."""
     EQUIVALENT = "EQUIVALENT"                    # Exact or semantically identical conditions and outcomes
@@ -130,6 +146,11 @@ class OracleRule(BaseModel):
     resolution_state: ResolutionState = ResolutionState.APPROVED
 
     # Empirical Metrics & Evidence Provenance
+    # metric_basis indicates the semantic precision of the support/contradiction/unknown counts.
+    # MEASURED  = derived from deduplicated unique evidence/input identifiers (exact)
+    # DERIVED   = conservative estimate (e.g. max of sources) when unique IDs are unavailable
+    # UNAVAILABLE = insufficient provenance to safely compute any aggregate
+    metric_basis: EvidenceMetricBasis = EvidenceMetricBasis.UNAVAILABLE
     confidence: float = 1.0
     support_count: int = 0
     contradiction_count: int = 0
@@ -226,6 +247,7 @@ class OracleSet(BaseModel):
                 "expected_behavior": r.expected_behavior,
                 "role_scope": r.role_scope,
                 "source": r.source.value,
+                "metric_basis": r.metric_basis.value,
                 "confidence": r.confidence,
                 "support_count": r.support_count,
                 "contradiction_count": r.contradiction_count,
