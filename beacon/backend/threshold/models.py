@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 from typing import Any, Literal, Optional, Union
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from evaluation.models import BehaviorDimension, DifferenceType, EvaluationVerdict
 
@@ -104,6 +104,64 @@ class ThresholdPolicy(BaseModel):
     
     enabled: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_policy_semantics(self) -> "ThresholdPolicy":
+        """Strictly validates policy parameters, bounds, samples, and strategy constraints."""
+        # 1. Validate minimum samples
+        if self.minimum_samples < 0:
+            raise ValueError(f"minimum_samples cannot be negative (received: {self.minimum_samples})")
+
+        # 2. Validate bounds
+        if self.minimum_bound is not None:
+            if math.isnan(self.minimum_bound) or math.isinf(self.minimum_bound):
+                raise ValueError(f"minimum_bound cannot be NaN or Inf (received: {self.minimum_bound})")
+            if self.minimum_bound < 0:
+                raise ValueError(f"minimum_bound cannot be negative (received: {self.minimum_bound})")
+
+        if self.maximum_bound is not None:
+            if math.isnan(self.maximum_bound) or math.isinf(self.maximum_bound):
+                raise ValueError(f"maximum_bound cannot be NaN or Inf (received: {self.maximum_bound})")
+            if self.maximum_bound < 0:
+                raise ValueError(f"maximum_bound cannot be negative (received: {self.maximum_bound})")
+
+        if self.minimum_bound is not None and self.maximum_bound is not None:
+            if self.minimum_bound > self.maximum_bound:
+                raise ValueError(
+                    f"Invalid bounds: minimum_bound ({self.minimum_bound}) cannot exceed maximum_bound ({self.maximum_bound})"
+                )
+
+        # 3. Strategy specific validation
+        if self.strategy == ThresholdStrategy.FIXED:
+            val = self.parameters.get("value", self.parameters.get("tolerance"))
+            if val is not None:
+                try:
+                    f_val = float(val)
+                    if math.isnan(f_val) or math.isinf(f_val):
+                        raise ValueError(f"FIXED policy value cannot be NaN or Inf (received: {val})")
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"FIXED policy value must be a valid number: {exc}")
+
+        elif self.strategy in (ThresholdStrategy.RELATIVE, ThresholdStrategy.PERCENTAGE, ThresholdStrategy.ABSOLUTE):
+            tol = self.parameters.get("tolerance", self.parameters.get("value"))
+            if tol is not None:
+                try:
+                    f_tol = float(tol)
+                    if math.isnan(f_tol) or math.isinf(f_tol):
+                        raise ValueError(f"Tolerance parameter cannot be NaN or Inf (received: {tol})")
+                    if f_tol < 0.0:
+                        raise ValueError(f"Tolerance parameter cannot be negative (received: {f_tol})")
+                except (TypeError, ValueError) as exc:
+                    if isinstance(exc, ValueError) and "cannot be negative" in str(exc):
+                        raise
+                    raise ValueError(f"Tolerance parameter must be a valid number: {exc}")
+
+        # 4. Fallback validation
+        if self.fallback_value is not None:
+            if math.isnan(self.fallback_value) or math.isinf(self.fallback_value) or self.fallback_value < 0:
+                raise ValueError(f"fallback_value must be a non-negative finite number (received: {self.fallback_value})")
+
+        return self
 
     def compute_policy_hash(self) -> str:
         """Computes a canonical SHA-256 fingerprint over semantic policy configuration."""

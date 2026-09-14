@@ -193,20 +193,18 @@ class AdvancedBehavioralEvaluator:
         target_evidence: Sequence[Any],
         resolution: ThresholdResolution,
     ) -> dict[str, Any]:
-        """Evaluates reference vs target items under the frozen threshold resolution."""
+        """Evaluates reference vs target items under the frozen threshold resolution across all 7 metrics."""
         diffs: list[AdvancedEvaluationDifference] = []
         passed = 0
         failed = 0
         inconclusive = 0
         dim_verdicts: dict[str, EvaluationVerdict] = {}
 
-        # Pairwise comparison of reference vs target evidence items if present
         ref_list = list(reference_evidence)
         tar_list = list(target_evidence)
         max_len = max(len(ref_list), len(tar_list))
 
         if max_len == 0 and len(oracle_rules) > 0:
-            # Rule-level verification when raw trace evidence is not attached
             passed = len(oracle_rules)
             dim_verdicts[BehaviorDimension.OUTPUT.value] = EvaluationVerdict.EQUIVALENT
             return {
@@ -216,6 +214,8 @@ class AdvancedBehavioralEvaluator:
                 "inconclusive_count": 0,
                 "dimension_verdicts": dim_verdicts,
             }
+
+        tol = resolution.final_value if resolution.final_value is not None else 0.0
 
         for idx in range(max_len):
             ref_item = ref_list[idx] if idx < len(ref_list) else None
@@ -233,7 +233,7 @@ class AdvancedBehavioralEvaluator:
                     resolution=resolution,
                     within_tolerance=False,
                     verdict=EvaluationVerdict.INCONCLUSIVE,
-                    explanation="Unmatched execution or missing counterpart evidence",
+                    explanation="Missing evidence or unmatched execution counterpart (missing evidence != empty valid evidence)",
                 ))
                 inconclusive += 1
                 continue
@@ -241,19 +241,120 @@ class AdvancedBehavioralEvaluator:
             ref_val = self._extract_single_val(ref_item)
             tar_val = self._extract_single_val(tar_item)
 
+            # Check if this is a LATENCY_DIFF evaluation
+            if resolution.metric == DifferenceMetric.LATENCY_DIFF:
+                ref_lat = self._extract_latency_ms(ref_item, ref_val)
+                tar_lat = self._extract_latency_ms(tar_item, tar_val)
+                abs_lat_diff = abs(tar_lat - ref_lat)
+                is_within = bool(abs_lat_diff <= tol)
+                if is_within:
+                    passed += 1
+                else:
+                    failed += 1
+                    diffs.append(AdvancedEvaluationDifference(
+                        difference_id=f"diff_{uuid.uuid4().hex[:8]}",
+                        dimension=BehaviorDimension.NONFUNCTIONAL,
+                        input_id=input_id,
+                        difference_type=DifferenceType.NONFUNCTIONAL_THRESHOLD_EXCEEDED,
+                        reference_value=ref_lat,
+                        target_value=tar_lat,
+                        observed_difference=round(abs_lat_diff, 6),
+                        resolved_threshold=round(tol, 6),
+                        resolution=resolution,
+                        within_tolerance=False,
+                        verdict=EvaluationVerdict.DIFFERENT,
+                        explanation=f"Observed latency delta ({abs_lat_diff:.2f}ms) exceeded threshold ({tol:.2f}ms)",
+                    ))
+                continue
+
+            # Check if this is a COUNT_DIFF evaluation
+            if resolution.metric == DifferenceMetric.COUNT_DIFF:
+                try:
+                    ref_c = int(ref_val)
+                    tar_c = int(tar_val)
+                    cnt_diff = abs(tar_c - ref_c)
+                    is_within = bool(cnt_diff <= tol)
+                    if is_within:
+                        passed += 1
+                    else:
+                        failed += 1
+                        diffs.append(AdvancedEvaluationDifference(
+                            difference_id=f"diff_{uuid.uuid4().hex[:8]}",
+                            dimension=BehaviorDimension.OUTPUT,
+                            input_id=input_id,
+                            difference_type=DifferenceType.NUMERIC_TOLERANCE_EXCEEDED,
+                            reference_value=ref_c,
+                            target_value=tar_c,
+                            observed_difference=float(cnt_diff),
+                            resolved_threshold=round(tol, 6),
+                            resolution=resolution,
+                            within_tolerance=False,
+                            verdict=EvaluationVerdict.DIFFERENT,
+                            explanation=f"Count delta {cnt_diff} exceeded tolerance {tol}",
+                        ))
+                    continue
+                except (ValueError, TypeError):
+                    pass
+
+            # Check if this is SEQUENCE_DISTANCE
+            if resolution.metric == DifferenceMetric.SEQUENCE_DISTANCE:
+                seq_dist = self._compute_sequence_distance(ref_val, tar_val)
+                is_within = bool(seq_dist <= tol)
+                if is_within:
+                    passed += 1
+                else:
+                    failed += 1
+                    diffs.append(AdvancedEvaluationDifference(
+                        difference_id=f"diff_{uuid.uuid4().hex[:8]}",
+                        dimension=BehaviorDimension.OUTPUT,
+                        input_id=input_id,
+                        difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
+                        reference_value=str(ref_val),
+                        target_value=str(tar_val),
+                        observed_difference=round(seq_dist, 6),
+                        resolved_threshold=round(tol, 6),
+                        resolution=resolution,
+                        within_tolerance=False,
+                        verdict=EvaluationVerdict.DIFFERENT,
+                        explanation=f"Sequence distance {seq_dist:.6f} exceeded tolerance {tol:.6f}",
+                    ))
+                continue
+
+            # Check if this is STRUCTURAL_SIMILARITY
+            if resolution.metric == DifferenceMetric.STRUCTURAL_SIMILARITY:
+                struct_diff = self._compute_structural_difference(ref_val, tar_val)
+                is_within = bool(struct_diff <= tol)
+                if is_within:
+                    passed += 1
+                else:
+                    failed += 1
+                    diffs.append(AdvancedEvaluationDifference(
+                        difference_id=f"diff_{uuid.uuid4().hex[:8]}",
+                        dimension=BehaviorDimension.OUTPUT,
+                        input_id=input_id,
+                        difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
+                        reference_value=str(ref_val),
+                        target_value=str(tar_val),
+                        observed_difference=round(struct_diff, 6),
+                        resolved_threshold=round(tol, 6),
+                        resolution=resolution,
+                        within_tolerance=False,
+                        verdict=EvaluationVerdict.DIFFERENT,
+                        explanation=f"Structural difference {struct_diff:.6f} exceeded tolerance {tol:.6f}",
+                    ))
+                continue
+
+            # Numerical difference comparison (ABSOLUTE_DIFF, RELATIVE_DIFF, PERCENTAGE_DIFF)
             if isinstance(ref_val, (int, float)) and isinstance(tar_val, (int, float)):
-                # Numerical difference comparison
                 ref_f = float(ref_val)
                 tar_f = float(tar_val)
-                
-                # Check for exact equality or delta
                 abs_diff = abs(tar_f - ref_f)
-                
+
                 if resolution.metric == DifferenceMetric.RELATIVE_DIFF:
                     if abs(ref_f) > 1e-12:
                         observed_diff = abs_diff / abs(ref_f)
                     else:
-                        observed_diff = abs_diff # Zero reference safe handling
+                        observed_diff = abs_diff
                 elif resolution.metric == DifferenceMetric.PERCENTAGE_DIFF:
                     if abs(ref_f) > 1e-12:
                         observed_diff = (abs_diff / abs(ref_f)) * 100.0
@@ -262,9 +363,7 @@ class AdvancedBehavioralEvaluator:
                 else:
                     observed_diff = abs_diff
 
-                tol = resolution.final_value if resolution.final_value is not None else 0.0
                 is_within = bool(observed_diff <= tol)
-
                 if is_within:
                     passed += 1
                 else:
@@ -319,16 +418,97 @@ class AdvancedBehavioralEvaluator:
         """Extracts comparable scalar or structured object from an item."""
         if isinstance(item, (int, float, str, bool, list, tuple)) or item is None:
             return item
+        if hasattr(item, "observation") and item.observation:
+            obs = item.observation.normalized_outputs or item.observation.raw_outputs or item.stdout
+            return self._extract_single_val(obs)
+        if hasattr(item, "payload") and isinstance(item.payload, dict):
+            if "output" in item.payload:
+                return self._extract_single_val(item.payload["output"])
+            if "data" in item.payload:
+                return self._extract_single_val(item.payload["data"])
+            return self._extract_single_val(item.payload)
         if isinstance(item, dict):
-            # If it's a single-key wrapper like {"value": 10}, unwrap it
             if len(item) == 1:
                 for k in ("value", "output", "result", "numeric_value"):
                     if k in item:
-                        return item[k]
+                        return self._extract_single_val(item[k])
             return item
         if hasattr(item, "data"):
-            return item.data
+            return self._extract_single_val(item.data)
         return item
+
+    def _extract_latency_ms(self, item: Any, val: Any) -> float:
+        """Safely extracts latency/duration in milliseconds from item or observation."""
+        if hasattr(item, "duration_ms"):
+            return float(item.duration_ms)
+        if hasattr(item, "observation") and item.observation:
+            return float(getattr(item.observation, "execution_time_ms", 0.0))
+        if isinstance(item, dict):
+            for k in ("duration_ms", "latency_ms", "execution_time_ms", "latency"):
+                if k in item and isinstance(item[k], (int, float)):
+                    return float(item[k])
+        if isinstance(val, (int, float)):
+            return float(val)
+        return 0.0
+
+    def _compute_sequence_distance(self, a: Any, b: Any) -> float:
+        """Computes normalized Levenshtein sequence distance between two sequences."""
+        seq_a = list(a) if isinstance(a, (list, tuple)) else str(a)
+        seq_b = list(b) if isinstance(b, (list, tuple)) else str(b)
+        n, m = len(seq_a), len(seq_b)
+        if max(n, m) == 0:
+            return 0.0
+
+        # Levenshtein DP
+        dp = [[0] * (m + 1) for _ in range(n + 1)]
+        for i in range(n + 1):
+            dp[i][0] = i
+        for j in range(m + 1):
+            dp[0][j] = j
+
+        for i in range(1, n + 1):
+            for j in range(1, m + 1):
+                cost = 0 if seq_a[i - 1] == seq_b[j - 1] else 1
+                dp[i][j] = min(
+                    dp[i - 1][j] + 1,      # deletion
+                    dp[i][j - 1] + 1,      # insertion
+                    dp[i - 1][j - 1] + cost # substitution
+                )
+        raw_dist = dp[n][m]
+        return float(raw_dist) / max(n, m)
+
+    def _compute_structural_difference(self, a: Any, b: Any) -> float:
+        """Computes structural difference ratio based on key/path overlap and scalar matches."""
+        if a == b:
+            return 0.0
+
+        def flatten_keys(obj: Any, prefix: str = "") -> dict[str, Any]:
+            res: dict[str, Any] = {}
+            if isinstance(obj, dict):
+                for k, v in obj.items():
+                    p = f"{prefix}.{k}" if prefix else str(k)
+                    res.update(flatten_keys(v, p))
+            elif isinstance(obj, (list, tuple)):
+                for idx, item in enumerate(obj):
+                    p = f"{prefix}[{idx}]"
+                    res.update(flatten_keys(item, p))
+            else:
+                res[prefix] = obj
+            return res
+
+        flat_a = flatten_keys(a)
+        flat_b = flatten_keys(b)
+
+        all_keys = set(flat_a.keys()) | set(flat_b.keys())
+        if not all_keys:
+            return 0.0
+
+        mismatches = 0
+        for k in all_keys:
+            if k not in flat_a or k not in flat_b or flat_a[k] != flat_b[k]:
+                mismatches += 1
+
+        return float(mismatches) / len(all_keys)
 
 
 

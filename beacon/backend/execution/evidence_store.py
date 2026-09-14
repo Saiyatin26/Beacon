@@ -371,7 +371,7 @@ class EvidenceStore:
             with sqlite3.connect(str(self._db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT record_json FROM evidence_records WHERE session_id = ? ORDER BY sequence ASC",
+                    "SELECT record_json FROM evidence_records WHERE session_id = ? ORDER BY created_at ASC",
                     (session_id,),
                 )
                 for row in cursor.fetchall():

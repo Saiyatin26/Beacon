@@ -228,6 +228,25 @@ class ExecutionRepository:
 
         return None
 
+    def list_results_for_session(self, session_id: str) -> list[ExecutionResult]:
+        """Retrieves all ExecutionResult records associated with a session."""
+        results: list[ExecutionResult] = []
+        try:
+            with sqlite3.connect(str(self._db_path)) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT result_json FROM execution_records WHERE session_id = ? ORDER BY created_at ASC",
+                    (session_id,),
+                )
+                for row in cursor.fetchall():
+                    data = json.loads(row[0])
+                    results.append(ExecutionResult(**data))
+        except Exception as exc:
+            logger.warning(f"SQLite list_results_for_session error: {exc}")
+            results = [r for r in self._memory_results.values() if r.session_id == session_id]
+
+        return results
+
     def clear(self) -> None:
         """Clears memory and tables for test isolation."""
         self._memory_sessions.clear()

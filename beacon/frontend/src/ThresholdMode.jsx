@@ -22,10 +22,12 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
   const [resolvedThreshold, setResolvedThreshold] = useState(null);
   const [resolveError, setResolveError] = useState(null);
 
-  // Evaluation Sandbox State
+  // Evaluation Sandbox State (Simulation / Preview)
   const [refVal, setRefVal] = useState("100.0");
   const [tarVal, setTarVal] = useState("100.12");
   const [evalVerdict, setEvalVerdict] = useState(null);
+  const [backendEvalResult, setBackendEvalResult] = useState(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
 
   const handleResolveThreshold = async () => {
     setIsResolving(true);
@@ -73,7 +75,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
 
       const res = await resp.json();
       setResolvedThreshold(res);
-      evaluateSandbox(res);
+      evaluateSimulationPreview(res);
     } catch (err) {
       setResolveError(err.message || String(err));
     } finally {
@@ -81,9 +83,9 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
     }
   };
 
-  const evaluateSandbox = (resObj) => {
+  const evaluateSimulationPreview = (resObj) => {
     const res = resObj || resolvedThreshold;
-    if (!res || res.status !== "RESOLVED" && res.status !== "FIXED") {
+    if (!res || (res.status !== "RESOLVED" && res.status !== "FIXED")) {
       setEvalVerdict({
         status: "INCONCLUSIVE",
         reason: "Threshold is not resolved (insufficient evidence or error).",
@@ -117,10 +119,54 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
       diff: diff.toFixed(6),
       tol: tol.toFixed(6),
       isWithin,
+      isSimulation: true,
       reason: isWithin
-        ? `Observed difference (${diff.toFixed(6)}) is within frozen tolerance (${tol.toFixed(6)}).`
-        : `Observed difference (${diff.toFixed(6)}) exceeded frozen tolerance (${tol.toFixed(6)}).`,
+        ? `[SIMULATION PREVIEW] Difference (${diff.toFixed(6)}) within resolved tolerance (${tol.toFixed(6)}). Authoritative certification runs on backend.`
+        : `[SIMULATION PREVIEW] Difference (${diff.toFixed(6)}) exceeded resolved tolerance (${tol.toFixed(6)}). Authoritative certification runs on backend.`,
     });
+  };
+
+  const handleRunAuthoritativeEvaluation = async () => {
+    setIsEvaluating(true);
+    try {
+      const policyPayload = {
+        policy_id: `policy_${strategy.toLowerCase()}_v1`,
+        version: "1.0.0",
+        description: "Interactive threshold policy from UI",
+        metric: metric,
+        strategy: strategy,
+        parameters: strategy === "FIXED" ? { value: parseFloat(fixedValue) || 0.0 } : { k: parseFloat(kParam) || 2.0 },
+        minimum_samples: parseInt(minSamples, 10) || 5,
+        minimum_bound: minBound ? parseFloat(minBound) : null,
+        maximum_bound: maxBound ? parseFloat(maxBound) : null,
+        estimator: estimator,
+        outlier_policy: outlierPolicy,
+        fallback_strategy: fallbackStrategy,
+        fallback_value: fallbackValue ? parseFloat(fallbackValue) : null,
+        enabled: true,
+      };
+
+      const evalReq = {
+        application_id: "interactive_app",
+        custom_policy: policyPayload,
+        persist: true,
+      };
+
+      const resp = await (authFetch || fetch)(`${apiBase}/api/v2/evaluation/advanced`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(evalReq),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        setBackendEvalResult(data);
+      }
+    } catch (err) {
+      console.error("Backend evaluation error", err);
+    } finally {
+      setIsEvaluating(false);
+    }
   };
 
   useEffect(() => {
@@ -362,11 +408,16 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
             )}
           </div>
 
-          {/* Evaluation Sandbox Card */}
+          {/* Evaluation Sandbox Card (Preview / Simulation) */}
           <div style={cardStyle}>
-            <h3 style={{ fontSize: "16px", fontWeight: "600", marginBottom: "14px", color: "#1e293b" }}>
-              3. Behavioral Comparison Sandbox
-            </h3>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", margin: 0, color: "#1e293b" }}>
+                3. Simulation Preview (Non-Authoritative)
+              </h3>
+              <span style={badgeStyle("#f1f5f9", "#475569", "#cbd5e1")}>
+                Preview Only
+              </span>
+            </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "14px" }}>
               <div>
@@ -378,7 +429,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   value={refVal}
                   onChange={(e) => {
                     setRefVal(e.target.value);
-                    evaluateSandbox();
+                    evaluateSimulationPreview();
                   }}
                   style={{ width: "100%", padding: "8px 10px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "13px" }}
                 />
@@ -392,7 +443,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   value={tarVal}
                   onChange={(e) => {
                     setTarVal(e.target.value);
-                    evaluateSandbox();
+                    evaluateSimulationPreview();
                   }}
                   style={{ width: "100%", padding: "8px 10px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "13px" }}
                 />
@@ -409,11 +460,12 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   }`,
                   background:
                     evalVerdict.status === "EQUIVALENT" ? "#f0fdf4" : evalVerdict.status === "DIFFERENT" ? "#fef2f2" : "#fff7ed",
+                  marginBottom: "14px",
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                   <span style={{ fontWeight: "700", fontSize: "15px", color: evalVerdict.status === "EQUIVALENT" ? "#15803d" : "#b91c1c" }}>
-                    {evalVerdict.status === "EQUIVALENT" ? "✓ EQUIVALENT" : evalVerdict.status === "DIFFERENT" ? "✗ DIFFERENT" : "⚠ INCONCLUSIVE"}
+                    {evalVerdict.status === "EQUIVALENT" ? "✓ EQUIVALENT (PREVIEW)" : evalVerdict.status === "DIFFERENT" ? "✗ DIFFERENT (PREVIEW)" : "⚠ INCONCLUSIVE"}
                   </span>
                   {evalVerdict.diff !== undefined && (
                     <span style={{ fontSize: "13px", color: "#475569" }}>
@@ -422,6 +474,40 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   )}
                 </div>
                 <div style={{ fontSize: "13px", color: "#334155" }}>{evalVerdict.reason}</div>
+              </div>
+            )}
+
+            <button
+              onClick={handleRunAuthoritativeEvaluation}
+              disabled={isEvaluating}
+              style={{
+                width: "100%",
+                padding: "10px",
+                background: "#0f172a",
+                color: "#ffffff",
+                border: "none",
+                borderRadius: "8px",
+                fontWeight: "600",
+                cursor: isEvaluating ? "wait" : "pointer",
+              }}
+            >
+              {isEvaluating ? "Executing..." : "🛡️ Run Backend Authoritative Evaluation"}
+            </button>
+
+            {backendEvalResult && (
+              <div style={{ marginTop: "14px", background: "#f8fafc", padding: "14px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                  <strong style={{ fontSize: "14px", color: "#0f172a" }}>Authoritative Backend Result</strong>
+                  <span style={badgeStyle("#ecfdf5", "#047857", "#10b981")}>
+                    {backendEvalResult.overall_verdict}
+                  </span>
+                </div>
+                <div style={{ fontSize: "12px", color: "#475569", lineHeight: "1.6" }}>
+                  <div>Evaluation ID: <code>{backendEvalResult.evaluation_id}</code></div>
+                  <div>Policy Hash: <code>{backendEvalResult.policy_hash?.slice(0, 16)}...</code></div>
+                  <div>Status: <strong>{backendEvalResult.status}</strong></div>
+                  <div>Total Evaluated: <strong>{backendEvalResult.total_evaluations}</strong></div>
+                </div>
               </div>
             )}
           </div>

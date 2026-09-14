@@ -53,11 +53,26 @@ class ThresholdEngine:
 
         active_policy = policy or self.default_policy
         policy_hash = active_policy.compute_policy_hash()
-        resolution_id = f"res_{compute_deterministic_hash([metric.value, policy_hash, len(reference_observations or [])])[:12]}"
+        evidence_ids_canonical = sorted(list(set(evidence_ids or [])))
+
+        clean_observations: list[float] = []
+        if reference_observations:
+            for obs in reference_observations:
+                if obs is None:
+                    continue
+                try:
+                    f_val = float(obs)
+                    if math.isnan(f_val) or math.isinf(f_val):
+                        continue
+                    clean_observations.append(f_val)
+                except (ValueError, TypeError):
+                    continue
+
+        resolution_id = f"res_{compute_deterministic_hash([metric.value, policy_hash, evidence_ids_canonical, clean_observations])[:12]}"
 
         # 1. FIXED Strategy
         if active_policy.strategy == ThresholdStrategy.FIXED:
-            fixed_val = float(active_policy.parameters.get("value", 0.0))
+            fixed_val = float(active_policy.parameters.get("value", active_policy.parameters.get("tolerance", 0.0)))
             return ThresholdResolution(
                 resolution_id=resolution_id,
                 metric=metric,
@@ -67,9 +82,9 @@ class ThresholdEngine:
                 final_value=fixed_val,
                 minimum_bound=active_policy.minimum_bound,
                 maximum_bound=active_policy.maximum_bound,
-                sample_count=len(reference_observations or []),
+                sample_count=len(clean_observations),
                 minimum_required_samples=0,
-                evidence_ids=sorted(list(set(evidence_ids or []))),
+                evidence_ids=evidence_ids_canonical,
                 policy_id=active_policy.policy_id,
                 policy_version=active_policy.version,
                 policy_hash=policy_hash,
@@ -87,9 +102,9 @@ class ThresholdEngine:
                 final_value=val,
                 minimum_bound=active_policy.minimum_bound,
                 maximum_bound=active_policy.maximum_bound,
-                sample_count=len(reference_observations or []),
+                sample_count=len(clean_observations),
                 minimum_required_samples=0,
-                evidence_ids=sorted(list(set(evidence_ids or []))),
+                evidence_ids=evidence_ids_canonical,
                 policy_id=active_policy.policy_id,
                 policy_version=active_policy.version,
                 policy_hash=policy_hash,
@@ -107,9 +122,9 @@ class ThresholdEngine:
                 final_value=val,
                 minimum_bound=active_policy.minimum_bound,
                 maximum_bound=active_policy.maximum_bound,
-                sample_count=len(reference_observations or []),
+                sample_count=len(clean_observations),
                 minimum_required_samples=0,
-                evidence_ids=sorted(list(set(evidence_ids or []))),
+                evidence_ids=evidence_ids_canonical,
                 policy_id=active_policy.policy_id,
                 policy_version=active_policy.version,
                 policy_hash=policy_hash,
@@ -127,30 +142,17 @@ class ThresholdEngine:
                 final_value=val,
                 minimum_bound=active_policy.minimum_bound,
                 maximum_bound=active_policy.maximum_bound,
-                sample_count=len(reference_observations or []),
+                sample_count=len(clean_observations),
                 minimum_required_samples=0,
-                evidence_ids=sorted(list(set(evidence_ids or []))),
+                evidence_ids=evidence_ids_canonical,
                 policy_id=active_policy.policy_id,
                 policy_version=active_policy.version,
                 policy_hash=policy_hash,
             )
 
         # 5. EVIDENCE_DERIVED / STATISTICAL Strategy
-        clean_observations: list[float] = []
-        if reference_observations:
-            for obs in reference_observations:
-                if obs is None:
-                    continue
-                try:
-                    f_val = float(obs)
-                    if math.isnan(f_val) or math.isinf(f_val):
-                        continue
-                    clean_observations.append(f_val)
-                except (ValueError, TypeError):
-                    continue
-
         sample_count = len(clean_observations)
-        ev_ids = sorted(list(set(evidence_ids or [])))
+        ev_ids = evidence_ids_canonical
 
         # Check Sample Sufficiency
         if sample_count < active_policy.minimum_samples:

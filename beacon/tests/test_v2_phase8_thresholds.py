@@ -18,7 +18,10 @@ sys.path.insert(0, str(ROOT / "backend"))
 from api.main import app
 from auth import create_access_token
 from auth.repository import auth_repository
+from common.contracts import AdapterRole, Observation
 from evaluation.models import BehaviorDimension, DifferenceType, EvaluationVerdict
+from execution.models import ExecutionResult, ExecutionSession, ExecutionStatus
+from execution.repository import execution_repository
 from reconciliation.models import (
     EvidenceMetricBasis,
     OracleRule,
@@ -541,4 +544,224 @@ class TestPhase8DynamicThresholds:
         assert res.sample_count == 3  # Only the 3 clean numbers counted
         assert not math.isnan(res.final_value)
         assert not math.isinf(res.final_value)
+
+    # --------------------------------------------------------------------------
+    # 21. ISSUE A: Real Phase 3 Evidence Loading via API
+    # --------------------------------------------------------------------------
+    def test_api_loads_real_phase3_evidence_from_sessions(self):
+        token = create_access_token({"sub": "admin", "is_admin": True})
+        headers = {"Authorization": f"Bearer {token}"}
+        client = TestClient(app)
+
+        # 1. Create and persist real reference session with execution records
+        ref_sess = ExecutionSession(
+            session_id="sess_ref_real_001",
+            application_id="app_phase3_test",
+            adapter_id="ref_adapter",
+            role=AdapterRole.REFERENCE,
+            status=ExecutionStatus.SUCCEEDED,
+        )
+        execution_repository.save_session(ref_sess)
+
+        res1 = ExecutionResult(
+            execution_id="exec_ref_1",
+            session_id="sess_ref_real_001",
+            application_id="app_phase3_test",
+            role=AdapterRole.REFERENCE,
+            status=ExecutionStatus.SUCCEEDED,
+            stdout='{"value": 100.0}',
+            observation=Observation(
+                input_id="inp_1",
+                raw_inputs={},
+                raw_outputs={"value": 100.0},
+                normalized_outputs={"value": 100.0},
+            ),
+        )
+        execution_repository.save_result(res1)
+
+        # 2. Create and persist real target session with execution records
+        tar_sess = ExecutionSession(
+            session_id="sess_tar_real_001",
+            application_id="app_phase3_test",
+            adapter_id="tar_adapter",
+            role=AdapterRole.TARGET,
+            status=ExecutionStatus.SUCCEEDED,
+        )
+        execution_repository.save_session(tar_sess)
+
+        res2 = ExecutionResult(
+            execution_id="exec_tar_1",
+            session_id="sess_tar_real_001",
+            application_id="app_phase3_test",
+            role=AdapterRole.TARGET,
+            status=ExecutionStatus.SUCCEEDED,
+            stdout='{"value": 100.02}',
+            observation=Observation(
+                input_id="inp_1",
+                raw_inputs={},
+                raw_outputs={"value": 100.02},
+                normalized_outputs={"value": 100.02},
+            ),
+        )
+        execution_repository.save_result(res2)
+
+        # 3. Call Advanced Evaluation with real session IDs
+        eval_req = {
+            "application_id": "app_phase3_test",
+            "reference_session_id": "sess_ref_real_001",
+            "target_session_id": "sess_tar_real_001",
+            "custom_policy": {
+                "strategy": "ABSOLUTE",
+                "metric": "ABSOLUTE_DIFF",
+                "parameters": {"tolerance": 0.05},
+            },
+            "persist": False,
+        }
+
+        resp = client.post("/api/v2/evaluation/advanced", json=eval_req, headers=headers)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["overall_verdict"] == "EQUIVALENT"
+        assert data["total_evaluations"] == 1
+        assert data["passed_count"] == 1
+
+    # --------------------------------------------------------------------------
+    # 22. ISSUE A: Session Role Confusion & Missing Session Rejection
+    # --------------------------------------------------------------------------
+    def test_api_rejects_session_role_confusion_and_missing_session(self):
+        token = create_access_token({"sub": "admin", "is_admin": True})
+        headers = {"Authorization": f"Bearer {token}"}
+        client = TestClient(app)
+
+        # A. Wrong role: supply target session as reference_session_id
+        eval_req_wrong_role = {
+            "application_id": "app_phase3_test",
+            "reference_session_id": "sess_tar_real_001",  # Has role 'target'
+            "target_session_id": "sess_tar_real_001",
+        }
+        r_role = client.post("/api/v2/evaluation/advanced", json=eval_req_wrong_role, headers=headers)
+        assert r_role.status_code == 400
+        assert "expected REFERENCE" in r_role.json()["detail"]
+
+        # B. Missing session: supply non-existent session ID
+        eval_req_missing = {
+            "application_id": "app_phase3_test",
+            "reference_session_id": "sess_non_existent_999",
+            "target_session_id": "sess_tar_real_001",
+        }
+        r_miss = client.post("/api/v2/evaluation/advanced", json=eval_req_missing, headers=headers)
+        assert r_miss.status_code == 404
+        assert "not found" in r_miss.json()["detail"]
+
+    # --------------------------------------------------------------------------
+    # 23. ISSUE C: Resolution Identity Tied to Canonical Evidence IDs
+    # --------------------------------------------------------------------------
+    def test_resolution_identity_sensitive_to_evidence_ids(self):
+        engine = ThresholdEngine()
+        policy = ThresholdPolicy(
+            strategy=ThresholdStrategy.EVIDENCE_DERIVED,
+            minimum_samples=3,
+        )
+        samples = [10.0, 11.0, 9.0]
+
+        # Resolution with evidence set A
+        res_a = engine.resolve_threshold(
+            DifferenceMetric.ABSOLUTE_DIFF, policy, samples, evidence_ids=["e1", "e2", "e3"]
+        )
+        # Resolution with evidence set B (different IDs, identical values & count)
+        res_b = engine.resolve_threshold(
+            DifferenceMetric.ABSOLUTE_DIFF, policy, samples, evidence_ids=["e7", "e8", "e9"]
+        )
+        # Resolution with evidence set A in different order
+        res_a_shuffled = engine.resolve_threshold(
+            DifferenceMetric.ABSOLUTE_DIFF, policy, samples, evidence_ids=["e3", "e1", "e2"]
+        )
+
+        assert res_a.fingerprint != res_b.fingerprint
+        assert res_a.resolution_id != res_b.resolution_id
+        assert res_a.fingerprint == res_a_shuffled.fingerprint
+        assert res_a.resolution_id == res_a_shuffled.resolution_id
+
+    # --------------------------------------------------------------------------
+    # 24. ISSUE D: End-to-End Metrics (COUNT_DIFF, LATENCY_DIFF, SEQUENCE, STRUCTURAL)
+    # --------------------------------------------------------------------------
+    def test_all_advertised_metrics_end_to_end(self):
+        evaluator = AdvancedBehavioralEvaluator()
+        oracle = OracleSet(oracle_set_id="os_metrics", application_id="app_metrics")
+
+        # 1. COUNT_DIFF
+        pol_count = ThresholdPolicy(metric=DifferenceMetric.COUNT_DIFF, strategy=ThresholdStrategy.FIXED, parameters={"tolerance": 2})
+        res_count_pass = evaluator.evaluate(
+            application_id="app_m", oracle_set=oracle, reference_evidence=[10], target_evidence=[12], policy=pol_count
+        )
+        assert res_count_pass.overall_verdict == EvaluationVerdict.EQUIVALENT
+
+        res_count_fail = evaluator.evaluate(
+            application_id="app_m", oracle_set=oracle, reference_evidence=[10], target_evidence=[15], policy=pol_count
+        )
+        assert res_count_fail.overall_verdict == EvaluationVerdict.DIFFERENT
+
+        # 2. LATENCY_DIFF
+        pol_lat = ThresholdPolicy(metric=DifferenceMetric.LATENCY_DIFF, strategy=ThresholdStrategy.FIXED, parameters={"tolerance": 50.0})
+        res_lat_pass = evaluator.evaluate(
+            application_id="app_m", oracle_set=oracle,
+            reference_evidence=[{"duration_ms": 100.0}], target_evidence=[{"duration_ms": 140.0}], policy=pol_lat
+        )
+        assert res_lat_pass.overall_verdict == EvaluationVerdict.EQUIVALENT
+
+        res_lat_fail = evaluator.evaluate(
+            application_id="app_m", oracle_set=oracle,
+            reference_evidence=[{"duration_ms": 100.0}], target_evidence=[{"duration_ms": 200.0}], policy=pol_lat
+        )
+        assert res_lat_fail.overall_verdict == EvaluationVerdict.DIFFERENT
+
+        # 3. SEQUENCE_DISTANCE
+        pol_seq = ThresholdPolicy(metric=DifferenceMetric.SEQUENCE_DISTANCE, strategy=ThresholdStrategy.FIXED, parameters={"tolerance": 0.25})
+        res_seq_pass = evaluator.evaluate(
+            application_id="app_m", oracle_set=oracle,
+            reference_evidence=[["a", "b", "c", "d"]], target_evidence=[["a", "b", "c", "e"]], policy=pol_seq
+        )
+        # 1 edit in 4 items = 0.25 <= 0.25 -> EQUIVALENT
+        assert res_seq_pass.overall_verdict == EvaluationVerdict.EQUIVALENT
+
+        res_seq_fail = evaluator.evaluate(
+            application_id="app_m", oracle_set=oracle,
+            reference_evidence=[["a", "b", "c", "d"]], target_evidence=[["w", "x", "y", "z"]], policy=pol_seq
+        )
+        assert res_seq_fail.overall_verdict == EvaluationVerdict.DIFFERENT
+
+        # 4. STRUCTURAL_SIMILARITY
+        pol_struct = ThresholdPolicy(metric=DifferenceMetric.STRUCTURAL_SIMILARITY, strategy=ThresholdStrategy.FIXED, parameters={"tolerance": 0.2})
+        obj_a = {"user": "Alice", "role": "admin", "settings": {"theme": "dark", "lang": "en"}}
+        obj_b = {"user": "Alice", "role": "admin", "settings": {"theme": "dark", "lang": "fr"}} # 1 key diff out of 4
+        res_struct_pass = evaluator.evaluate(
+            application_id="app_m", oracle_set=oracle,
+            reference_evidence=[obj_a], target_evidence=[obj_b], policy=pol_struct
+        )
+        # 1 mismatch out of 4 flattened keys = 0.25 > 0.20 -> DIFFERENT
+        assert res_struct_pass.overall_verdict == EvaluationVerdict.DIFFERENT
+
+    # --------------------------------------------------------------------------
+    # 25. ISSUE E: Strict Threshold Policy Validation
+    # --------------------------------------------------------------------------
+    def test_strict_policy_validation(self):
+        # 1. Negative tolerance rejected
+        with pytest.raises(ValueError) as exc_neg_tol:
+            ThresholdPolicy(strategy=ThresholdStrategy.RELATIVE, parameters={"tolerance": -0.05})
+        assert "cannot be negative" in str(exc_neg_tol.value)
+
+        # 2. minimum_bound > maximum_bound rejected
+        with pytest.raises(ValueError) as exc_bounds:
+            ThresholdPolicy(minimum_bound=10.0, maximum_bound=5.0)
+        assert "cannot exceed maximum_bound" in str(exc_bounds.value)
+
+        # 3. Negative minimum_samples rejected
+        with pytest.raises(ValueError) as exc_samples:
+            ThresholdPolicy(minimum_samples=-3)
+        assert "cannot be negative" in str(exc_samples.value)
+
+        # 4. NaN / Inf bounds rejected
+        with pytest.raises(ValueError) as exc_nan:
+            ThresholdPolicy(minimum_bound=float("nan"))
+        assert "cannot be NaN" in str(exc_nan.value)
 
