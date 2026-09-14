@@ -6,6 +6,7 @@ and complete decision traceability.
 """
 
 from datetime import datetime, timezone
+import json
 import math
 from typing import Any, Optional, Sequence, Union
 import uuid
@@ -165,6 +166,13 @@ class AdvancedBehavioralEvaluator:
                     v = item.get(k)
                     if isinstance(v, (int, float)) and not math.isnan(v) and not math.isinf(v):
                         numbers.append(float(v))
+            elif hasattr(item, "observation") and item.observation:
+                obs_dict = item.observation.normalized_outputs or item.observation.raw_outputs or {}
+                if isinstance(obs_dict, dict):
+                    for k in ("value", "output", "numeric_value", "result", "duration_ms", "latency_ms"):
+                        v = obs_dict.get(k)
+                        if isinstance(v, (int, float)) and not math.isnan(v) and not math.isinf(v):
+                            numbers.append(float(v))
             elif hasattr(item, "data") and isinstance(item.data, dict):
                 for k in ("value", "output", "numeric_value", "result"):
                     v = item.data.get(k)
@@ -421,6 +429,12 @@ class AdvancedBehavioralEvaluator:
         if hasattr(item, "observation") and item.observation:
             obs = item.observation.normalized_outputs or item.observation.raw_outputs or item.stdout
             return self._extract_single_val(obs)
+        if hasattr(item, "stdout") and item.stdout:
+            try:
+                parsed = json.loads(item.stdout)
+                return self._extract_single_val(parsed)
+            except Exception:
+                return item.stdout
         if hasattr(item, "payload") and isinstance(item.payload, dict):
             if "output" in item.payload:
                 return self._extract_single_val(item.payload["output"])

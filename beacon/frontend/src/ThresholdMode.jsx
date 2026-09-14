@@ -26,6 +26,12 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
   const [refVal, setRefVal] = useState("100.0");
   const [tarVal, setTarVal] = useState("100.12");
   const [evalVerdict, setEvalVerdict] = useState(null);
+  // Authoritative Evaluation Context State
+  const [appId, setAppId] = useState("default_app");
+  const [refSessionId, setRefSessionId] = useState("");
+  const [tarSessionId, setTarSessionId] = useState("");
+  const [oracleSetId, setOracleSetId] = useState("");
+  const [authEvalError, setAuthEvalError] = useState(null);
   const [backendEvalResult, setBackendEvalResult] = useState(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
@@ -127,7 +133,15 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
   };
 
   const handleRunAuthoritativeEvaluation = async () => {
+    if (!refSessionId.trim() || !tarSessionId.trim() || !oracleSetId.trim()) {
+      setAuthEvalError("Reference Session ID, Target Session ID, and OracleSet ID are all strictly required for authoritative evaluation.");
+      return;
+    }
+
     setIsEvaluating(true);
+    setAuthEvalError(null);
+    setBackendEvalResult(null);
+
     try {
       const policyPayload = {
         policy_id: `policy_${strategy.toLowerCase()}_v1`,
@@ -147,7 +161,10 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
       };
 
       const evalReq = {
-        application_id: "interactive_app",
+        application_id: appId.trim() || "default_app",
+        reference_session_id: refSessionId.trim(),
+        target_session_id: tarSessionId.trim(),
+        oracle_set_id: oracleSetId.trim(),
         custom_policy: policyPayload,
         persist: true,
       };
@@ -158,12 +175,15 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
         body: JSON.stringify(evalReq),
       });
 
-      if (resp.ok) {
-        const data = await resp.json();
-        setBackendEvalResult(data);
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({}));
+        throw new Error(errData.detail || `Evaluation failed with HTTP ${resp.status}`);
       }
+
+      const data = await resp.json();
+      setBackendEvalResult(data);
     } catch (err) {
-      console.error("Backend evaluation error", err);
+      setAuthEvalError(err.message || String(err));
     } finally {
       setIsEvaluating(false);
     }
@@ -460,7 +480,6 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   }`,
                   background:
                     evalVerdict.status === "EQUIVALENT" ? "#f0fdf4" : evalVerdict.status === "DIFFERENT" ? "#fef2f2" : "#fff7ed",
-                  marginBottom: "14px",
                 }}
               >
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
@@ -476,37 +495,127 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                 <div style={{ fontSize: "13px", color: "#334155" }}>{evalVerdict.reason}</div>
               </div>
             )}
+          </div>
+
+          {/* Authoritative Certification Card (Context-Aware) */}
+          <div style={cardStyle}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+              <h3 style={{ fontSize: "16px", fontWeight: "600", margin: 0, color: "#1e293b" }}>
+                4. Authoritative Certification Evaluation
+              </h3>
+              <span style={badgeStyle("#0f172a", "#f8fafc", "#334155")}>
+                Authoritative
+              </span>
+            </div>
+
+            <p style={{ fontSize: "13px", color: "#64748b", margin: "0 0 14px 0" }}>
+              Executes backend certification binding real Phase 3 Evidence Sessions with Phase 7 OracleSet rules under the resolved threshold policy.
+            </p>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "10px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px", color: "#475569" }}>
+                  Application ID *
+                </label>
+                <input
+                  type="text"
+                  value={appId}
+                  onChange={(e) => setAppId(e.target.value)}
+                  placeholder="e.g. app_medical_triage"
+                  style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px", color: "#475569" }}>
+                  OracleSet ID *
+                </label>
+                <input
+                  type="text"
+                  value={oracleSetId}
+                  onChange={(e) => setOracleSetId(e.target.value)}
+                  placeholder="e.g. os_triage_v1"
+                  style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "14px" }}>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px", color: "#475569" }}>
+                  Reference Session ID *
+                </label>
+                <input
+                  type="text"
+                  value={refSessionId}
+                  onChange={(e) => setRefSessionId(e.target.value)}
+                  placeholder="e.g. SESS-REF-001"
+                  style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                />
+              </div>
+              <div>
+                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", marginBottom: "4px", color: "#475569" }}>
+                  Target Session ID *
+                </label>
+                <input
+                  type="text"
+                  value={tarSessionId}
+                  onChange={(e) => setTarSessionId(e.target.value)}
+                  placeholder="e.g. SESS-TAR-001"
+                  style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
+                />
+              </div>
+            </div>
+
+            {(!refSessionId.trim() || !tarSessionId.trim() || !oracleSetId.trim()) && (
+              <div style={{ padding: "10px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: "6px", color: "#c2410c", fontSize: "12px", marginBottom: "12px" }}>
+                ⚠️ Authoritative certification requires selecting/providing Reference Session ID, Target Session ID, and OracleSet ID.
+              </div>
+            )}
+
+            {authEvalError && (
+              <div style={{ padding: "10px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "6px", color: "#b91c1c", fontSize: "12px", marginBottom: "12px" }}>
+                Error: {authEvalError}
+              </div>
+            )}
 
             <button
               onClick={handleRunAuthoritativeEvaluation}
-              disabled={isEvaluating}
+              disabled={isEvaluating || !refSessionId.trim() || !tarSessionId.trim() || !oracleSetId.trim()}
               style={{
                 width: "100%",
                 padding: "10px",
-                background: "#0f172a",
+                background: (!refSessionId.trim() || !tarSessionId.trim() || !oracleSetId.trim()) ? "#94a3b8" : "#0f172a",
                 color: "#ffffff",
                 border: "none",
                 borderRadius: "8px",
                 fontWeight: "600",
-                cursor: isEvaluating ? "wait" : "pointer",
+                cursor: (isEvaluating || !refSessionId.trim() || !tarSessionId.trim() || !oracleSetId.trim()) ? "not-allowed" : "pointer",
               }}
             >
-              {isEvaluating ? "Executing..." : "🛡️ Run Backend Authoritative Evaluation"}
+              {isEvaluating ? "Executing Certification..." : "🛡️ Run Backend Authoritative Evaluation"}
             </button>
 
             {backendEvalResult && (
               <div style={{ marginTop: "14px", background: "#f8fafc", padding: "14px", borderRadius: "8px", border: "1px solid #cbd5e1" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                  <strong style={{ fontSize: "14px", color: "#0f172a" }}>Authoritative Backend Result</strong>
-                  <span style={badgeStyle("#ecfdf5", "#047857", "#10b981")}>
+                  <strong style={{ fontSize: "14px", color: "#0f172a" }}>Authoritative Backend Verdict</strong>
+                  <span
+                    style={
+                      backendEvalResult.overall_verdict === "EQUIVALENT"
+                        ? badgeStyle("#ecfdf5", "#047857", "#10b981")
+                        : backendEvalResult.overall_verdict === "DIFFERENT"
+                        ? badgeStyle("#fef2f2", "#b91c1c", "#ef4444")
+                        : badgeStyle("#fff7ed", "#c2410c", "#f97316")
+                    }
+                  >
                     {backendEvalResult.overall_verdict}
                   </span>
                 </div>
                 <div style={{ fontSize: "12px", color: "#475569", lineHeight: "1.6" }}>
                   <div>Evaluation ID: <code>{backendEvalResult.evaluation_id}</code></div>
+                  <div>OracleSet Hash: <code>{backendEvalResult.oracle_set_hash?.slice(0, 16) || "N/A"}...</code></div>
                   <div>Policy Hash: <code>{backendEvalResult.policy_hash?.slice(0, 16)}...</code></div>
-                  <div>Status: <strong>{backendEvalResult.status}</strong></div>
-                  <div>Total Evaluated: <strong>{backendEvalResult.total_evaluations}</strong></div>
+                  <div>Evaluations: <strong>{backendEvalResult.total_evaluations}</strong> (Passed: {backendEvalResult.passed_count}, Failed: {backendEvalResult.failed_count}, Inconclusive: {backendEvalResult.inconclusive_count})</div>
                 </div>
               </div>
             )}

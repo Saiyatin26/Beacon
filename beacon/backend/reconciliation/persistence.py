@@ -126,74 +126,90 @@ class ReconciliationPersistenceStore:
                 ))
 
                 if result.oracle_set:
-                    oset = result.oracle_set
-                    oset_payload = json.dumps(oset.model_dump(), default=str)
-                    conn.execute("""
-                        INSERT OR REPLACE INTO reconciled_oracle_sets (
-                            oracle_set_id, application_id, version, status,
-                            oracle_set_hash, created_at, payload_json
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        oset.oracle_set_id,
-                        oset.application_id,
-                        oset.version,
-                        oset.status.value,
-                        oset.oracle_set_hash,
-                        oset.created_at,
-                        oset_payload,
-                    ))
-
-                    for idx, rule in enumerate(oset.rules):
-                        rule_inst_id = f"{oset.oracle_set_id}_{rule.rule_id}_{idx}"
-                        rule_payload = json.dumps(rule.model_dump(), default=str)
-                        conn.execute("""
-                            INSERT OR REPLACE INTO oracle_set_rules (
-                                oracle_rule_instance_id, rule_id, oracle_set_id, fingerprint,
-                                rule_type, canonical_expression, role_scope, source,
-                                confidence, support_count, created_at, payload_json
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            rule_inst_id,
-                            rule.rule_id,
-                            oset.oracle_set_id,
-                            rule.fingerprint,
-                            rule.rule_type,
-                            rule.canonical_expression,
-                            rule.role_scope,
-                            rule.source.value,
-                            rule.confidence,
-                            rule.support_count,
-                            rule.created_at,
-                            rule_payload,
-                        ))
-
-                    for idx, conf in enumerate(oset.conflicts):
-                        conf_inst_id = f"{result.run_id}_{conf.conflict_id}_{idx}"
-                        conf_payload = json.dumps(conf.model_dump(), default=str)
-                        conn.execute("""
-                            INSERT OR REPLACE INTO rule_conflicts (
-                                conflict_instance_id, conflict_id, run_id, oracle_set_id,
-                                rule_a_id, rule_b_id, fingerprint, resolution_status,
-                                created_at, payload_json
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            conf_inst_id,
-                            conf.conflict_id,
-                            result.run_id,
-                            oset.oracle_set_id,
-                            conf.rule_a_id,
-                            conf.rule_b_id,
-                            conf.fingerprint,
-                            conf.resolution_status,
-                            conf.created_at,
-                            conf_payload,
-                        ))
+                    self.save_oracle_set(result.oracle_set, conn=conn)
 
                 conn.commit()
                 logger.info(f"Successfully persisted reconciliation run '{result.run_id}'.")
         except Exception as exc:
             logger.error(f"Failed to persist reconciliation result '{result.run_id}': {exc}")
             raise ReconciliationPersistenceError(f"Reconciliation persistence failure: {exc}") from exc
+
+    def save_oracle_set(self, oracle_set: OracleSet, conn: Optional[sqlite3.Connection] = None) -> None:
+        """Persists a standalone OracleSet and its rules/conflicts into SQLite."""
+        def _execute_save(target_conn: sqlite3.Connection) -> None:
+            oset_payload = json.dumps(oracle_set.model_dump(), default=str)
+            target_conn.execute("""
+                INSERT OR REPLACE INTO reconciled_oracle_sets (
+                    oracle_set_id, application_id, version, status,
+                    oracle_set_hash, created_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                oracle_set.oracle_set_id,
+                oracle_set.application_id,
+                oracle_set.version,
+                oracle_set.status.value,
+                oracle_set.oracle_set_hash,
+                oracle_set.created_at,
+                oset_payload,
+            ))
+
+            for idx, rule in enumerate(oracle_set.rules):
+                rule_inst_id = f"{oracle_set.oracle_set_id}_{rule.rule_id}_{idx}"
+                rule_payload = json.dumps(rule.model_dump(), default=str)
+                target_conn.execute("""
+                    INSERT OR REPLACE INTO oracle_set_rules (
+                        oracle_rule_instance_id, rule_id, oracle_set_id, fingerprint,
+                        rule_type, canonical_expression, role_scope, source,
+                        confidence, support_count, created_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    rule_inst_id,
+                    rule.rule_id,
+                    oracle_set.oracle_set_id,
+                    rule.fingerprint,
+                    rule.rule_type,
+                    rule.canonical_expression,
+                    rule.role_scope,
+                    rule.source.value,
+                    rule.confidence,
+                    rule.support_count,
+                    rule.created_at,
+                    rule_payload,
+                ))
+
+            for idx, conf in enumerate(oracle_set.conflicts):
+                conf_inst_id = f"{oracle_set.oracle_set_id}_{conf.conflict_id}_{idx}"
+                conf_payload = json.dumps(conf.model_dump(), default=str)
+                target_conn.execute("""
+                    INSERT OR REPLACE INTO rule_conflicts (
+                        conflict_instance_id, conflict_id, run_id, oracle_set_id,
+                        rule_a_id, rule_b_id, fingerprint, resolution_status,
+                        created_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    conf_inst_id,
+                    conf.conflict_id,
+                    oracle_set.oracle_set_id,
+                    oracle_set.oracle_set_id,
+                    conf.rule_a_id,
+                    conf.rule_b_id,
+                    conf.fingerprint,
+                    conf.resolution_status,
+                    conf.created_at,
+                    conf_payload,
+                ))
+
+        try:
+            if conn is not None:
+                _execute_save(conn)
+            else:
+                with self._get_conn() as new_conn:
+                    _execute_save(new_conn)
+                    new_conn.commit()
+            logger.info(f"Successfully persisted OracleSet '{oracle_set.oracle_set_id}'.")
+        except Exception as exc:
+            logger.error(f"Failed to persist OracleSet '{oracle_set.oracle_set_id}': {exc}")
+            raise ReconciliationPersistenceError(f"OracleSet persistence failure: {exc}") from exc
 
     def get_reconciliation_result(self, run_id: str) -> Optional[ReconciliationResult]:
         """Retrieves a persisted ReconciliationResult by run ID."""

@@ -110,16 +110,18 @@ def evaluate_advanced(
     current_user: Optional[User] = Depends(get_current_active_user),
 ) -> AdvancedEvaluationResult:
     """Executes advanced behavioral evaluation using Phase 7 OracleSet, real Phase 3 evidence, and dynamic thresholds."""
-    # 1. Retrieve or construct OracleSet
-    oracle_set = None
-    if req.oracle_set_id:
-        oracle_set = reconciliation_persistence.get_oracle_set(req.oracle_set_id)
-    
+    # 1. Retrieve and strictly validate OracleSet (Fail-Closed: never fabricate empty/default OracleSet)
+    if not req.oracle_set_id:
+        raise HTTPException(
+            status_code=400,
+            detail="oracle_set_id is required for authoritative advanced evaluation.",
+        )
+
+    oracle_set = reconciliation_persistence.get_oracle_set(req.oracle_set_id)
     if not oracle_set:
-        # Fallback to empty draft OracleSet if not found
-        oracle_set = OracleSet(
-            oracle_set_id=req.oracle_set_id or f"os_{req.application_id}_default",
-            application_id=req.application_id,
+        raise HTTPException(
+            status_code=404,
+            detail=f"Authoritative OracleSet '{req.oracle_set_id}' not found.",
         )
 
     # 2. Retrieve policy
@@ -129,65 +131,75 @@ def evaluate_advanced(
     if not policy:
         policy = ThresholdPolicy()
 
-    # 3. Load Real Phase 3 Reference Evidence
+    # 3. Validate and Load Real Phase 3 Reference Evidence
+    if not req.reference_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="reference_session_id is required for authoritative advanced evaluation.",
+        )
+
     reference_evidence: list[Any] = []
-    if req.reference_session_id:
-        ref_sess = execution_repository.get_session(req.reference_session_id)
-        paired_sess = evidence_store.get_session(req.reference_session_id)
-        
-        if not ref_sess and not paired_sess:
+    ref_sess = execution_repository.get_session(req.reference_session_id)
+    paired_sess = evidence_store.get_session(req.reference_session_id)
+    
+    if not ref_sess and not paired_sess:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Reference session '{req.reference_session_id}' not found in execution or evidence store.",
+        )
+
+    # Validate Reference Role
+    if ref_sess:
+        role_val = str(getattr(ref_sess.role, "value", ref_sess.role)).lower()
+        if any(t in role_val for t in ("target", "modernized")):
             raise HTTPException(
-                status_code=404,
-                detail=f"Reference session '{req.reference_session_id}' not found in execution or evidence store.",
+                status_code=400,
+                detail=f"Session '{req.reference_session_id}' has role '{ref_sess.role}', expected REFERENCE.",
             )
+        results = execution_repository.list_results_for_session(req.reference_session_id)
+        reference_evidence.extend(results)
 
-        # Validate Role
-        if ref_sess:
-            role_val = str(getattr(ref_sess.role, "value", ref_sess.role)).lower()
-            if any(t in role_val for t in ("target", "modernized")):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Session '{req.reference_session_id}' has role '{ref_sess.role}', expected REFERENCE.",
-                )
-            results = execution_repository.list_results_for_session(req.reference_session_id)
-            reference_evidence.extend(results)
+    # Also load from evidence_store if records exist
+    ev_records = evidence_store.list_records_for_session(req.reference_session_id)
+    if ev_records:
+        ref_records = [r for r in ev_records if any(ref_k in str(getattr(r.role, "value", r.role)).lower() for ref_k in ("reference", "legacy"))]
+        if ref_records:
+            reference_evidence.extend(ref_records)
 
-        # Also load from evidence_store if records exist
-        ev_records = evidence_store.list_records_for_session(req.reference_session_id)
-        if ev_records:
-            ref_records = [r for r in ev_records if any(ref_k in str(getattr(r.role, "value", r.role)).lower() for ref_k in ("reference", "legacy"))]
-            if ref_records:
-                reference_evidence.extend(ref_records)
+    # 4. Validate and Load Real Phase 3 Target Evidence
+    if not req.target_session_id:
+        raise HTTPException(
+            status_code=400,
+            detail="target_session_id is required for authoritative advanced evaluation.",
+        )
 
-    # 4. Load Real Phase 3 Target Evidence
     target_evidence: list[Any] = []
-    if req.target_session_id:
-        tar_sess = execution_repository.get_session(req.target_session_id)
-        paired_sess = evidence_store.get_session(req.target_session_id)
-        
-        if not tar_sess and not paired_sess:
+    tar_sess = execution_repository.get_session(req.target_session_id)
+    paired_tar_sess = evidence_store.get_session(req.target_session_id)
+    
+    if not tar_sess and not paired_tar_sess:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Target session '{req.target_session_id}' not found in execution or evidence store.",
+        )
+
+    # Validate Target Role
+    if tar_sess:
+        role_val = str(getattr(tar_sess.role, "value", tar_sess.role)).lower()
+        if any(r in role_val for r in ("reference", "legacy")):
             raise HTTPException(
-                status_code=404,
-                detail=f"Target session '{req.target_session_id}' not found in execution or evidence store.",
+                status_code=400,
+                detail=f"Session '{req.target_session_id}' has role '{tar_sess.role}', expected TARGET.",
             )
+        results = execution_repository.list_results_for_session(req.target_session_id)
+        target_evidence.extend(results)
 
-        # Validate Role
-        if tar_sess:
-            role_val = str(getattr(tar_sess.role, "value", tar_sess.role)).lower()
-            if any(r in role_val for r in ("reference", "legacy")):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Session '{req.target_session_id}' has role '{tar_sess.role}', expected TARGET.",
-                )
-            results = execution_repository.list_results_for_session(req.target_session_id)
-            target_evidence.extend(results)
-
-        # Also load from evidence_store if records exist
-        ev_records = evidence_store.list_records_for_session(req.target_session_id)
-        if ev_records:
-            tar_records = [r for r in ev_records if any(tar_k in str(getattr(r.role, "value", r.role)).lower() for tar_k in ("target", "modernized"))]
-            if tar_records:
-                target_evidence.extend(tar_records)
+    # Also load from evidence_store if records exist
+    ev_records_tar = evidence_store.list_records_for_session(req.target_session_id)
+    if ev_records_tar:
+        tar_records = [r for r in ev_records_tar if any(tar_k in str(getattr(r.role, "value", r.role)).lower() for tar_k in ("target", "modernized"))]
+        if tar_records:
+            target_evidence.extend(tar_records)
 
     # 5. Execute evaluation with real loaded evidence
     try:

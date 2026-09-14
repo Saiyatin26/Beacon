@@ -29,6 +29,7 @@ from reconciliation.models import (
     OracleSetStatus,
     RuleProvenanceSource,
 )
+from reconciliation.persistence import reconciliation_persistence
 from threshold.engine import TargetContaminationError, ThresholdEngine, threshold_engine
 from threshold.evaluator import AdvancedBehavioralEvaluator, advanced_evaluator
 from threshold.models import (
@@ -432,9 +433,53 @@ class TestPhase8DynamicThresholds:
         assert r_res.status_code == 200
         assert r_res.json()["final_value"] == 0.08
 
-        # 4. Run Advanced Evaluation via API
+        # 4. Run Advanced Evaluation via API (with authoritative OracleSet and sessions)
+        os_api = OracleSet(oracle_set_id="os_api_endpoint_test", application_id="app_api_test")
+        reconciliation_persistence.save_oracle_set(os_api)
+
+        ref_s = ExecutionSession(
+            session_id="sess_api_ref_test",
+            application_id="app_api_test",
+            adapter_id="ref_adapter",
+            role=AdapterRole.REFERENCE,
+            status=ExecutionStatus.SUCCEEDED,
+        )
+        execution_repository.save_session(ref_s)
+        execution_repository.save_result(
+            ExecutionResult(
+                execution_id="exec_api_ref",
+                session_id="sess_api_ref_test",
+                application_id="app_api_test",
+                role=AdapterRole.REFERENCE,
+                status=ExecutionStatus.SUCCEEDED,
+                stdout='{"value": 10.0}',
+            )
+        )
+
+        tar_s = ExecutionSession(
+            session_id="sess_api_tar_test",
+            application_id="app_api_test",
+            adapter_id="tar_adapter",
+            role=AdapterRole.TARGET,
+            status=ExecutionStatus.SUCCEEDED,
+        )
+        execution_repository.save_session(tar_s)
+        execution_repository.save_result(
+            ExecutionResult(
+                execution_id="exec_api_tar",
+                session_id="sess_api_tar_test",
+                application_id="app_api_test",
+                role=AdapterRole.TARGET,
+                status=ExecutionStatus.SUCCEEDED,
+                stdout='{"value": 10.05}',
+            )
+        )
+
         eval_req = {
             "application_id": "app_api_test",
+            "reference_session_id": "sess_api_ref_test",
+            "target_session_id": "sess_api_tar_test",
+            "oracle_set_id": "os_api_endpoint_test",
             "policy_id": "api_test_policy",
             "persist": True,
         }
@@ -442,7 +487,7 @@ class TestPhase8DynamicThresholds:
         assert r_eval.status_code == 200
         data = r_eval.json()
         assert "evaluation_id" in data
-        assert data["overall_verdict"] in ["EQUIVALENT", "INCONCLUSIVE", "NOT_APPLICABLE"]
+        assert data["overall_verdict"] == "EQUIVALENT"
 
     # --------------------------------------------------------------------------
     # 16. Structured Value Comparison & Object Key Invariance
@@ -605,11 +650,16 @@ class TestPhase8DynamicThresholds:
         )
         execution_repository.save_result(res2)
 
-        # 3. Call Advanced Evaluation with real session IDs
+        # 3. Create and save authoritative OracleSet
+        os_real = OracleSet(oracle_set_id="os_real_test_001", application_id="app_phase3_test")
+        reconciliation_persistence.save_oracle_set(os_real)
+
+        # 4. Call Advanced Evaluation with real session IDs and OracleSet ID
         eval_req = {
             "application_id": "app_phase3_test",
             "reference_session_id": "sess_ref_real_001",
             "target_session_id": "sess_tar_real_001",
+            "oracle_set_id": "os_real_test_001",
             "custom_policy": {
                 "strategy": "ABSOLUTE",
                 "metric": "ABSOLUTE_DIFF",
@@ -633,11 +683,15 @@ class TestPhase8DynamicThresholds:
         headers = {"Authorization": f"Bearer {token}"}
         client = TestClient(app)
 
+        os_role_test = OracleSet(oracle_set_id="os_role_test_001", application_id="app_phase3_test")
+        reconciliation_persistence.save_oracle_set(os_role_test)
+
         # A. Wrong role: supply target session as reference_session_id
         eval_req_wrong_role = {
             "application_id": "app_phase3_test",
             "reference_session_id": "sess_tar_real_001",  # Has role 'target'
             "target_session_id": "sess_tar_real_001",
+            "oracle_set_id": "os_role_test_001",
         }
         r_role = client.post("/api/v2/evaluation/advanced", json=eval_req_wrong_role, headers=headers)
         assert r_role.status_code == 400
@@ -648,10 +702,53 @@ class TestPhase8DynamicThresholds:
             "application_id": "app_phase3_test",
             "reference_session_id": "sess_non_existent_999",
             "target_session_id": "sess_tar_real_001",
+            "oracle_set_id": "os_role_test_001",
         }
         r_miss = client.post("/api/v2/evaluation/advanced", json=eval_req_missing, headers=headers)
         assert r_miss.status_code == 404
         assert "not found" in r_miss.json()["detail"]
+
+    # --------------------------------------------------------------------------
+    # 22B. ISSUE B: Missing OracleSet Fails Closed (No Fabrication)
+    # --------------------------------------------------------------------------
+    def test_missing_oracleset_fails_closed_and_never_fabricates_empty(self):
+        token = create_access_token({"sub": "admin", "is_admin": True})
+        headers = {"Authorization": f"Bearer {token}"}
+        client = TestClient(app)
+
+        # A. Non-existent oracle_set_id -> 404 Not Found (never fake empty OracleSet, never PASS)
+        eval_req_no_os = {
+            "application_id": "app_phase3_test",
+            "reference_session_id": "sess_ref_real_001",
+            "target_session_id": "sess_tar_real_001",
+            "oracle_set_id": "os_does_not_exist_999",
+        }
+        r_no_os = client.post("/api/v2/evaluation/advanced", json=eval_req_no_os, headers=headers)
+        assert r_no_os.status_code == 404
+        assert "not found" in r_no_os.json()["detail"]
+
+        # B. Missing oracle_set_id -> 400 Bad Request
+        eval_req_missing_os = {
+            "application_id": "app_phase3_test",
+            "reference_session_id": "sess_ref_real_001",
+            "target_session_id": "sess_tar_real_001",
+        }
+        r_missing_os = client.post("/api/v2/evaluation/advanced", json=eval_req_missing_os, headers=headers)
+        assert r_missing_os.status_code == 400
+        assert "oracle_set_id is required" in r_missing_os.json()["detail"]
+
+        # C. Missing reference_session_id -> 400 Bad Request
+        os_valid = OracleSet(oracle_set_id="os_valid_context_test", application_id="app_phase3_test")
+        reconciliation_persistence.save_oracle_set(os_valid)
+
+        eval_req_no_ref = {
+            "application_id": "app_phase3_test",
+            "target_session_id": "sess_tar_real_001",
+            "oracle_set_id": "os_valid_context_test",
+        }
+        r_no_ref = client.post("/api/v2/evaluation/advanced", json=eval_req_no_ref, headers=headers)
+        assert r_no_ref.status_code == 400
+        assert "reference_session_id is required" in r_no_ref.json()["detail"]
 
     # --------------------------------------------------------------------------
     # 23. ISSUE C: Resolution Identity Tied to Canonical Evidence IDs
@@ -764,4 +861,63 @@ class TestPhase8DynamicThresholds:
         with pytest.raises(ValueError) as exc_nan:
             ThresholdPolicy(minimum_bound=float("nan"))
         assert "cannot be NaN" in str(exc_nan.value)
+
+    # --------------------------------------------------------------------------
+    # 26. ORACLESET IMMUTABILITY TEST (Read-Only Verification)
+    # --------------------------------------------------------------------------
+    def test_oracleset_immutability_detailed_verification(self):
+        """Proves Phase 8 advanced evaluation does not mutate the authoritative Phase 7 OracleSet."""
+        rule_1 = OracleRule(
+            rule_id="rule_immutable_001",
+            rule_type="BUSINESS_RULE",
+            source=RuleProvenanceSource.MERGED,
+            description="Immutable test rule 1",
+            canonical_expression="output.value == 100.0",
+        )
+        rule_2 = OracleRule(
+            rule_id="rule_immutable_002",
+            rule_type="OBSERVED_TRACE",
+            source=RuleProvenanceSource.USER_DEFINED,
+            description="Immutable test rule 2",
+            canonical_expression="latency.duration_ms <= 200.0",
+        )
+        
+        oracle_set = OracleSet(
+            oracle_set_id="os_immutable_test_v1",
+            application_id="app_immutability_test",
+            status=OracleSetStatus.READY,
+            rules=[rule_1, rule_2],
+        )
+        # Compute baseline fingerprint/hash & snapshot
+        initial_id = oracle_set.oracle_set_id
+        initial_rule_count = len(oracle_set.rules)
+        initial_rule_ids = [r.rule_id for r in oracle_set.rules]
+        initial_hash = oracle_set.compute_oracle_set_hash()
+        initial_rules_dump = [r.model_dump() for r in oracle_set.rules]
+
+        evaluator = AdvancedBehavioralEvaluator()
+        policy = ThresholdPolicy(
+            strategy=ThresholdStrategy.FIXED,
+            parameters={"tolerance": 0.05},
+        )
+
+        ref_ev = [{"value": 100.0, "duration_ms": 150.0}]
+        tar_ev = [{"value": 100.02, "duration_ms": 155.0}]
+
+        # Execute advanced evaluation
+        evaluator.evaluate(
+            application_id="app_immutability_test",
+            oracle_set=oracle_set,
+            reference_evidence=ref_ev,
+            target_evidence=tar_ev,
+            policy=policy,
+        )
+
+        # Assert OracleSet remains completely identical
+        assert oracle_set.oracle_set_id == initial_id
+        assert len(oracle_set.rules) == initial_rule_count
+        assert [r.rule_id for r in oracle_set.rules] == initial_rule_ids
+        assert [r.model_dump() for r in oracle_set.rules] == initial_rules_dump
+        assert oracle_set.compute_oracle_set_hash() == initial_hash
+
 
