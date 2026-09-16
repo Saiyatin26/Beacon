@@ -91,7 +91,7 @@ class DeterministicExplanationGenerator:
             f"Observed {matching_count} matching outcomes and {regression_count} behavioral deviations."
         )
 
-        # 4. Dimension Explanations
+        # 4. Dimension Explanations (Strictly conservative: never collapses UNKNOWN or INCONCLUSIVE to PASS)
         dimension_explanations: list[DimensionExplanation] = []
         differing_dimensions_set: set[str] = set()
 
@@ -101,16 +101,16 @@ class DeterministicExplanationGenerator:
                 d for d in context.differences_summary
                 if str(d.get("dimension", "")).upper() == dim.value
             ]
+            missing_for_dim = [m for m in context.missing_evidence if m.dimension == dim]
+
             if dim_diffs:
                 dim_status = "DIFFERENT"
                 differing_dimensions_set.add(dim.value)
+            elif missing_for_dim:
+                # Conservative rule: missing evidence prevents conclusion of PASS
+                dim_status = "INCONCLUSIVE"
             else:
                 dim_status = "PASS"
-
-            # Check if missing evidence exists for this dimension
-            missing_for_dim = [m for m in context.missing_evidence if m.dimension == dim]
-            if missing_for_dim and not dim_diffs:
-                dim_status = "INCONCLUSIVE"
 
             findings: list[ExplanationFinding] = []
             dim_evids: set[str] = set()
@@ -145,7 +145,9 @@ class DeterministicExplanationGenerator:
                     status=dim_status,
                     reference_summary="Reference produced valid observations across evaluated inputs.",
                     target_summary=f"Target evaluated with {len(dim_diffs)} detected differences.",
-                    difference_summary=f"Discrepancies observed in {len(dim_diffs)} inputs." if dim_diffs else "No differences detected.",
+                    difference_summary=f"Discrepancies observed in {len(dim_diffs)} inputs." if dim_diffs else (
+                        "Evidence inconclusive for this dimension." if missing_for_dim else "No differences detected."
+                    ),
                     tolerance_applied="Standard deterministic comparison policy",
                     evidence_ids=sorted(dim_evids),
                     findings=findings,

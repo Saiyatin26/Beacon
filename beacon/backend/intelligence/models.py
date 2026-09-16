@@ -41,6 +41,51 @@ class EvidenceSupportLevel(str, Enum):
     UNKNOWN = "UNKNOWN"                              # Completely unverifiable from available data
 
 
+class GroundingClaimType(str, Enum):
+    """Taxonomy of factual claims made by LLM or explanation layers for verification."""
+    NUMERIC_VALUE = "NUMERIC_VALUE"
+    DIMENSION_STATUS = "DIMENSION_STATUS"
+    EVIDENCE_REFERENCE = "EVIDENCE_REFERENCE"
+    RULE_REFERENCE = "RULE_REFERENCE"
+    INPUT_REFERENCE = "INPUT_REFERENCE"
+    VERDICT_CLAIM = "VERDICT_CLAIM"
+
+
+class GroundingClaim(BaseModel):
+    """Structured, verifiable claim produced during explanation or Q&A."""
+    model_config = ConfigDict(extra="ignore")
+
+    claim_type: GroundingClaimType = GroundingClaimType.NUMERIC_VALUE
+    statement: str = ""
+    field: Optional[str] = None
+    role: Optional[str] = None  # REFERENCE, TARGET
+    value: Optional[Any] = None
+    input_id: Optional[str] = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    rule_id: Optional[str] = None
+    dimension: Optional[str] = None
+    status: Optional[str] = None
+    support_level: EvidenceSupportLevel = EvidenceSupportLevel.DETERMINISTIC_FACT
+
+
+class AuthoritativeFact(BaseModel):
+    """Internal Phase 10 authoritative projection of empirical truth from Phases 3–8."""
+    model_config = ConfigDict(extra="ignore")
+
+    fact_type: str
+    dimension: BehaviorDimension = BehaviorDimension.OUTPUT
+    input_id: Optional[str] = None
+    input_hash: Optional[str] = None
+    role: Optional[str] = None
+    reference_value: Optional[Any] = None
+    target_value: Optional[Any] = None
+    difference_value: Optional[Any] = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    rule_ids: list[str] = Field(default_factory=list)
+    source_phase: str = "PHASE_4"
+    provenance: dict[str, Any] = Field(default_factory=dict)
+
+
 class ExplanationFinding(BaseModel):
     """A single structured observation or finding within a dimension."""
     model_config = ConfigDict(extra="ignore")

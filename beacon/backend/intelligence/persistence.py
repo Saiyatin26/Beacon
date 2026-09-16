@@ -1,7 +1,7 @@
 """BEACON V2 — Phase 10 Intelligence Persistence Store.
 
 Provides durable SQLite persistence for structured CertificationExplanations and
-audit logs in beacon.sqlite3 with strict failure semantics and cache isolation.
+audit logs in beacon.sqlite3 with strict failure semantics, audit tracking, and cache isolation.
 """
 
 from datetime import datetime, timezone
@@ -22,6 +22,7 @@ class IntelligencePersistenceStore:
 
     def __init__(self, db_path: Optional[Path | str] = None):
         self.db_path = Path(db_path) if db_path else Path(settings.database_path)
+        self.persistence_available: bool = False
         self._init_db()
 
     def _init_db(self):
@@ -42,7 +43,6 @@ class IntelligencePersistenceStore:
                         created_at TEXT NOT NULL
                     )
                 """)
-                # Ensure cache_key column exists if upgrading table
                 cursor = conn.cursor()
                 cursor.execute("PRAGMA table_info(certification_explanations)")
                 columns = [row[1] for row in cursor.fetchall()]
@@ -60,19 +60,31 @@ class IntelligencePersistenceStore:
                         model TEXT NOT NULL,
                         context_fingerprint TEXT NOT NULL,
                         fallback_used INTEGER NOT NULL,
+                        audit_status TEXT NOT NULL DEFAULT 'PERSISTED',
                         created_at TEXT NOT NULL
                     )
                 """)
+                cursor.execute("PRAGMA table_info(explanation_audit_log)")
+                audit_cols = [row[1] for row in cursor.fetchall()]
+                if "audit_status" not in audit_cols:
+                    conn.execute("ALTER TABLE explanation_audit_log ADD COLUMN audit_status TEXT NOT NULL DEFAULT 'PERSISTED'")
+
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_exp_cert_id ON certification_explanations(certification_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_exp_app_id ON certification_explanations(application_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_exp_cache_key ON certification_explanations(cache_key)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_audit_cert_id ON explanation_audit_log(certification_id)")
                 conn.commit()
+            self.persistence_available = True
         except Exception as exc:
+            self.persistence_available = False
             logger.error(f"Failed to initialize SQLite intelligence persistence tables: {exc}", exc_info=True)
 
     def save_explanation(self, explanation: CertificationExplanation) -> CertificationExplanation:
         """Saves or replaces a CertificationExplanation record with explicit error status tracking."""
+        if not self.persistence_available:
+            explanation.persistence_status = "FAILED"
+            return explanation
+
         try:
             payload_json = explanation.model_dump_json()
             with sqlite3.connect(self.db_path) as conn:
@@ -108,6 +120,9 @@ class IntelligencePersistenceStore:
         context_fingerprint: Optional[str] = None,
     ) -> Optional[CertificationExplanation]:
         """Retrieves the explanation for a certification run matching cache_key or fingerprint if supplied."""
+        if not self.persistence_available:
+            return None
+
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -151,15 +166,18 @@ class IntelligencePersistenceStore:
         model: str,
         context_fingerprint: str,
         fallback_used: bool,
-    ):
+    ) -> bool:
         """Logs an explanation generation or Q&A audit event without silent failure."""
+        if not self.persistence_available:
+            return False
+
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute("""
                     INSERT INTO explanation_audit_log (
                         audit_id, user_id, certification_id, application_id,
-                        mode, provider, model, context_fingerprint, fallback_used, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        mode, provider, model, context_fingerprint, fallback_used, audit_status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     audit_id,
                     user_id,
@@ -170,11 +188,14 @@ class IntelligencePersistenceStore:
                     model,
                     context_fingerprint,
                     1 if fallback_used else 0,
+                    "PERSISTED",
                     datetime.now(timezone.utc).isoformat(),
                 ))
                 conn.commit()
+            return True
         except Exception as exc:
             logger.error(f"Failed to log explanation audit event '{audit_id}': {exc}", exc_info=True)
+            return False
 
 
 intelligence_persistence = IntelligencePersistenceStore()

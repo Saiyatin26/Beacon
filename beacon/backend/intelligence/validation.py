@@ -1,16 +1,19 @@
-"""BEACON V2 — Phase 10 Validation & Hallucination Guard.
+"""BEACON V2 — Phase 10 Unified Grounding Validator & Hallucination Guard.
 
-Validates LLM-generated outputs against strict schemas, enforces authoritative verdict
-immutability, filters nonexistent evidence and rule IDs, validates factual values,
-and guards against hallucinated claims.
+Provides unified, fail-closed validation for:
+- Explanation generation payloads
+- Interactive Q&A responses
+- Structured factual claims against authoritative Phase 3–8 ground truth
 """
 
 import logging
+import re
 from typing import Any, Optional
 
 from evaluation.models import BehaviorDimension
 from .models import (
     AffectedInput,
+    AskCertificationResponse,
     CertificationExplanation,
     DimensionExplanation,
     EvidenceSupportLevel,
@@ -18,6 +21,8 @@ from .models import (
     ExplanationContext,
     ExplanationFinding,
     GenerationMetadata,
+    GroundingClaim,
+    GroundingClaimType,
     InvestigationRecommendation,
     MissingEvidence,
     RuleImpact,
@@ -32,8 +37,74 @@ class HallucinationGuardError(ValueError):
     pass
 
 
-class ExplanationValidator:
-    """Validates and filters LLM-generated explanation payloads against authoritative ground truth."""
+class GroundingValidator:
+    """Unified central validator ensuring all factual claims are strictly grounded in authoritative context."""
+
+    def validate_claims(
+        self,
+        claims: list[GroundingClaim],
+        context: ExplanationContext,
+    ) -> tuple[bool, list[str], list[GroundingClaim]]:
+        """Deterministically validates a list of structured factual claims against ExplanationContext."""
+        valid_evid_set = set(context.valid_evidence_ids)
+        valid_rule_set = set(context.valid_rule_ids)
+        valid_input_set = set(context.valid_input_ids)
+
+        diffs_by_input: dict[str, dict[str, Any]] = {}
+        for diff in context.differences_summary:
+            inp_id = diff.get("input_id")
+            if inp_id:
+                diffs_by_input[inp_id] = diff
+
+        errors: list[str] = []
+        validated_claims: list[GroundingClaim] = []
+        is_all_valid = True
+
+        for idx, claim in enumerate(claims):
+            # Check Evidence references
+            if claim.evidence_ids:
+                invalid_evids = [eid for eid in claim.evidence_ids if eid not in valid_evid_set]
+                if invalid_evids:
+                    errors.append(f"Claim {idx+1}: UNSUPPORTED_EVIDENCE_REFERENCE {invalid_evids}")
+                    is_all_valid = False
+                    continue
+
+            # Check Rule references
+            if claim.rule_id:
+                if valid_rule_set and claim.rule_id not in valid_rule_set:
+                    errors.append(f"Claim {idx+1}: UNSUPPORTED_RULE_REFERENCE '{claim.rule_id}'")
+                    is_all_valid = False
+                    continue
+
+            # Check Input references
+            if claim.input_id:
+                if valid_input_set and claim.input_id not in valid_input_set:
+                    errors.append(f"Claim {idx+1}: UNSUPPORTED_INPUT_REFERENCE '{claim.input_id}'")
+                    is_all_valid = False
+                    continue
+
+            # Check Numeric Value consistency against authoritative differences
+            if claim.claim_type == GroundingClaimType.NUMERIC_VALUE and claim.input_id in diffs_by_input:
+                auth_diff = diffs_by_input[claim.input_id]
+                auth_val = auth_diff.get("target_value") if claim.role == "TARGET" else auth_diff.get("reference_value")
+                if auth_val is not None and claim.value is not None:
+                    try:
+                        if abs(float(claim.value) - float(auth_val)) > 1e-6:
+                            errors.append(
+                                f"Claim {idx+1}: NUMERIC_VALUE_MISMATCH for input '{claim.input_id}' "
+                                f"(claimed {claim.value} vs authoritative {auth_val})"
+                            )
+                            is_all_valid = False
+                            continue
+                    except (ValueError, TypeError):
+                        if str(claim.value) != str(auth_val):
+                            errors.append(f"Claim {idx+1}: NUMERIC_VALUE_MISMATCH for input '{claim.input_id}'")
+                            is_all_valid = False
+                            continue
+
+            validated_claims.append(claim)
+
+        return is_all_valid, errors, validated_claims
 
     def validate_and_sanitize_explanation(
         self,
@@ -41,18 +112,13 @@ class ExplanationValidator:
         context: ExplanationContext,
         metadata: GenerationMetadata,
     ) -> tuple[bool, list[str], Optional[CertificationExplanation]]:
-        """Validates the raw LLM JSON response against context bounds and constructs a clean CertificationExplanation.
-
-        Returns:
-            (is_valid, validation_errors, explanation_or_none)
-        """
+        """Validates the raw LLM JSON response against context bounds and constructs a clean CertificationExplanation."""
         errors: list[str] = []
 
         if not isinstance(raw_payload, dict):
             return False, ["LLM output is not a JSON object."], None
 
-        # 1. Authoritative Verdict Protection
-        # The overall verdict is IMMUTABLY anchored to the authoritative certification result.
+        # 1. Authoritative Verdict Protection (Immutable)
         authoritative_verdict = context.authoritative_verdict
 
         # 2. Executive & Behavioral Summaries
@@ -68,23 +134,19 @@ class ExplanationValidator:
                 f"{', '.join(d.value for d in context.dimensions_evaluated)}."
             )
 
-        # Build authoritative lookup maps for factual value validation
         valid_evid_set = set(context.valid_evidence_ids)
         valid_input_set = set(context.valid_input_ids)
         valid_rule_set = set(context.valid_rule_ids)
 
-        # Map input_id -> diff record
         diffs_by_input: dict[str, dict[str, Any]] = {}
         for diff in context.differences_summary:
             inp_id = diff.get("input_id")
             if inp_id:
                 diffs_by_input[inp_id] = diff
 
-        # 3. Dimension Explanations Validation
+        # 3. Dimension Explanations Validation (Fail-closed on invalid dimensions)
         raw_dims = raw_payload.get("dimension_explanations", [])
         validated_dims: list[DimensionExplanation] = []
-
-        # Canonical behavior dimensions allowed
         allowed_dimensions = {d.value: d for d in BehaviorDimension}
 
         if isinstance(raw_dims, list):
@@ -93,18 +155,23 @@ class ExplanationValidator:
                     continue
                 dim_str = str(raw_d.get("dimension", "")).strip().upper()
 
-                # No Invalid Dimension Coercion
                 if dim_str not in allowed_dimensions:
-                    errors.append(f"Invalid dimension '{dim_str}' rejected (no coercion to OUTPUT).")
+                    errors.append(f"Invalid dimension '{dim_str}' rejected (INVALID_DIMENSION: no coercion to OUTPUT).")
                     continue
 
                 dim_enum = allowed_dimensions[dim_str]
 
-                # Filter referenced evidence IDs
+                # Evidence references in dimension explanation
                 raw_evids = raw_d.get("evidence_ids", [])
-                filtered_evids = [eid for eid in raw_evids if eid in valid_evid_set] if isinstance(raw_evids, list) else []
+                if isinstance(raw_evids, list):
+                    invalid_dim_evids = [eid for eid in raw_evids if eid not in valid_evid_set]
+                    if invalid_dim_evids:
+                        errors.append(f"Dimension {dim_str} references invalid evidence IDs: {invalid_dim_evids}")
+                    filtered_evids = [eid for eid in raw_evids if eid in valid_evid_set]
+                else:
+                    filtered_evids = []
 
-                # No Default PASS! Derive status from authoritative context if missing or invalid
+                # Derive authoritative dimension status if missing or invalid (no default PASS)
                 raw_status = raw_d.get("status")
                 dim_diffs = [
                     d for d in context.differences_summary
@@ -126,7 +193,7 @@ class ExplanationValidator:
                     else:
                         dim_status = "DIFFERENT" if dim_diffs else ("INCONCLUSIVE" if missing_for_dim else "UNKNOWN")
 
-                # Filter findings & validate factual values
+                # Filter findings & validate factual values (Fail-closed)
                 raw_findings = raw_d.get("findings", [])
                 validated_findings: list[ExplanationFinding] = []
                 if isinstance(raw_findings, list):
@@ -138,33 +205,33 @@ class ExplanationValidator:
                         if isinstance(f_evids_raw, list):
                             invalid_evids = [eid for eid in f_evids_raw if eid not in valid_evid_set]
                             if invalid_evids:
-                                errors.append(f"Invalid evidence IDs {invalid_evids} in finding rejected.")
+                                errors.append(f"UNSUPPORTED_EVIDENCE_REFERENCE {invalid_evids} in finding rejected.")
+                                continue
                             f_evids = [eid for eid in f_evids_raw if eid in valid_evid_set]
                         else:
                             f_evids = []
 
                         inp_id = rf.get("input_id")
                         if inp_id and valid_input_set and inp_id not in valid_input_set:
-                            errors.append(f"Hallucinated input_id '{inp_id}' in finding rejected.")
+                            errors.append(f"UNSUPPORTED_INPUT_REFERENCE '{inp_id}' in finding rejected.")
                             continue
 
                         ref_val = rf.get("reference_value")
                         tgt_val = rf.get("target_value")
 
-                        # Factual value validation against authoritative diffs
+                        # Value validation against authoritative diffs
                         if inp_id and inp_id in diffs_by_input:
                             auth_diff = diffs_by_input[inp_id]
                             auth_ref = auth_diff.get("reference_value")
                             auth_tgt = auth_diff.get("target_value")
 
-                            # If model specified differing values, reject factual claim
                             if ref_val is not None and auth_ref is not None:
                                 if str(ref_val) != str(auth_ref) and ref_val != auth_ref:
-                                    errors.append(f"Factual value mismatch for input '{inp_id}': LLM ref='{ref_val}' vs authoritative='{auth_ref}'. Claim rejected.")
+                                    errors.append(f"Factual value mismatch (NUMERIC_VALUE_MISMATCH) for input '{inp_id}': LLM ref='{ref_val}' vs authoritative='{auth_ref}'. Claim rejected.")
                                     continue
                             if tgt_val is not None and auth_tgt is not None:
                                 if str(tgt_val) != str(auth_tgt) and tgt_val != auth_tgt:
-                                    errors.append(f"Factual value mismatch for input '{inp_id}': LLM tgt='{tgt_val}' vs authoritative='{auth_tgt}'. Claim rejected.")
+                                    errors.append(f"Factual value mismatch (NUMERIC_VALUE_MISMATCH) for input '{inp_id}': LLM tgt='{tgt_val}' vs authoritative='{auth_tgt}'. Claim rejected.")
                                     continue
 
                         support_str = str(rf.get("support", "DETERMINISTIC_FACT")).upper()
@@ -200,7 +267,7 @@ class ExplanationValidator:
                     )
                 )
 
-        # 4. Rule Impacts Validation (No Invented Rule IDs)
+        # 4. Rule Impacts Validation (Fail-closed on hallucinated rule IDs)
         raw_rules = raw_payload.get("rule_impacts", [])
         validated_rules: list[RuleImpact] = []
 
@@ -215,10 +282,17 @@ class ExplanationValidator:
                     continue
 
                 if valid_rule_set and rule_id not in valid_rule_set:
-                    errors.append(f"Hallucinated rule_id '{rule_id}' rejected by validator.")
+                    errors.append(f"Hallucinated rule_id '{rule_id}' rejected by validator (UNSUPPORTED_RULE_REFERENCE).")
                     continue
 
-                r_evids = [eid for eid in raw_r.get("supporting_evidence_ids", []) if eid in valid_evid_set] if isinstance(raw_r.get("supporting_evidence_ids"), list) else []
+                r_evids_raw = raw_r.get("supporting_evidence_ids", [])
+                if isinstance(r_evids_raw, list):
+                    invalid_r_evids = [eid for eid in r_evids_raw if eid not in valid_evid_set]
+                    if invalid_r_evids:
+                        errors.append(f"Rule impact '{rule_id}' references invalid evidence IDs: {invalid_r_evids}")
+                    r_evids = [eid for eid in r_evids_raw if eid in valid_evid_set]
+                else:
+                    r_evids = []
 
                 validated_rules.append(
                     RuleImpact(
@@ -261,7 +335,12 @@ class ExplanationValidator:
             for r_idx, rec in enumerate(raw_recs):
                 if not isinstance(rec, dict) or not rec.get("title"):
                     continue
-                rec_evids = [eid for eid in rec.get("evidence_references", []) if eid in valid_evid_set] if isinstance(rec.get("evidence_references"), list) else []
+                rec_evids_raw = rec.get("evidence_references", [])
+                if isinstance(rec_evids_raw, list):
+                    rec_evids = [eid for eid in rec_evids_raw if eid in valid_evid_set]
+                else:
+                    rec_evids = []
+
                 validated_recs.append(
                     InvestigationRecommendation(
                         priority=int(rec.get("priority", r_idx + 1)),
@@ -301,8 +380,8 @@ class ExplanationValidator:
             behavioral_summary=behav_summary,
             dimension_explanations=validated_dims,
             rule_impacts=validated_rules,
-            evidence_traces=[],  # Will be merged from deterministic baseline
-            affected_inputs=[],   # Will be merged from deterministic baseline
+            evidence_traces=[],
+            affected_inputs=[],
             missing_evidence=context.missing_evidence,
             uncertainty_notes=validated_uncertainties,
             company_knowledge_context=context.knowledge_context,
@@ -315,5 +394,89 @@ class ExplanationValidator:
 
         return True, errors, explanation
 
+    def validate_qa_response(
+        self,
+        raw_payload: dict[str, Any],
+        context: ExplanationContext,
+        metadata: GenerationMetadata,
+        question: str,
+        referenced_doc_ids: list[str],
+    ) -> tuple[bool, list[str], Optional[AskCertificationResponse]]:
+        """Validates an interactive Q&A answer against authoritative context and grounding constraints."""
+        errors: list[str] = []
+        if not isinstance(raw_payload, dict):
+            return False, ["Q&A response is not a JSON object."], None
 
-explanation_validator = ExplanationValidator()
+        raw_evids = raw_payload.get("referenced_evidence_ids", [])
+        raw_rules = raw_payload.get("referenced_rule_ids", [])
+
+        # Fail-closed if invalid evidence IDs or rule IDs are present
+        if isinstance(raw_evids, list):
+            invalid_evids = [e for e in raw_evids if e not in context.valid_evidence_ids]
+            if invalid_evids:
+                errors.append(f"UNSUPPORTED_EVIDENCE_REFERENCE: {invalid_evids}")
+                return False, errors, None
+            filtered_evids = [e for e in raw_evids if e in context.valid_evidence_ids]
+        else:
+            filtered_evids = []
+
+        if isinstance(raw_rules, list):
+            invalid_rules = [r for r in raw_rules if r not in context.valid_rule_ids]
+            if invalid_rules:
+                errors.append(f"UNSUPPORTED_RULE_REFERENCE: {invalid_rules}")
+                return False, errors, None
+            filtered_rules = [r for r in raw_rules if r in context.valid_rule_ids]
+        else:
+            filtered_rules = []
+
+        answer_text = str(raw_payload.get("answer", ""))
+        if not answer_text:
+            errors.append("Q&A answer is empty.")
+            return False, errors, None
+
+        # Validate factual numbers in answer against authoritative differences
+        for diff in context.differences_summary:
+            auth_tgt = diff.get("target_value")
+            auth_ref = diff.get("reference_value")
+            if auth_tgt is not None and isinstance(auth_tgt, (int, float)):
+                # Match patterns like "target is 97", "target returned 97", "target value: 97"
+                patterns = [
+                    r"target\s*(?:output|value)?\s*(?:is|=|was|produced|of|returned)\s*(\d+(?:\.\d+)?)",
+                    r"modern\s*(?:implementation|output|variant)?\s*(?:is|=|was|produced|of|returned)\s*(\d+(?:\.\d+)?)",
+                    r"target\s*:\s*(\d+(?:\.\d+)?)",
+                ]
+                for pat in patterns:
+                    for m in re.finditer(pat, answer_text, re.IGNORECASE):
+                        claimed_val = float(m.group(1))
+                        if abs(claimed_val - float(auth_tgt)) > 1e-6:
+                            errors.append(
+                                f"NUMERIC_VALUE_MISMATCH: Q&A answer claimed target={claimed_val} "
+                                f"vs authoritative target={auth_tgt}."
+                            )
+                            return False, errors, None
+
+        support_str = str(raw_payload.get("support_level", "DETERMINISTIC_FACT")).upper()
+        try:
+            sup_enum = EvidenceSupportLevel(support_str)
+        except ValueError:
+            sup_enum = EvidenceSupportLevel.DETERMINISTIC_FACT
+
+        response = AskCertificationResponse(
+            question=question,
+            answer=answer_text,
+            support_level=sup_enum,
+            referenced_evidence_ids=filtered_evids,
+            referenced_rule_ids=filtered_rules,
+            referenced_document_ids=list(set(referenced_doc_ids)),
+            uncertainties=raw_payload.get("uncertainties", []),
+            authoritative_verdict=context.authoritative_verdict,
+            context_fingerprint=context.compute_context_fingerprint(),
+            generation_metadata=metadata,
+        )
+        return True, [], response
+
+
+# Module-level singletons
+grounding_validator = GroundingValidator()
+explanation_validator = grounding_validator
+ExplanationValidator = GroundingValidator

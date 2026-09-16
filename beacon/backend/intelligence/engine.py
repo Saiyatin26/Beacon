@@ -8,15 +8,18 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
-import re
 import time
 from typing import Any, Optional
 
 from certification.models import CertificationArtifact
 from certification.repository import CertificationRepository, certification_repository
 from common.config import settings
+from evaluation.models import EvaluationResult
+from execution.evidence_models import EvidenceBundle, EvidenceRecord
 from llm.base import extract_json_payload
 from llm.manager import ProviderManager, get_provider_manager
+from reconciliation.models import OracleSet
+from threshold.models import ThresholdResolution
 from .context_builder import ExplanationContextBuilder, explanation_context_builder
 from .deterministic_generator import DeterministicExplanationGenerator, deterministic_generator
 from .models import (
@@ -32,7 +35,7 @@ from .persistence import IntelligencePersistenceStore, intelligence_persistence
 from .prompts.explanation_prompt import render_explanation_prompt
 from .prompts.qa_prompt import render_qa_prompt
 from .security import sanitize_prompt_input, wrap_untrusted_context
-from .validation import ExplanationValidator, explanation_validator
+from .validation import GroundingValidator, grounding_validator
 
 logger = logging.getLogger("beacon.intelligence.engine")
 
@@ -44,13 +47,13 @@ class IntelligenceEngine:
         self,
         context_builder: Optional[ExplanationContextBuilder] = None,
         det_generator: Optional[DeterministicExplanationGenerator] = None,
-        validator: Optional[ExplanationValidator] = None,
+        validator: Optional[GroundingValidator] = None,
         persistence: Optional[IntelligencePersistenceStore] = None,
         provider_manager: Optional[ProviderManager] = None,
     ):
         self.context_builder = context_builder or explanation_context_builder
         self.det_generator = det_generator or deterministic_generator
-        self.validator = validator or explanation_validator
+        self.validator = validator or grounding_validator
         self.persistence = persistence or intelligence_persistence
         self.provider_manager = provider_manager or get_provider_manager()
 
@@ -58,16 +61,26 @@ class IntelligenceEngine:
         self,
         certification_id: str,
         artifact: Optional[CertificationArtifact] = None,
+        evidence_bundle: Optional[EvidenceBundle] = None,
+        evidence_records: Optional[list[EvidenceRecord]] = None,
+        evaluation_result: Optional[EvaluationResult] = None,
+        oracle_set: Optional[OracleSet] = None,
+        threshold_resolution: Optional[ThresholdResolution] = None,
         request: Optional[ExplanationRequest] = None,
         user_id: str = "system",
     ) -> CertificationExplanation:
         """Generates or retrieves a structured CertificationExplanation with strict boundary guarantees."""
         req = request or ExplanationRequest()
 
-        # 1. Build Authoritative ExplanationContext first to enable context-sensitive caching
+        # 1. Build Authoritative ExplanationContext from Phase 3–8 entities
         context = self.context_builder.build_context(
             certification_id=certification_id,
             artifact=artifact,
+            evidence_bundle=evidence_bundle,
+            evidence_records=evidence_records,
+            evaluation_result=evaluation_result,
+            oracle_set=oracle_set,
+            threshold_resolution=threshold_resolution,
             use_company_knowledge=req.use_company_knowledge,
             custom_query=req.custom_query,
         )
@@ -219,15 +232,25 @@ class IntelligenceEngine:
         certification_id: str,
         question: str,
         artifact: Optional[CertificationArtifact] = None,
+        evidence_bundle: Optional[EvidenceBundle] = None,
+        evidence_records: Optional[list[EvidenceRecord]] = None,
+        evaluation_result: Optional[EvaluationResult] = None,
+        oracle_set: Optional[OracleSet] = None,
+        threshold_resolution: Optional[ThresholdResolution] = None,
         use_company_knowledge: bool = True,
         preferred_provider: Optional[str] = None,
         user_id: str = "system",
     ) -> AskCertificationResponse:
         """Answers an interactive question over authoritative certification context with strict guardrails."""
-        # 1. Build Context
+        # 1. Build Context from Authoritative Sources
         context = self.context_builder.build_context(
             certification_id=certification_id,
             artifact=artifact,
+            evidence_bundle=evidence_bundle,
+            evidence_records=evidence_records,
+            evaluation_result=evaluation_result,
+            oracle_set=oracle_set,
+            threshold_resolution=threshold_resolution,
             use_company_knowledge=use_company_knowledge,
             user_question=question,
         )
@@ -276,68 +299,41 @@ class IntelligenceEngine:
                 elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
                 if llm_resp.success and isinstance(llm_resp.parsed_json, dict):
-                    ans_data = llm_resp.parsed_json
-                    raw_evids = ans_data.get("referenced_evidence_ids", [])
-                    raw_rules = ans_data.get("referenced_rule_ids", [])
-                    filtered_evids = [e for e in raw_evids if e in context.valid_evidence_ids] if isinstance(raw_evids, list) else []
-                    filtered_rules = [r for r in raw_rules if r in context.valid_rule_ids] if isinstance(raw_rules, list) else []
-
-                    # Shared claim validation: reject if hallucinating fake IDs or contradicting factual values
-                    answer_text = str(ans_data.get("answer", ""))
-                    has_factual_hallucination = False
-
-                    # If the LLM referenced fake evidence or rule IDs
-                    if (raw_evids and len(filtered_evids) < len(raw_evids)) or (raw_rules and len(filtered_rules) < len(raw_rules)):
-                        logger.warning("Q&A answer contained ungrounded evidence or rule IDs.")
-
-                    # Validate factual numbers in answer against authoritative differences
-                    for diff in context.differences_summary:
-                        auth_tgt = diff.get("target_value")
-                        auth_ref = diff.get("reference_value")
-                        # If authoritative target is 95, and answer explicitly states target is 97 (or another number)
-                        if auth_tgt is not None and isinstance(auth_tgt, (int, float)):
-                            # Check if answer claims a different target number with word 'target'
-                            m = re.search(r"target\s*(?:output|value)?\s*(?:is|=|was|produced|of)\s*(\d+(?:\.\d+)?)", answer_text, re.IGNORECASE)
-                            if m:
-                                claimed_val = float(m.group(1))
-                                if abs(claimed_val - float(auth_tgt)) > 1e-6:
-                                    logger.warning(f"Q&A answer hallucinated target value {claimed_val} vs authoritative {auth_tgt}. Rejecting claim.")
-                                    has_factual_hallucination = True
-                                    break
-
-                    if not has_factual_hallucination and answer_text:
-                        support_str = str(ans_data.get("support_level", "DETERMINISTIC_FACT")).upper()
-                        try:
-                            sup_enum = EvidenceSupportLevel(support_str)
-                        except ValueError:
-                            sup_enum = EvidenceSupportLevel.DETERMINISTIC_FACT
-
-                        meta = GenerationMetadata(
+                    meta = GenerationMetadata(
+                        provider=llm_resp.provider_name,
+                        model=llm_resp.model_name,
+                        generation_mode="LLM",
+                        prompt_version="v1.0",
+                        schema_version="1.0.0",
+                        latency_ms=round(elapsed_ms, 2),
+                        fallback_occurred=llm_resp.fallback_occurred,
+                    )
+                    is_valid, validation_errors, qa_response = self.validator.validate_qa_response(
+                        raw_payload=llm_resp.parsed_json,
+                        context=context,
+                        metadata=meta,
+                        question=clean_question,
+                        referenced_doc_ids=referenced_doc_ids,
+                    )
+                    if is_valid and qa_response:
+                        self.persistence.log_audit_event(
+                            audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
+                            user_id=user_id,
+                            certification_id=context.certification_id,
+                            application_id=context.application_id,
+                            mode="LLM",
                             provider=llm_resp.provider_name,
                             model=llm_resp.model_name,
-                            generation_mode="LLM",
-                            prompt_version="v1.0",
-                            schema_version="1.0.0",
-                            latency_ms=round(elapsed_ms, 2),
-                            fallback_occurred=llm_resp.fallback_occurred,
-                        )
-
-                        return AskCertificationResponse(
-                            question=clean_question,
-                            answer=answer_text,
-                            support_level=sup_enum,
-                            referenced_evidence_ids=filtered_evids,
-                            referenced_rule_ids=filtered_rules,
-                            referenced_document_ids=list(set(referenced_doc_ids)),
-                            uncertainties=ans_data.get("uncertainties", []),
-                            authoritative_verdict=context.authoritative_verdict,
                             context_fingerprint=context.compute_context_fingerprint(),
-                            generation_metadata=meta,
+                            fallback_used=False,
                         )
+                        return qa_response
+                    else:
+                        logger.warning(f"Interactive LLM QA validation failed: {validation_errors}. Executing deterministic fallback.")
             except Exception as exc:
                 logger.warning(f"Interactive LLM QA failed: {exc}. Falling back to deterministic answer.")
 
-        # Deterministic Q&A Answer Synthesis (Dimension-aware)
+        # Deterministic Q&A Answer Synthesis (Dimension-aware & conservative)
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         verdict = context.authoritative_verdict
         score_pct = context.equivalence_score * 100
@@ -366,7 +362,7 @@ class IntelligenceEngine:
             fallback_reason="Offline, deterministic mode, or validation fallback triggered",
         )
 
-        return AskCertificationResponse(
+        resp = AskCertificationResponse(
             question=clean_question,
             answer=det_answer,
             support_level=EvidenceSupportLevel.DETERMINISTIC_FACT,
@@ -378,6 +374,18 @@ class IntelligenceEngine:
             context_fingerprint=context.compute_context_fingerprint(),
             generation_metadata=meta,
         )
+        self.persistence.log_audit_event(
+            audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
+            user_id=user_id,
+            certification_id=context.certification_id,
+            application_id=context.application_id,
+            mode="DETERMINISTIC",
+            provider="offline",
+            model="deterministic-qa",
+            context_fingerprint=context.compute_context_fingerprint(),
+            fallback_used=True,
+        )
+        return resp
 
 
 intelligence_engine = IntelligenceEngine()
