@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import ControlledMode from "./ControlledMode";
 import ThresholdMode from "./ThresholdMode";
 import KnowledgeMode from "./KnowledgeMode";
+import ExplanationMode from "./ExplanationMode";
 
 
 // Environment-based API Base URL with safe production & development defaults
@@ -1045,6 +1046,7 @@ export default function App() {
             { id: "controlled", label: "⚖️ Controlled Mode", desc: "Business Rules & Behavioral Compliance" },
             { id: "thresholds", label: "⚡ Dynamic Thresholds", desc: "Evidence-Driven & Bounded Evaluation" },
             { id: "knowledge", label: "📚 Company Knowledge", desc: "Optional RAG Ingestion & Retrieval" },
+            { id: "explanation", label: "🤖 Intelligent Explanations", desc: "Evidence Summarization & Q&A" },
             { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },
             { id: "dossier", label: "📑 Evidence Dossier", desc: "Explainability & Traceability" },
             { id: "operations", label: "⚙️ Operations & Reliability", desc: "System Health, Metrics & Jobs" },
@@ -3500,6 +3502,19 @@ export default function App() {
             authFetch={authFetch}
             badgeStyle={badgeStyle}
             cardStyle={cardStyle}
+          />
+        )}
+
+        {/* ========================================================================= */}
+        {/* TAB: INTELLIGENT EXPLANATIONS (PHASE 10 AI AGENT & EVIDENCE TRACEABILITY)  */}
+        {/* ========================================================================= */}
+        {activeTab === "explanation" && (
+          <ExplanationMode
+            apiBase={API_BASE}
+            authToken={authToken}
+            activeResult={activeResult}
+            customActiveResult={customActiveResult}
+            historicalArtifacts={historicalArtifacts}
           />
         )}
       </main>

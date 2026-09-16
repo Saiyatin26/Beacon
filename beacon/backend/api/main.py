@@ -234,6 +234,11 @@ app.include_router(threshold_router)
 from api.knowledge_router import knowledge_router
 app.include_router(knowledge_router)
 
+# Phase 10 (V2) Intelligent Agent & Detailed Certification Explanations Routes
+from api.intelligence_router import intelligence_router
+app.include_router(intelligence_router)
+
+
 
 
 

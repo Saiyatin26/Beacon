@@ -50,6 +50,7 @@ def configure_test_auth_isolation(request):
 
     if (
         "test_phase9" in test_file_name
+        or "test_phase10" in test_file_name
         or "test_phase17" in test_file_name
         or "test_phase18" in test_file_name
         or "test_phase20" in test_file_name
