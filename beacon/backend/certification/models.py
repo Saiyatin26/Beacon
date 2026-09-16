@@ -11,6 +11,7 @@ import json
 from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, Field
 from oracle.models import OracleEvaluationReport
+from evaluation.models import BehaviorDimension
 
 
 class CertificationStatus(str, Enum):
@@ -71,6 +72,9 @@ class BehavioralRegression(BaseModel):
     confidence: float = 1.0
     timestamp: str = ""
     evidence_ids: list[str] = Field(default_factory=list)
+    reference_evidence_id: Optional[str] = None
+    target_evidence_id: Optional[str] = None
+    dimension: Optional[Union[BehaviorDimension, str]] = None
     source_lines: list[int] = Field(default_factory=list)
 
     def model_post_init(self, __context: Any) -> None:

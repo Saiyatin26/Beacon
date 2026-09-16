@@ -49,11 +49,12 @@ def test_phase8_threshold_consumed_authoritatively():
     )
     threshold_persistence.save_resolution(resolution)
 
-    # 2. Build CertificationArtifact referencing this policy
+    # 2. Build CertificationArtifact referencing this policy and exact resolution
     artifact = CertificationArtifact(
         certification_id="CERT-THRESH-001",
         project_id="app_threshold_test",
         certification_policy_id=policy.policy_id,
+        threshold_resolution_id="RES-PHASE8-TEST-001",
         status=CertificationStatus.CERTIFIED,
         score=0.95,
         metrics=CertificationMetrics(

@@ -338,9 +338,9 @@ class IntelligenceEngine:
         verdict = context.authoritative_verdict
         score_pct = context.equivalence_score * 100
 
-        # Dynamically determine observed differing dimensions
-        diff_dims = sorted(list({str(d.get("dimension", "OUTPUT")).upper() for d in context.differences_summary if d.get("dimension")}))
-        diff_dims_str = ", ".join(diff_dims) if diff_dims else "OUTPUT"
+        # Dynamically determine observed differing dimensions (no default to OUTPUT)
+        diff_dims = sorted(list({str(d.get("dimension")).upper() for d in context.differences_summary if d.get("dimension")}))
+        diff_dims_str = ", ".join(diff_dims) if diff_dims else "UNKNOWN"
 
         det_answer = (
             f"Authoritative Certification Status: {verdict} (Equivalence Score: {score_pct:.1f}%). "
@@ -362,12 +362,31 @@ class IntelligenceEngine:
             fallback_reason="Offline, deterministic mode, or validation fallback triggered",
         )
 
+        # Claim-specific referenced evidence and rule IDs rather than arbitrary top-5
+        qa_evidence_ids: list[str] = []
+        for diff in context.differences_summary:
+            for eid in diff.get("evidence_ids", []):
+                if eid in context.valid_evidence_ids and eid not in qa_evidence_ids:
+                    qa_evidence_ids.append(eid)
+            ref_e = diff.get("reference_evidence_id")
+            tgt_e = diff.get("target_evidence_id")
+            if ref_e and ref_e in context.valid_evidence_ids and ref_e not in qa_evidence_ids:
+                qa_evidence_ids.append(ref_e)
+            if tgt_e and tgt_e in context.valid_evidence_ids and tgt_e not in qa_evidence_ids:
+                qa_evidence_ids.append(tgt_e)
+
+        qa_rule_ids: list[str] = []
+        for diff in context.differences_summary:
+            for r_id in diff.get("violated_oracle_ids", []):
+                if r_id in context.valid_rule_ids and r_id not in qa_rule_ids:
+                    qa_rule_ids.append(r_id)
+
         resp = AskCertificationResponse(
             question=clean_question,
             answer=det_answer,
             support_level=EvidenceSupportLevel.DETERMINISTIC_FACT,
-            referenced_evidence_ids=context.valid_evidence_ids[:5],
-            referenced_rule_ids=context.valid_rule_ids[:5],
+            referenced_evidence_ids=qa_evidence_ids,
+            referenced_rule_ids=qa_rule_ids,
             referenced_document_ids=list(set(referenced_doc_ids)),
             uncertainties=[m.description for m in context.missing_evidence],
             authoritative_verdict=verdict,

@@ -204,28 +204,14 @@ class ExplanationContextBuilder:
                     if tgt_eid:
                         resolved_eids.add(tgt_eid)
 
-                # Fallback ONLY for unseeded test mock IDs that were NOT resolved in evidence_store/record_by_id
-                unresolved_evids = [e for e in actual_evids if e not in resolved_eids]
-                if unresolved_evids:
-                    for eid in unresolved_evids:
-                        eid_lower = eid.lower()
-                        if ("ref" in eid_lower or "legacy" in eid_lower) and not ref_eid:
-                            ref_eid = eid
-                        elif ("tgt" in eid_lower or "target" in eid_lower or "modern" in eid_lower) and not tgt_eid:
-                            tgt_eid = eid
-                    if not ref_eid and len(unresolved_evids) >= 1:
-                        ref_eid = unresolved_evids[0]
-                    if not tgt_eid and len(unresolved_evids) >= 2:
-                        tgt_eid = unresolved_evids[1]
-
                 # Canonical input hash
                 inp_hash = getattr(r, "input_hash", None)
                 if not inp_hash and getattr(r, "input_values", None):
                     inp_hash = compute_canonical_input_hash(r.input_values)
 
-                # Determine actual dimension
+                # Determine actual dimension (Never default to OUTPUT)
                 raw_dim = getattr(r, "dimension", None) or getattr(r, "domain", None)
-                dim_str = "OUTPUT"
+                dim_str = "UNKNOWN"
                 if raw_dim:
                     if isinstance(raw_dim, BehaviorDimension):
                         dim_str = raw_dim.value
@@ -316,10 +302,6 @@ class ExplanationContextBuilder:
             if not exact_res_fp and artifact.context and hasattr(artifact.context, "threshold_resolution_fingerprint"):
                 exact_res_fp = getattr(artifact.context, "threshold_resolution_fingerprint", None)
 
-            pol_ver = getattr(artifact, "certification_policy_version", None)
-            if not pol_ver and artifact.context and hasattr(artifact.context, "policy_version"):
-                pol_ver = getattr(artifact.context, "policy_version", None)
-
             try:
                 pol = threshold_persistence.get_policy(artifact.certification_policy_id)
                 if pol:
@@ -335,22 +317,6 @@ class ExplanationContextBuilder:
                                 "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE fingerprint = ?",
                                 (exact_res_fp,),
                             ).fetchone()
-                        elif pol_ver:
-                            # Exact policy version match for legacy compatibility
-                            rows = conn.execute(
-                                "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE policy_id = ?",
-                                (artifact.certification_policy_id,),
-                            ).fetchall()
-                            ver_str = str(pol_ver)
-                            for r in rows:
-                                try:
-                                    res_data = json.loads(r["resolution_json"])
-                                    r_ver = str(res_data.get("policy_version", ""))
-                                    if r_ver == ver_str or r_ver.startswith(f"{ver_str}."):
-                                        row = r
-                                        break
-                                except Exception:
-                                    pass
 
                         if row:
                             # Verify fingerprint integrity if expected fingerprint exists

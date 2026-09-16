@@ -108,6 +108,9 @@ def test_real_evidence_ids_are_faithfully_preserved():
                 modern_output="TIER_B",
                 failed_assertion="output == expected",
                 evidence_ids=["EVID-PHASE3-REF-100", "EVID-PHASE3-TGT-100"],
+                reference_evidence_id="EVID-PHASE3-REF-100",
+                target_evidence_id="EVID-PHASE3-TGT-100",
+                dimension=BehaviorDimension.OUTPUT,
             )
         ],
         oracle_summaries=[

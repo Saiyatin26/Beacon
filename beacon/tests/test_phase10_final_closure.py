@@ -376,6 +376,7 @@ def test_j_threshold_exact_binding():
     art = CertificationArtifact(
         certification_id="CERT-J", project_id="app_j", status=CertificationStatus.CERTIFIED,
         score=0.95, certification_policy_id="POL-J", certification_policy_version=1,
+        threshold_resolution_id="RES-001", threshold_resolution_fingerprint="fp_res1",
         metrics=CertificationMetrics(unique_input_count=10, matching_case_count=10, regression_case_count=0)
     )
 

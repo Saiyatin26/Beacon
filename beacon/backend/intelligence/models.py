@@ -136,8 +136,8 @@ class EvidenceTrace(BaseModel):
     claim_text: str
     evidence_id: Optional[str] = None
     input_id: str
-    dimension: BehaviorDimension = BehaviorDimension.OUTPUT
-    role: str = "target"  # reference, target, or paired
+    dimension: Optional[BehaviorDimension] = None
+    role: Optional[str] = None  # reference, target, or paired
     source_type: str = "runtime_execution"
     evidence_hash: str = ""
     provenance: dict[str, Any] = Field(default_factory=dict)

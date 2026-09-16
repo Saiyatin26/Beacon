@@ -182,11 +182,14 @@ class DeterministicExplanationGenerator:
             inp_id = diff.get("input_id")
             evid_tgt = diff.get("target_evidence_id")
             evid_ref = diff.get("reference_evidence_id")
-            diff_dim_str = str(diff.get("dimension", "OUTPUT")).upper()
-            try:
-                diff_dim_enum = BehaviorDimension(diff_dim_str)
-            except ValueError:
-                diff_dim_enum = BehaviorDimension.OUTPUT
+            diff_dim_raw = diff.get("dimension")
+            diff_dim_str = str(diff_dim_raw).upper() if diff_dim_raw else "UNKNOWN"
+            diff_dim_enum: Optional[BehaviorDimension] = None
+            if diff_dim_raw:
+                try:
+                    diff_dim_enum = BehaviorDimension(diff_dim_str)
+                except ValueError:
+                    diff_dim_enum = None
 
             # Provenance and hash
             inp_label = inp_id or f"case-{idx+1}"
@@ -198,7 +201,7 @@ class DeterministicExplanationGenerator:
                     evidence_id=evid_tgt,
                     input_id=inp_id or "",
                     dimension=diff_dim_enum,
-                    role="target",
+                    role="target" if evid_tgt else None,
                     source_type="runtime_execution",
                     evidence_hash=hashlib.sha256(trace_hash_src.encode("utf-8")).hexdigest(),
                     provenance={"reference_evidence_id": evid_ref, "input_id": inp_id},
