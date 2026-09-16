@@ -728,6 +728,8 @@ class CertificationEngine:
             certification_policy_id=cert_policy.policy_id,
             certification_policy_version=cert_policy.version,
             certification_policy_hash=pol_hash,
+            threshold_resolution_id=getattr(final_context, "threshold_resolution_id", None),
+            threshold_resolution_fingerprint=getattr(final_context, "threshold_resolution_fingerprint", None),
             certification_engine_version="1.0.0",
             timestamp=timestamp,
             reproducibility_state=repro_state,

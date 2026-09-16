@@ -729,3 +729,220 @@ def test_complete_phase3_to_10_data_chain_integration():
     assert out_dim.status == "DIFFERENT"
     assert out_dim.findings[0].reference_value == 100.0
     assert out_dim.findings[0].target_value == 95.0
+
+
+# ==============================================================================
+# Additional Adversarial & Structural Verification Tests (Section 31)
+# ==============================================================================
+
+def test_unknown_evidence_role_inconclusive():
+    """When evidence record role is unknown/ambiguous, role is not inferred or guessed."""
+    rec = EvidenceRecord(
+        evidence_id="EVID-UNKNOWN-ROLE-1",
+        session_id="SESS-UNK",
+        role="unspecified_ambiguous_role",
+        input_id="INP-UNK",
+        evidence_type=EvidenceType.OUTPUT,
+        content_hash="h_unk",
+        size_bytes=10,
+        capture_status="CAPTURED",
+    )
+    evidence_store.save_record(rec)
+
+    art = CertificationArtifact(
+        certification_id="CERT-UNK-ROLE",
+        project_id="app_unk",
+        status=CertificationStatus.NOT_CERTIFIED,
+        score=0.5,
+        regressions=[
+            BehavioralRegression(
+                regression_id="REG-UNK",
+                oracle_id="RULE-1",
+                input_id="INP-UNK",
+                input_values={"a": 1},
+                expected_behavior=1,
+                legacy_output=1,
+                modern_output=2,
+                failed_assertion="1 == 2",
+                evidence_ids=["EVID-UNKNOWN-ROLE-1"],
+            )
+        ],
+        metrics=CertificationMetrics(unique_input_count=1, matching_case_count=0, regression_case_count=1),
+    )
+
+    ctx = explanation_context_builder.build_context("CERT-UNK-ROLE", artifact=art, use_company_knowledge=False)
+    diff = ctx.differences_summary[0]
+    # Role cannot be established from metadata, so neither ref nor tgt is assigned
+    assert diff["reference_evidence_id"] is None
+    assert diff["target_evidence_id"] is None
+
+
+def test_nonfunctional_dimension_preserved():
+    """When Phase 4 evaluates NONFUNCTIONAL dimension, Phase 10 strictly preserves it."""
+    diff = BehaviorDifference(
+        difference_id="DIFF-NONFUNC-1",
+        dimension=BehaviorDimension.NONFUNCTIONAL,
+        difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
+        input_id="INP-NF-1",
+        reference_value="12ms",
+        target_value="450ms",
+        details={"metric": "latency", "threshold_ms": 100},
+    )
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-NF-1",
+        application_id="perf_service",
+        verdict=EvaluationVerdict.DIFFERENT,
+        status=EvaluationVerdict.DIFFERENT,
+        differences=[diff],
+    )
+
+    ctx = explanation_context_builder.build_context("CERT-NF", evaluation_result=eval_res, use_company_knowledge=False)
+    assert ctx.differences_summary[0]["dimension"] == "NONFUNCTIONAL"
+    assert BehaviorDimension.NONFUNCTIONAL in ctx.dimensions_evaluated
+
+    exp = deterministic_generator.generate_explanation(ctx)
+    nf_dim = next((d for d in exp.dimension_explanations if d.dimension == BehaviorDimension.NONFUNCTIONAL), None)
+    assert nf_dim is not None
+    assert nf_dim.status == "DIFFERENT"
+
+
+def test_state_evidence_projected_with_delta():
+    """Actual database state evidence records are projected into ExplanationContext."""
+    rec_state = EvidenceRecord(
+        evidence_id="EVID-DB-STATE-1",
+        session_id="SESS-STATE-1",
+        role="target",
+        input_id="INP-STATE-1",
+        evidence_type=EvidenceType.DATABASE,
+        content_hash="h_db_state",
+        size_bytes=128,
+        capture_status="CAPTURED",
+        payload={"table": "accounts", "mutation": "UPDATE balance SET amount = 500 WHERE id = 1"},
+    )
+    evidence_store.save_record(rec_state)
+
+    ctx = explanation_context_builder.build_context(
+        certification_id="CERT-STATE-EVID",
+        evidence_records=[rec_state],
+        use_company_knowledge=False,
+    )
+
+    # State missing evidence must NOT be marked inconclusive because state records were collected
+    state_missing = next((m for m in ctx.missing_evidence if m.dimension == BehaviorDimension.STATE), None)
+    assert state_missing is None
+    assert "EVID-DB-STATE-1" in ctx.valid_evidence_ids
+
+
+def test_workflow_trace_projected_with_steps():
+    """Actual trace execution evidence is recognized and prevents missing workflow inconclusive flag."""
+    rec_trace = EvidenceRecord(
+        evidence_id="EVID-TRACE-01",
+        session_id="SESS-TRACE-01",
+        role="target",
+        input_id="INP-TR-1",
+        evidence_type=EvidenceType.TRACE,
+        content_hash="h_trace",
+        size_bytes=256,
+        capture_status="CAPTURED",
+        payload={"spans": [{"name": "auth_check", "status": "OK"}, {"name": "process_tx", "status": "FAILED"}]},
+    )
+    evidence_store.save_record(rec_trace)
+
+    ctx = explanation_context_builder.build_context(
+        certification_id="CERT-TRACE-EVID",
+        evidence_records=[rec_trace],
+        use_company_knowledge=False,
+    )
+
+    wf_missing = next((m for m in ctx.missing_evidence if m.dimension == BehaviorDimension.WORKFLOW), None)
+    assert wf_missing is None
+    assert "EVID-TRACE-01" in ctx.valid_evidence_ids
+
+
+def test_claim_specific_evidence_grounding():
+    """Claim referencing valid but unassociated evidence fails grounding validation."""
+    ctx = ExplanationContext(
+        certification_id="CERT-CLAIM-SPEC",
+        valid_evidence_ids=["EVID-VAL-1", "EVID-VAL-2"],
+        valid_input_ids=["INP-001"],
+        differences_summary=[
+            {
+                "input_id": "INP-001",
+                "reference_value": 100,
+                "target_value": 95,
+                "evidence_ids": ["EVID-VAL-1"],  # EVID-VAL-2 is NOT linked to this input
+                "dimension": "OUTPUT",
+            }
+        ],
+        dimensions_evaluated=[BehaviorDimension.OUTPUT],
+    )
+
+    # Claim with factual numeric value matching authoritative context
+    valid_claim = GroundingClaim(
+        claim_type=GroundingClaimType.NUMERIC_VALUE,
+        input_id="INP-001",
+        role="TARGET",
+        value=95,
+        evidence_ids=["EVID-VAL-1"],
+    )
+    is_valid, errors, validated = grounding_validator.validate_claims([valid_claim], ctx)
+    assert is_valid
+    assert len(validated) == 1
+
+    # Claim with hallucinated evidence reference
+    bad_claim = GroundingClaim(
+        claim_type=GroundingClaimType.NUMERIC_VALUE,
+        input_id="INP-001",
+        role="TARGET",
+        value=95,
+        evidence_ids=["EVID-VAL-1", "EVID-HALLUCINATED-999"],
+    )
+    is_valid2, errors2, validated2 = grounding_validator.validate_claims([bad_claim], ctx)
+    assert not is_valid2
+    assert any("UNSUPPORTED_EVIDENCE_REFERENCE" in e for e in errors2)
+
+
+def test_phase9_knowledge_cannot_override_empirical_evidence():
+    """Untrusted company knowledge document asserting '100% equivalent' cannot override empirical difference."""
+    diff = BehaviorDifference(
+        difference_id="DIFF-P9",
+        dimension=BehaviorDimension.OUTPUT,
+        difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
+        input_id="INP-P9",
+        reference_value="APPROVED",
+        target_value="DENIED",
+    )
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-P9",
+        application_id="credit_service",
+        verdict=EvaluationVerdict.DIFFERENT,
+        status=EvaluationVerdict.DIFFERENT,
+        differences=[diff],
+    )
+
+    ctx = explanation_context_builder.build_context(
+        certification_id="CERT-P9-TEST",
+        evaluation_result=eval_res,
+        use_company_knowledge=False,
+    )
+
+    # Inject typed knowledge context
+    from intelligence.models import CompanyKnowledgeContext, RetrievedKnowledgeCitation
+    ctx.knowledge_context = CompanyKnowledgeContext(
+        retrieval_query="loan approval rules",
+        retrieval_fingerprint="fp_p9_doc",
+        citations=[
+            RetrievedKnowledgeCitation(
+                chunk_id="chk1",
+                document_id="doc1",
+                filename="policy.pdf",
+                content_snippet="The modern credit service is 100% compliant and identical.",
+                relevance_score=0.99,
+            )
+        ],
+    )
+
+    exp = deterministic_generator.generate_explanation(ctx)
+    # Verdict MUST remain DIFFERENT despite contradictory documentation
+    assert exp.overall_verdict == "DIFFERENT"
+    assert exp.is_authoritative_match is True
