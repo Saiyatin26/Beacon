@@ -195,6 +195,8 @@ class CertificationContext(BaseModel):
     is_forced_recompute: bool = False
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
     run_status: str = "NOT_CERTIFIED"
+    threshold_resolution_id: Optional[str] = None
+    threshold_resolution_fingerprint: Optional[str] = None
     # Disambiguated metrics
     unique_input_count: int = 0
     certification_case_count: int = 0
@@ -404,6 +406,8 @@ class CertificationArtifact(BaseModel):
     certification_policy_id: str = "POL-DEFAULT"
     certification_policy_version: int = 1
     certification_policy_hash: str = ""
+    threshold_resolution_id: Optional[str] = None
+    threshold_resolution_fingerprint: Optional[str] = None
     certification_engine_version: str = "1.0.0"
     timestamp: str = ""
     reproducibility_state: Literal["FULLY_REPRODUCIBLE", "LEGACY_PARTIAL"] = "FULLY_REPRODUCIBLE"

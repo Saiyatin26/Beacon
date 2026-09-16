@@ -127,9 +127,24 @@ class ExplanationContextBuilder:
                 tgt_eid = diff.target_evidence_id
 
                 if ref_eid:
-                    valid_evid_ids.add(ref_eid)
+                    rec = record_by_id.get(ref_eid)
+                    if not rec and actual_session_id:
+                        try:
+                            rec = evidence_store.get_record(ref_eid)
+                        except Exception:
+                            pass
+                    if rec or not actual_session_id:
+                        valid_evid_ids.add(ref_eid)
+
                 if tgt_eid:
-                    valid_evid_ids.add(tgt_eid)
+                    rec = record_by_id.get(tgt_eid)
+                    if not rec and actual_session_id:
+                        try:
+                            rec = evidence_store.get_record(tgt_eid)
+                        except Exception:
+                            pass
+                    if rec or not actual_session_id:
+                        valid_evid_ids.add(tgt_eid)
 
                 # Ensure dimension is canonical
                 dim_str = diff.dimension.value if hasattr(diff.dimension, "value") else str(diff.dimension)
@@ -320,24 +335,22 @@ class ExplanationContextBuilder:
                                 "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE fingerprint = ?",
                                 (exact_res_fp,),
                             ).fetchone()
-                        else:
+                        elif pol_ver:
+                            # Exact policy version match for legacy compatibility
                             rows = conn.execute(
-                                "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE policy_id = ? ORDER BY created_at DESC",
+                                "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE policy_id = ?",
                                 (artifact.certification_policy_id,),
                             ).fetchall()
-                            if pol_ver and rows:
-                                ver_str = str(pol_ver)
-                                for r in rows:
-                                    try:
-                                        res_data = json.loads(r["resolution_json"])
-                                        r_ver = str(res_data.get("policy_version", ""))
-                                        if r_ver == ver_str or r_ver.startswith(f"{ver_str}."):
-                                            row = r
-                                            break
-                                    except Exception:
-                                        pass
-                            if not row and rows:
-                                row = rows[0]
+                            ver_str = str(pol_ver)
+                            for r in rows:
+                                try:
+                                    res_data = json.loads(r["resolution_json"])
+                                    r_ver = str(res_data.get("policy_version", ""))
+                                    if r_ver == ver_str or r_ver.startswith(f"{ver_str}."):
+                                        row = r
+                                        break
+                                except Exception:
+                                    pass
 
                         if row:
                             # Verify fingerprint integrity if expected fingerprint exists
@@ -362,6 +375,13 @@ class ExplanationContextBuilder:
                                     "resolution_status": row["status"],
                                     "sample_count": row["sample_count"],
                                 }
+                            thresholds_context.append(threshold_dict)
+                        else:
+                            threshold_dict = {
+                                "policy_id": pol.policy_id,
+                                "status": "INCONCLUSIVE",
+                                "reason": "Exact threshold resolution linkage unavailable.",
+                            }
                             thresholds_context.append(threshold_dict)
             except Exception as exc:
                 logger.debug(f"Phase 8 policy resolution not found in persistence: {exc}")
@@ -409,13 +429,29 @@ class ExplanationContextBuilder:
                 )
             )
 
-        dimensions_evaluated = [
-            BehaviorDimension.OUTPUT,
-            BehaviorDimension.ERROR,
-            BehaviorDimension.BOUNDARY,
-            BehaviorDimension.STATE,
-            BehaviorDimension.WORKFLOW,
-        ]
+        # Derive evaluated dimensions dynamically from EvaluationResult and observations
+        evaluated_dims_set = set()
+        if evaluation_result:
+            if hasattr(evaluation_result, "dimensions_evaluated") and evaluation_result.dimensions_evaluated:
+                for d in evaluation_result.dimensions_evaluated:
+                    if isinstance(d, BehaviorDimension):
+                        evaluated_dims_set.add(d)
+                    elif isinstance(d, str) and hasattr(BehaviorDimension, d.upper()):
+                        evaluated_dims_set.add(BehaviorDimension[d.upper()])
+            if evaluation_result.differences:
+                for diff in evaluation_result.differences:
+                    if isinstance(diff.dimension, BehaviorDimension):
+                        evaluated_dims_set.add(diff.dimension)
+
+        if not evaluated_dims_set:
+            evaluated_dims_set = {
+                BehaviorDimension.OUTPUT,
+                BehaviorDimension.ERROR,
+                BehaviorDimension.BOUNDARY,
+                BehaviorDimension.STATE,
+                BehaviorDimension.WORKFLOW,
+            }
+        dimensions_evaluated = sorted(list(evaluated_dims_set), key=lambda d: d.value)
 
         # 7. Optional Phase 9 Knowledge Context Retrieval
         company_knowledge_context: Optional[CompanyKnowledgeContext] = None
