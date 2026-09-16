@@ -15,6 +15,7 @@ from common.config import settings
 from evaluation.models import BehaviorDimension
 from knowledge.models import KnowledgeContext
 from knowledge.service import knowledge_service
+from threshold.persistence import threshold_persistence
 from .models import (
     CompanyKnowledgeContext,
     ExplanationContext,
@@ -61,7 +62,8 @@ class ExplanationContextBuilder:
         # Rules from Oracle Summaries
         rules_context: list[dict[str, Any]] = []
         for s in artifact.oracle_summaries:
-            valid_rule_ids.add(s.oracle_id)
+            if s.oracle_id:
+                valid_rule_ids.add(s.oracle_id)
             rule_dict = {
                 "rule_id": s.oracle_id,
                 "rule_description": f"Condition: {s.condition_str} -> Expected: {s.consequence_str}",
@@ -75,17 +77,17 @@ class ExplanationContextBuilder:
             }
             rules_context.append(rule_dict)
 
-        # Regressions / Counterexamples
+        # Regressions / Counterexamples (Strictly using actual evidence IDs, never synthetic)
         for r in artifact.regressions:
-            valid_input_ids.add(r.input_id)
+            if r.input_id:
+                valid_input_ids.add(r.input_id)
             for eid in r.evidence_ids:
-                valid_evid_ids.add(eid)
-            if not r.evidence_ids:
-                synthetic_eid = f"EVID-{r.regression_id}"
-                valid_evid_ids.add(synthetic_eid)
-                evid_list = [synthetic_eid]
-            else:
-                evid_list = r.evidence_ids
+                if eid:
+                    valid_evid_ids.add(eid)
+
+            actual_evids = [e for e in r.evidence_ids if e]
+            ref_eid = actual_evids[0] if actual_evids else None
+            tgt_eid = actual_evids[-1] if len(actual_evids) > 1 else (actual_evids[0] if actual_evids else None)
 
             diff_record = {
                 "difference_id": r.regression_id,
@@ -93,19 +95,15 @@ class ExplanationContextBuilder:
                 "input_id": r.input_id,
                 "reference_value": r.legacy_output,
                 "target_value": r.modern_output,
-                "reference_evidence_id": evid_list[0] if evid_list else f"EVID-REF-{r.input_id}",
-                "target_evidence_id": evid_list[-1] if evid_list else f"EVID-TGT-{r.input_id}",
+                "reference_evidence_id": ref_eid,
+                "target_evidence_id": tgt_eid,
+                "evidence_ids": actual_evids,
                 "input_values": r.input_values,
                 "failed_assertion": r.failed_assertion,
                 "severity": r.severity,
-                "violated_oracle_ids": [r.oracle_id],
+                "violated_oracle_ids": [r.oracle_id] if r.oracle_id else [],
             }
             differences_summary.append(diff_record)
-
-        # If no regressions and no explicit evidence IDs, generate baseline IDs
-        if not valid_evid_ids:
-            for idx in range(min(artifact.metrics.unique_input_count or 1, 5)):
-                valid_evid_ids.add(f"EVID-RUN-{idx+1}")
 
         # Dimensions evaluated
         dimensions_evaluated = [
@@ -116,23 +114,76 @@ class ExplanationContextBuilder:
             BehaviorDimension.WORKFLOW,
         ]
 
-        # 3. Missing Evidence Analysis
-        missing_evidence: list[MissingEvidence] = [
-            MissingEvidence(
-                dimension=BehaviorDimension.STATE,
-                description="Before/after database state snapshots were not collected for black-box API execution.",
-                implication="State equivalence is inferred from pure output observations rather than physical DB delta.",
-                status="INCONCLUSIVE",
-            ),
-            MissingEvidence(
-                dimension=BehaviorDimension.WORKFLOW,
-                description="Multi-step distributed trace telemetry was not captured for single-invocation execution.",
-                implication="Intermediate workflow step sequence equivalence is assumed based on final output.",
-                status="INCONCLUSIVE",
-            ),
-        ]
+        # 3. Dynamic Missing Evidence Analysis (Derived from actual availability, not hardcoded)
+        missing_evidence: list[MissingEvidence] = []
 
-        # 4. Optional Phase 9 Knowledge Context Retrieval
+        # State Dimension Availability Analysis
+        has_state_evidence = bool(
+            getattr(artifact, "state_snapshots", None)
+            or (artifact.context and getattr(artifact.context, "state_snapshots_captured", False))
+        )
+        if not has_state_evidence:
+            missing_evidence.append(
+                MissingEvidence(
+                    dimension=BehaviorDimension.STATE,
+                    description="Database and memory state snapshots were not collected for this certification run.",
+                    implication="State equivalence is inconclusive as physical DB delta was not recorded.",
+                    status="INCONCLUSIVE",
+                )
+            )
+
+        # Workflow Dimension Availability Analysis
+        has_workflow_evidence = bool(
+            getattr(artifact, "workflow_traces", None)
+            or (artifact.context and getattr(artifact.context, "workflow_traces_captured", False))
+        )
+        if not has_workflow_evidence:
+            missing_evidence.append(
+                MissingEvidence(
+                    dimension=BehaviorDimension.WORKFLOW,
+                    description="Workflow execution trace telemetry was not captured for single-invocation execution.",
+                    implication="Intermediate workflow step sequence equivalence could not be established from the available evidence.",
+                    status="INCONCLUSIVE",
+                )
+            )
+
+        # 4. Phase 8 Dynamic Threshold Resolution Loading (Authoritative consumption)
+        thresholds_context: list[dict[str, Any]] = []
+        if artifact.certification_policy_id:
+            try:
+                pol = threshold_persistence.get_policy(artifact.certification_policy_id)
+                if pol:
+                    res_info: dict[str, Any] = {}
+                    try:
+                        with threshold_persistence._get_connection() as conn:
+                            row = conn.execute(
+                                "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE policy_id = ? ORDER BY created_at DESC LIMIT 1",
+                                (artifact.certification_policy_id,),
+                            ).fetchone()
+                            if row:
+                                res_info = {
+                                    "resolution_fingerprint": row["fingerprint"],
+                                    "resolved_threshold": row["final_value"],
+                                    "resolution_status": row["status"],
+                                    "sample_count": row["sample_count"],
+                                }
+                    except Exception as conn_err:
+                        logger.debug(f"Could not load resolution details for policy {artifact.certification_policy_id}: {conn_err}")
+
+                    pol_hash = pol.compute_policy_hash() if hasattr(pol, "compute_policy_hash") else getattr(pol, "policy_hash", "")
+                    threshold_dict = {
+                        "policy_id": pol.policy_id,
+                        "version": pol.version,
+                        "metric": pol.metric.value if hasattr(pol.metric, "value") else str(pol.metric),
+                        "strategy": pol.strategy.value if hasattr(pol.strategy, "value") else str(pol.strategy),
+                        "policy_hash": pol_hash,
+                        **res_info,
+                    }
+                    thresholds_context.append(threshold_dict)
+            except Exception as exc:
+                logger.debug(f"Phase 8 policy resolution not found in persistence: {exc}")
+
+        # 5. Optional Phase 9 Knowledge Context Retrieval
         company_knowledge_context: Optional[CompanyKnowledgeContext] = None
         if use_company_knowledge:
             try:
@@ -165,16 +216,21 @@ class ExplanationContextBuilder:
             except Exception as exc:
                 logger.warning(f"Optional Phase 9 knowledge retrieval skipped or failed: {exc}")
 
-        # 5. Redact All Payloads
+        # 6. Redact All Payloads
         redacted_diffs = redact_sensitive_data(differences_summary)
         redacted_rules = redact_sensitive_data(rules_context)
 
-        # 6. Construct Context
+        # Extract actual session id if present, else None (Never certification_id)
+        actual_session_id = getattr(artifact, "session_id", None)
+        if not actual_session_id and artifact.context and hasattr(artifact.context, "session_id"):
+            actual_session_id = getattr(artifact.context, "session_id", None)
+
+        # 7. Construct Context
         context = ExplanationContext(
             certification_id=artifact.certification_id,
             application_id=app_id,
             project_id=proj_id,
-            session_id=artifact.certification_id,
+            session_id=actual_session_id,
             authoritative_verdict=verdict_str,
             equivalence_score=artifact.score,
             unique_inputs_count=artifact.metrics.unique_input_count or len(artifact.regressions) or 1,
@@ -186,13 +242,7 @@ class ExplanationContextBuilder:
             valid_rule_ids=sorted(valid_rule_ids),
             valid_input_ids=sorted(valid_input_ids),
             rules_context=redacted_rules,
-            thresholds_context=[
-                {
-                    "policy_id": artifact.certification_policy_id,
-                    "min_equivalence_score": 0.80,
-                    "tolerance_strategy": "FIXED_AND_BOUNDED",
-                }
-            ],
+            thresholds_context=thresholds_context,
             missing_evidence=missing_evidence,
             knowledge_context=company_knowledge_context,
             user_question=user_question,

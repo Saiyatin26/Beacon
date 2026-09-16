@@ -1,7 +1,7 @@
 """BEACON V2 — Phase 10 Intelligence Persistence Store.
 
 Provides durable SQLite persistence for structured CertificationExplanations and
-audit logs in beacon.sqlite3.
+audit logs in beacon.sqlite3 with strict failure semantics and cache isolation.
 """
 
 from datetime import datetime, timezone
@@ -37,10 +37,18 @@ class IntelligencePersistenceStore:
                         context_fingerprint TEXT NOT NULL,
                         content_hash TEXT NOT NULL,
                         overall_verdict TEXT NOT NULL,
+                        cache_key TEXT,
                         payload_json TEXT NOT NULL,
                         created_at TEXT NOT NULL
                     )
                 """)
+                # Ensure cache_key column exists if upgrading table
+                cursor = conn.cursor()
+                cursor.execute("PRAGMA table_info(certification_explanations)")
+                columns = [row[1] for row in cursor.fetchall()]
+                if "cache_key" not in columns:
+                    conn.execute("ALTER TABLE certification_explanations ADD COLUMN cache_key TEXT")
+
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS explanation_audit_log (
                         audit_id TEXT PRIMARY KEY,
@@ -57,48 +65,79 @@ class IntelligencePersistenceStore:
                 """)
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_exp_cert_id ON certification_explanations(certification_id)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_exp_app_id ON certification_explanations(application_id)")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_cert_exp_cache_key ON certification_explanations(cache_key)")
                 conn.execute("CREATE INDEX IF NOT EXISTS idx_exp_audit_cert_id ON explanation_audit_log(certification_id)")
                 conn.commit()
         except Exception as exc:
-            logger.warning(f"Failed to initialize SQLite intelligence persistence tables: {exc}")
+            logger.error(f"Failed to initialize SQLite intelligence persistence tables: {exc}", exc_info=True)
 
     def save_explanation(self, explanation: CertificationExplanation) -> CertificationExplanation:
-        """Saves or replaces a CertificationExplanation record."""
-        payload_json = explanation.model_dump_json()
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                INSERT OR REPLACE INTO certification_explanations (
-                    explanation_id, certification_id, application_id, project_id,
-                    context_fingerprint, content_hash, overall_verdict, payload_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                explanation.explanation_id,
-                explanation.certification_id,
-                explanation.application_id,
-                explanation.project_id,
-                explanation.context_fingerprint,
-                explanation.content_hash,
-                explanation.overall_verdict,
-                payload_json,
-                explanation.generated_at,
-            ))
-            conn.commit()
-        return explanation
+        """Saves or replaces a CertificationExplanation record with explicit error status tracking."""
+        try:
+            payload_json = explanation.model_dump_json()
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO certification_explanations (
+                        explanation_id, certification_id, application_id, project_id,
+                        context_fingerprint, content_hash, overall_verdict, cache_key, payload_json, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    explanation.explanation_id,
+                    explanation.certification_id,
+                    explanation.application_id,
+                    explanation.project_id,
+                    explanation.context_fingerprint,
+                    explanation.content_hash,
+                    explanation.overall_verdict,
+                    explanation.cache_key,
+                    payload_json,
+                    explanation.generated_at,
+                ))
+                conn.commit()
+            explanation.persistence_status = "SUCCESS"
+            return explanation
+        except Exception as exc:
+            logger.error(f"Failed to persist certification explanation '{explanation.explanation_id}': {exc}", exc_info=True)
+            explanation.persistence_status = "FAILED"
+            return explanation
 
-    def get_explanation(self, certification_id: str) -> Optional[CertificationExplanation]:
-        """Retrieves the latest explanation for a certification run."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT payload_json FROM certification_explanations
-                WHERE certification_id = ?
-                ORDER BY created_at DESC LIMIT 1
-            """, (certification_id,))
-            row = cursor.fetchone()
-            if row:
-                data = json.loads(row["payload_json"])
-                return CertificationExplanation.model_validate(data)
+    def get_explanation(
+        self,
+        certification_id: str,
+        cache_key: Optional[str] = None,
+        context_fingerprint: Optional[str] = None,
+    ) -> Optional[CertificationExplanation]:
+        """Retrieves the explanation for a certification run matching cache_key or fingerprint if supplied."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+
+                if cache_key:
+                    cursor.execute("""
+                        SELECT payload_json FROM certification_explanations
+                        WHERE certification_id = ? AND cache_key = ?
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (certification_id, cache_key))
+                elif context_fingerprint:
+                    cursor.execute("""
+                        SELECT payload_json FROM certification_explanations
+                        WHERE certification_id = ? AND context_fingerprint = ?
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (certification_id, context_fingerprint))
+                else:
+                    cursor.execute("""
+                        SELECT payload_json FROM certification_explanations
+                        WHERE certification_id = ?
+                        ORDER BY created_at DESC LIMIT 1
+                    """, (certification_id,))
+
+                row = cursor.fetchone()
+                if row:
+                    data = json.loads(row["payload_json"])
+                    return CertificationExplanation.model_validate(data)
+        except Exception as exc:
+            logger.error(f"Failed to query certification explanation for '{certification_id}': {exc}", exc_info=True)
         return None
 
     def log_audit_event(
@@ -113,7 +152,7 @@ class IntelligencePersistenceStore:
         context_fingerprint: str,
         fallback_used: bool,
     ):
-        """Logs an explanation generation or Q&A audit event."""
+        """Logs an explanation generation or Q&A audit event without silent failure."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute("""
@@ -135,7 +174,7 @@ class IntelligencePersistenceStore:
                 ))
                 conn.commit()
         except Exception as exc:
-            logger.warning(f"Failed to log explanation audit event: {exc}")
+            logger.error(f"Failed to log explanation audit event '{audit_id}': {exc}", exc_info=True)
 
 
 intelligence_persistence = IntelligencePersistenceStore()

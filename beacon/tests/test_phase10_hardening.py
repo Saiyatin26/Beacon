@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "backend"))
 
 from api.main import app
+from auth import auth_repository, create_access_token
 from certification import (
     CertificationArtifact,
     CertificationPolicy,
@@ -115,8 +116,21 @@ def test_generic_non_loan_adapter_registration_and_api():
         ModernizedAdapter(target_fn=triage_modern, name="medical_triage_modern", version="2.0.0")
     )
 
-    # 4. Invoke generic certification API route
-    resp = client.post("/api/v1/certification/run", json={
+    # 4. Invoke generic certification API route with auth headers
+    admin_user = auth_repository.get_user_by_username("admin_harden")
+    if not admin_user:
+        admin_user = auth_repository.create_user(
+            user_id="USR-ADMIN-HARDEN",
+            username="admin_harden",
+            password="AdminPass2026!",
+            full_name="Admin Harden",
+            email="admin_harden@beacon.local",
+            is_system_admin=True,
+        )
+    token = create_access_token(admin_user)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.post("/api/v1/certification/run", headers=headers, json={
         "project_id": "hospital_systems_triage",
         "legacy_target": "medical_triage_legacy",
         "modernized_target": "medical_triage_modern",

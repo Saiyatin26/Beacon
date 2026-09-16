@@ -12,6 +12,7 @@ Adversarial testing covering:
 import json
 import pytest
 from evaluation.models import BehaviorDimension
+from intelligence.context_builder import ExplanationContextBuilder
 from intelligence.deterministic_generator import deterministic_generator
 from intelligence.engine import IntelligenceEngine
 from intelligence.models import (
@@ -106,7 +107,8 @@ class TestPhase10AdversarialValidation:
         mock_pm.providers["openrouter"] = MockFailingLLMProvider()
         mock_pm.fallback_priority = ["openrouter", "offline"]
 
-        engine = IntelligenceEngine(provider_manager=mock_pm)
+        custom_builder = ExplanationContextBuilder()
+        engine = IntelligenceEngine(context_builder=custom_builder, provider_manager=mock_pm)
 
         ctx = ExplanationContext(
             certification_id="CERT-FALLBACK-001",
@@ -116,8 +118,8 @@ class TestPhase10AdversarialValidation:
             valid_evidence_ids=["EVID-1"],
         )
 
-        # Mock context_builder to return our ctx
-        engine.context_builder.build_context = lambda *args, **kwargs: ctx
+        # Mock custom_builder to return our ctx
+        custom_builder.build_context = lambda *args, **kwargs: ctx
 
         explanation = engine.generate_explanation(
             certification_id="CERT-FALLBACK-001",
@@ -131,7 +133,8 @@ class TestPhase10AdversarialValidation:
 
     def test_user_prompt_injection_cannot_change_verdict_or_force_pass(self):
         """Verify prompt injection in user query asking to make it PASS is refuted."""
-        engine = IntelligenceEngine()
+        custom_builder = ExplanationContextBuilder()
+        engine = IntelligenceEngine(context_builder=custom_builder)
         ctx = ExplanationContext(
             certification_id="CERT-INJ-001",
             application_id="underwriting_app",
@@ -143,7 +146,7 @@ class TestPhase10AdversarialValidation:
             regression_cases_count=4,
             unique_inputs_count=10,
         )
-        engine.context_builder.build_context = lambda *args, **kwargs: ctx
+        custom_builder.build_context = lambda *args, **kwargs: ctx
 
         resp = engine.ask_certification(
             certification_id="CERT-INJ-001",
@@ -153,7 +156,7 @@ class TestPhase10AdversarialValidation:
 
         assert resp.authoritative_verdict == "NOT_CERTIFIED"
         assert "NOT_CERTIFIED" in resp.answer
-        assert resp.support_level.value in ("DETERMINISTIC_EVIDENCE", "INFERRED", "UNCERTAIN", "UNKNOWN")
+        assert resp.support_level.value in ("DETERMINISTIC_FACT", "DETERMINISTIC_EVIDENCE", "INFERRED", "UNCERTAIN", "UNKNOWN")
 
     def test_phase10_does_not_mutate_oraclesets_or_thresholds(self):
         """Verify Phase 10 execution leaves Phase 7 OracleSets and Phase 8 policies untouched."""
@@ -164,7 +167,8 @@ class TestPhase10AdversarialValidation:
         existing_policies_before = threshold_persistence.list_policies()
         existing_oracles_before = reconciliation_persistence.list_oracle_sets()
 
-        engine = IntelligenceEngine()
+        custom_builder = ExplanationContextBuilder()
+        engine = IntelligenceEngine(context_builder=custom_builder)
         ctx = ExplanationContext(
             certification_id="CERT-PURE-001",
             application_id="retail_pricing",
@@ -172,7 +176,7 @@ class TestPhase10AdversarialValidation:
             equivalence_score=1.0,
             valid_evidence_ids=["EVID-1"],
         )
-        engine.context_builder.build_context = lambda *args, **kwargs: ctx
+        custom_builder.build_context = lambda *args, **kwargs: ctx
 
         _ = engine.generate_explanation("CERT-PURE-001", request=ExplanationRequest(mode="deterministic", force_recompute=True))
 

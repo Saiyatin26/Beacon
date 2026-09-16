@@ -174,4 +174,4 @@ class TestPhase10ApiAndRbac:
         assert data["question"] == "Which inputs caused the behavioral regressions?"
         assert data["authoritative_verdict"] == "NOT_CERTIFIED"
         assert len(data["answer"]) > 10
-        assert data["support_level"] in ("DETERMINISTIC_EVIDENCE", "INFERRED", "UNCERTAIN", "UNKNOWN")
+        assert data["support_level"] in ("DETERMINISTIC_FACT", "DETERMINISTIC_EVIDENCE", "INFERRED", "UNCERTAIN", "UNKNOWN")

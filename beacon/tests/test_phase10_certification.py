@@ -27,6 +27,7 @@ sys.path.append(str(ROOT / "backend"))
 sys.path.append(str(ROOT / "legacy_sample"))
 
 from api.main import app
+from auth import auth_repository, create_access_token
 from certification import (
     CertificationArtifact,
     CertificationEngine,
@@ -482,8 +483,21 @@ def test_api_certification_endpoints():
     registry.register_oracle(orc)
     oracle_set = registry.create_oracle_set(name="ApiSet", oracle_ids=[orc.oracle_id])
 
-    # Run certification via API
-    resp = client.post("/api/v1/certification/run", json={
+    # Run certification via API with auth headers
+    admin_user = auth_repository.get_user_by_username("admin_cert")
+    if not admin_user:
+        admin_user = auth_repository.create_user(
+            user_id="USR-ADMIN-CERT",
+            username="admin_cert",
+            password="AdminCertPass2026!",
+            full_name="Admin Cert",
+            email="admin_cert@beacon.local",
+            is_system_admin=True,
+        )
+    token = create_access_token(admin_user)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.post("/api/v1/certification/run", headers=headers, json={
         "project_id": "api_test_project",
         "oracle_set_id": oracle_set.oracle_set_id,
         "implementation": "equivalent",
@@ -495,22 +509,22 @@ def test_api_certification_endpoints():
     assert data["status"] == "CERTIFIED"
 
     # Query artifact
-    get_resp = client.get(f"/api/v1/certification/{cert_id}")
+    get_resp = client.get(f"/api/v1/certification/{cert_id}", headers=headers)
     assert get_resp.status_code == 200
     assert get_resp.json()["certification_id"] == cert_id
 
     # Query report HTML
-    rep_resp = client.get(f"/api/v1/certification/{cert_id}/report")
+    rep_resp = client.get(f"/api/v1/certification/{cert_id}/report", headers=headers)
     assert rep_resp.status_code == 200
     assert "BEACON Behavioral Equivalence Certificate" in rep_resp.text
 
     # Query oracles
-    orc_resp = client.get(f"/api/v1/certification/{cert_id}/oracles")
+    orc_resp = client.get(f"/api/v1/certification/{cert_id}/oracles", headers=headers)
     assert orc_resp.status_code == 200
     assert len(orc_resp.json()["oracle_summaries"]) == 1
 
     # Post-migration drift evaluate endpoint
-    drift_resp = client.post("/api/v1/drift/evaluate", json={
+    drift_resp = client.post("/api/v1/drift/evaluate", headers=headers, json={
         "observation_id": "OBS-API-1",
         "oracle_set_id": oracle_set.oracle_set_id,
         "inputs": {"credit_score": 420},

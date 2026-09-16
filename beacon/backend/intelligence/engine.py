@@ -63,14 +63,7 @@ class IntelligenceEngine:
         """Generates or retrieves a structured CertificationExplanation with strict boundary guarantees."""
         req = request or ExplanationRequest()
 
-        # Check existing cached explanation unless force_recompute is requested
-        if not req.force_recompute:
-            cached = self.persistence.get_explanation(certification_id)
-            if cached:
-                logger.info(f"Returning cached explanation for certification '{certification_id}'.")
-                return cached
-
-        # 1. Build Authoritative ExplanationContext
+        # 1. Build Authoritative ExplanationContext first to enable context-sensitive caching
         context = self.context_builder.build_context(
             certification_id=certification_id,
             artifact=artifact,
@@ -80,6 +73,18 @@ class IntelligenceEngine:
 
         mode = req.mode.lower().strip()
         preferred_provider = req.preferred_provider or settings.llm_provider or "auto"
+        expected_cache_key = context.compute_cache_key(
+            mode=mode,
+            use_company_knowledge=req.use_company_knowledge,
+            prompt_version="v1.0",
+        )
+
+        # Check existing cached explanation matching exact cache key unless force_recompute is requested
+        if not req.force_recompute:
+            cached = self.persistence.get_explanation(certification_id, cache_key=expected_cache_key)
+            if cached:
+                logger.info(f"Returning cached explanation for certification '{certification_id}' (cache_key: {expected_cache_key[:12]}).")
+                return cached
 
         start_time = time.perf_counter()
 
@@ -88,7 +93,8 @@ class IntelligenceEngine:
             explanation = self.det_generator.generate_explanation(context)
             elapsed_ms = (time.perf_counter() - start_time) * 1000.0
             explanation.generation_metadata.latency_ms = round(elapsed_ms, 2)
-            self.persistence.save_explanation(explanation)
+            explanation.cache_key = expected_cache_key
+            saved = self.persistence.save_explanation(explanation)
             self.persistence.log_audit_event(
                 audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
                 user_id=user_id,
@@ -100,7 +106,7 @@ class IntelligenceEngine:
                 context_fingerprint=explanation.context_fingerprint,
                 fallback_used=False,
             )
-            return explanation
+            return saved
 
         # 3. LLM / Assisted Mode Execution
         knowledge_block = "No company documentation was retrieved."
@@ -157,13 +163,14 @@ class IntelligenceEngine:
                     metadata=gen_metadata,
                 )
                 if is_valid and validated_explanation:
-                    # Merge deterministic traces and affected inputs
+                    # Merge deterministic traces and affected inputs strictly from authoritative ground truth
                     det_baseline = self.det_generator.generate_explanation(context)
                     validated_explanation.evidence_traces = det_baseline.evidence_traces
                     validated_explanation.affected_inputs = det_baseline.affected_inputs
+                    validated_explanation.cache_key = expected_cache_key
                     validated_explanation.content_hash = validated_explanation.compute_content_hash()
 
-                    self.persistence.save_explanation(validated_explanation)
+                    saved = self.persistence.save_explanation(validated_explanation)
                     self.persistence.log_audit_event(
                         audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
                         user_id=user_id,
@@ -175,7 +182,7 @@ class IntelligenceEngine:
                         context_fingerprint=validated_explanation.context_fingerprint,
                         fallback_used=llm_resp.fallback_occurred,
                     )
-                    return validated_explanation
+                    return saved
                 else:
                     logger.warning(f"LLM output validation failed: {validation_errors}. Executing deterministic fallback.")
             else:
@@ -191,7 +198,8 @@ class IntelligenceEngine:
         )
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         fallback_explanation.generation_metadata.latency_ms = round(elapsed_ms, 2)
-        self.persistence.save_explanation(fallback_explanation)
+        fallback_explanation.cache_key = expected_cache_key
+        saved = self.persistence.save_explanation(fallback_explanation)
         self.persistence.log_audit_event(
             audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
             user_id=user_id,
@@ -203,7 +211,7 @@ class IntelligenceEngine:
             context_fingerprint=fallback_explanation.context_fingerprint,
             fallback_used=True,
         )
-        return fallback_explanation
+        return saved
 
     def ask_certification(
         self,
@@ -249,6 +257,7 @@ class IntelligenceEngine:
             "valid_input_ids": context.valid_input_ids,
             "differences_summary": context.differences_summary,
             "rules_context": context.rules_context,
+            "thresholds_context": context.thresholds_context,
             "missing_evidence": [m.model_dump() for m in context.missing_evidence],
         }
 
@@ -272,11 +281,11 @@ class IntelligenceEngine:
                     filtered_evids = [e for e in raw_evids if e in context.valid_evidence_ids] if isinstance(raw_evids, list) else []
                     filtered_rules = [r for r in raw_rules if r in context.valid_rule_ids] if isinstance(raw_rules, list) else []
 
-                    support_str = str(ans_data.get("support_level", "DETERMINISTIC_EVIDENCE")).upper()
+                    support_str = str(ans_data.get("support_level", "DETERMINISTIC_FACT")).upper()
                     try:
                         sup_enum = EvidenceSupportLevel(support_str)
                     except ValueError:
-                        sup_enum = EvidenceSupportLevel.DETERMINISTIC_EVIDENCE
+                        sup_enum = EvidenceSupportLevel.DETERMINISTIC_FACT
 
                     meta = GenerationMetadata(
                         provider=llm_resp.provider_name,
@@ -331,7 +340,7 @@ class IntelligenceEngine:
         return AskCertificationResponse(
             question=clean_question,
             answer=det_answer,
-            support_level=EvidenceSupportLevel.DETERMINISTIC_EVIDENCE,
+            support_level=EvidenceSupportLevel.DETERMINISTIC_FACT,
             referenced_evidence_ids=context.valid_evidence_ids[:5],
             referenced_rule_ids=context.valid_rule_ids[:5],
             referenced_document_ids=list(set(referenced_doc_ids)),

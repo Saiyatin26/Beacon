@@ -31,10 +31,14 @@ class ExplanationVerdict(str, Enum):
 
 class EvidenceSupportLevel(str, Enum):
     """Epistemic certainty level supporting a specific explanation claim."""
-    DETERMINISTIC_EVIDENCE = "DETERMINISTIC_EVIDENCE"  # Directly verified by empirical Phase 3/4/8 evidence
-    INFERRED = "INFERRED"                              # Logical deduction from verified rules and outputs
-    UNCERTAIN = "UNCERTAIN"                            # Plausible hypothesis but not conclusively provable from evidence
-    UNKNOWN = "UNKNOWN"                                # Completely unverifiable from available data
+    DETERMINISTIC_FACT = "DETERMINISTIC_FACT"        # Directly verified by empirical Phase 3/4/8 ground truth evidence
+    DETERMINISTIC_EVIDENCE = "DETERMINISTIC_FACT"    # Alias for DETERMINISTIC_FACT
+    SOURCE_DOCUMENT = "SOURCE_DOCUMENT"              # Explicitly cited from verified Phase 9 company documentation
+    DERIVED = "DERIVED"                              # Deterministically computed from authoritative data
+    INFERENCE = "INFERENCE"                          # Plausible hypothesis or deduction from verified rules/outputs
+    INFERRED = "INFERENCE"                           # Alias for INFERENCE
+    UNCERTAIN = "INFERENCE"                          # Alias for INFERENCE
+    UNKNOWN = "UNKNOWN"                              # Completely unverifiable from available data
 
 
 class ExplanationFinding(BaseModel):
@@ -44,8 +48,9 @@ class ExplanationFinding(BaseModel):
     finding_id: str = ""
     dimension: BehaviorDimension = BehaviorDimension.OUTPUT
     statement: str
-    support: EvidenceSupportLevel = EvidenceSupportLevel.DETERMINISTIC_EVIDENCE
+    support: EvidenceSupportLevel = EvidenceSupportLevel.DETERMINISTIC_FACT
     evidence_ids: list[str] = Field(default_factory=list)
+    input_id: Optional[str] = None
     reference_value: Optional[Any] = None
     target_value: Optional[Any] = None
     difference_details: dict[str, Any] = Field(default_factory=dict)
@@ -56,7 +61,7 @@ class DimensionExplanation(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     dimension: BehaviorDimension
-    status: str = "PASS"  # PASS, DIFFERENT, INCONCLUSIVE, NOT_APPLICABLE, ERROR
+    status: str = "UNKNOWN"  # PASS, DIFFERENT, INCONCLUSIVE, NOT_APPLICABLE, ERROR, UNKNOWN
     reference_summary: str = ""
     target_summary: str = ""
     difference_summary: str = ""
@@ -84,7 +89,7 @@ class EvidenceTrace(BaseModel):
 
     claim_id: str
     claim_text: str
-    evidence_id: str
+    evidence_id: Optional[str] = None
     input_id: str
     dimension: BehaviorDimension = BehaviorDimension.OUTPUT
     role: str = "target"  # reference, target, or paired
@@ -122,7 +127,7 @@ class UncertaintyNote(BaseModel):
 
     topic: str
     claim: str
-    support_level: EvidenceSupportLevel = EvidenceSupportLevel.UNCERTAIN
+    support_level: EvidenceSupportLevel = EvidenceSupportLevel.INFERENCE
     reason: str
 
 
@@ -201,24 +206,48 @@ class ExplanationContext(BaseModel):
     user_question: Optional[str] = None
 
     def compute_context_fingerprint(self) -> str:
-        """Computes deterministic SHA-256 fingerprint over all canonical context fields."""
+        """Computes deterministic SHA-256 fingerprint over all canonical semantic context fields."""
+        # Canonical representation of all material fields
         payload = {
             "certification_id": self.certification_id,
             "application_id": self.application_id,
             "project_id": self.project_id,
+            "session_id": self.session_id or "",
             "authoritative_verdict": self.authoritative_verdict,
-            "equivalence_score": round(self.equivalence_score, 4),
+            "equivalence_score": round(self.equivalence_score, 6),
             "unique_inputs_count": self.unique_inputs_count,
             "matching_cases_count": self.matching_cases_count,
             "regression_cases_count": self.regression_cases_count,
-            "dimensions": [d.value for d in sorted(self.dimensions_evaluated, key=lambda x: x.value)],
+            "dimensions": sorted([d.value for d in self.dimensions_evaluated]),
+            "differences_summary": sorted(
+                self.differences_summary,
+                key=lambda x: str(x.get("input_id", "")) + str(x.get("difference_id", ""))
+            ),
             "valid_evidence_ids": sorted(self.valid_evidence_ids),
             "valid_rule_ids": sorted(self.valid_rule_ids),
             "valid_input_ids": sorted(self.valid_input_ids),
+            "rules_context": sorted(
+                self.rules_context,
+                key=lambda x: str(x.get("rule_id", ""))
+            ),
+            "thresholds_context": sorted(
+                self.thresholds_context,
+                key=lambda x: str(x.get("policy_id", "")) + str(x.get("metric", ""))
+            ),
+            "missing_evidence": sorted(
+                [m.model_dump() for m in self.missing_evidence],
+                key=lambda x: str(x.get("dimension", "")) + str(x.get("description", ""))
+            ),
             "knowledge_retrieval_fingerprint": self.knowledge_context.retrieval_fingerprint if self.knowledge_context else "",
         }
         canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+    def compute_cache_key(self, mode: str = "auto", use_company_knowledge: bool = True, prompt_version: str = "v1.0") -> str:
+        """Computes comprehensive cache key accounting for context, configuration, and prompt version."""
+        fp = self.compute_context_fingerprint()
+        raw = f"{self.certification_id}:{fp}:{mode.lower()}:know={use_company_knowledge}:{prompt_version}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class CertificationExplanation(BaseModel):
@@ -232,6 +261,8 @@ class CertificationExplanation(BaseModel):
     session_id: Optional[str] = None
     generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     explanation_version: str = "1.0.0"
+    cache_key: str = ""
+    persistence_status: str = "SUCCESS"  # SUCCESS, FAILED, NOT_PERSISTED
 
     # Authoritative Ground Truth (Strictly derived from Phase 8 / Certification Artifact)
     overall_verdict: str
@@ -261,6 +292,8 @@ class CertificationExplanation(BaseModel):
         """Computes deterministic SHA-256 hash over material explanation content."""
         data = self.model_dump(mode="json")
         data.pop("content_hash", None)
+        data.pop("generated_at", None)
+        data.pop("persistence_status", None)
         canonical_json = json.dumps(data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
@@ -285,7 +318,7 @@ class AskCertificationResponse(BaseModel):
     """Structured response to an interactive question about a certification run."""
     question: str
     answer: str
-    support_level: EvidenceSupportLevel = EvidenceSupportLevel.DETERMINISTIC_EVIDENCE
+    support_level: EvidenceSupportLevel = EvidenceSupportLevel.DETERMINISTIC_FACT
     referenced_evidence_ids: list[str] = Field(default_factory=list)
     referenced_rule_ids: list[str] = Field(default_factory=list)
     referenced_document_ids: list[str] = Field(default_factory=list)
@@ -293,3 +326,4 @@ class AskCertificationResponse(BaseModel):
     authoritative_verdict: str
     context_fingerprint: str
     generation_metadata: GenerationMetadata = Field(default_factory=GenerationMetadata)
+

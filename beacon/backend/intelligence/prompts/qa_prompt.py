@@ -50,7 +50,7 @@ Valid Input IDs: {valid_input_ids}
 === REQUIRED JSON RESPONSE SCHEMA ===
 {{
   "answer": "Clear, direct, evidence-backed answer to the question",
-  "support_level": "DETERMINISTIC_EVIDENCE",
+  "support_level": "DETERMINISTIC_FACT",
   "referenced_evidence_ids": ["EVID-1"],
   "referenced_rule_ids": ["RULE-1"],
   "referenced_document_ids": [],

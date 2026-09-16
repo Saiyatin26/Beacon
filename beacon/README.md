@@ -2,12 +2,30 @@
 
 Database Management Systems Project — Team: Sai, Yatin, Navaneeth
 
-BEACON is a verification layer that certifies whether AI-modernized code preserves the
-behavior of the legacy system it replaces. It does not translate code — it mines implicit
-business-rule invariants from a legacy system, compiles them into language-agnostic
-executable oracles, certifies modernized code against those oracles with a quantified
-score under a deterministic certification policy, and monitors post-migration observations
-for continuous behavioral drift.
+BEACON is a domain-agnostic verification layer that certifies whether modernized code preserves the
+behavior of the legacy system it replaces. It mines invariants, compiles them into language-agnostic
+executable oracles, certifies modernized code with a quantified equivalence score under a deterministic policy,
+and generates audit-grade grounded explanations.
+
+---
+
+## BEACON V2 Authoritative Roadmap
+
+- **Phase 1** — V2 Foundation
+- **Phase 2** — Adapter Framework
+- **Phase 3** — Real Execution + Evidence
+- **Phase 4** — Behavioral Evaluation
+- **Phase 5** — Controlled Business Rules
+- **Phase 6** — Rule Discovery
+- **Phase 7** — Rule Reconciliation + OracleSet
+- **Phase 8** — Dynamic / Evidence-Driven Thresholds
+- **Phase 9** — Company Knowledge RAG
+- **Phase 10** — Intelligent Agent + Detailed Certification Explanations
+- **Phase 11** — Integration Hardening
+- **Phase 12** — End-to-End Certification
+- **Phase 13** — Evidence/Audit/Cryptographic Hardening
+- **Phase 14** — Testing/Security/Performance
+- **Phase 15** — Final Validation/UI/Documentation/Demo
 
 ---
 

@@ -72,7 +72,7 @@ Valid Input IDs: {valid_input_ids}
           "finding_id": "FIND-1",
           "dimension": "OUTPUT",
           "statement": "...",
-          "support": "DETERMINISTIC_EVIDENCE",
+          "support": "DETERMINISTIC_FACT",
           "evidence_ids": ["EVID-1"]
         }}
       ]

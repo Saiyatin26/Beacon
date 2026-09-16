@@ -80,6 +80,7 @@ class DeterministicExplanationGenerator:
             "equivalence_score": round(context.equivalence_score, 4),
             "dimensions": [d.value for d in context.dimensions_evaluated],
             "rules_evaluated_count": len(context.rules_context),
+            "thresholds_applied_count": len(context.thresholds_context),
         }
 
         # 3. Behavioral Summary
@@ -121,8 +122,9 @@ class DeterministicExplanationGenerator:
                         finding_id=f"FIND-{dim.value}-{idx+1}",
                         dimension=dim,
                         statement=f"Input {inp_id} produced divergent {dim.value} behavior: reference={ref_val}, target={tgt_val}.",
-                        support=EvidenceSupportLevel.DETERMINISTIC_EVIDENCE,
+                        support=EvidenceSupportLevel.DETERMINISTIC_FACT,
                         evidence_ids=diff_evids,
+                        input_id=inp_id,
                         reference_value=ref_val,
                         target_value=tgt_val,
                         difference_details=diff,
@@ -142,10 +144,12 @@ class DeterministicExplanationGenerator:
                 )
             )
 
-        # 5. Rule Impacts
+        # 5. Rule Impacts (Strictly grounded in context rules)
         rule_impacts: list[RuleImpact] = []
         for r in context.rules_context:
-            rule_id = r.get("rule_id", "RULE-DEFAULT")
+            rule_id = r.get("rule_id")
+            if not rule_id:
+                continue
             rule_desc = r.get("rule_description", r.get("condition_str", "Behavioral Invariant"))
             status = r.get("status", "POTENTIALLY_AFFECTED")
             rule_evids = [e for e in r.get("supporting_evidence_ids", []) if e in context.valid_evidence_ids]
@@ -162,13 +166,15 @@ class DeterministicExplanationGenerator:
                 )
             )
 
-        # 6. Evidence Traces
+        # 6. Evidence Traces (Strictly real evidence IDs, or None when evidence absent)
         evidence_traces: list[EvidenceTrace] = []
         for idx, diff in enumerate(context.differences_summary[:15]):
             inp_id = diff.get("input_id", f"INP-{idx+1}")
-            evid_tgt = diff.get("target_evidence_id") or f"EVID-TGT-{idx+1}"
-            evid_ref = diff.get("reference_evidence_id") or f"EVID-REF-{idx+1}"
+            evid_tgt = diff.get("target_evidence_id")
+            evid_ref = diff.get("reference_evidence_id")
 
+            # Only trace when evidence or diff exists
+            trace_hash_src = f"{inp_id}:{evid_tgt or 'NO_EVID'}"
             evidence_traces.append(
                 EvidenceTrace(
                     claim_id=f"CLAIM-{idx+1}",
@@ -178,12 +184,12 @@ class DeterministicExplanationGenerator:
                     dimension=BehaviorDimension.OUTPUT,
                     role="target",
                     source_type="runtime_execution",
-                    evidence_hash=hashlib.sha256(f"{inp_id}:{evid_tgt}".encode()).hexdigest(),
+                    evidence_hash=hashlib.sha256(trace_hash_src.encode()).hexdigest(),
                     provenance={"reference_evidence_id": evid_ref, "input_id": inp_id},
                 )
             )
 
-        # 7. Affected Inputs
+        # 7. Affected Inputs (Authoritative mapping)
         affected_inputs: list[AffectedInput] = []
         for idx, diff in enumerate(context.differences_summary[:20]):
             inp_id = diff.get("input_id", f"INP-{idx+1}")
@@ -204,13 +210,13 @@ class DeterministicExplanationGenerator:
             UncertaintyNote(
                 topic="Root Cause Attribution",
                 claim="Exact root cause in source code logic is unproven from external black-box behavioral evidence alone.",
-                support_level=EvidenceSupportLevel.UNCERTAIN,
+                support_level=EvidenceSupportLevel.INFERENCE,
                 reason="BEACON operates on behavioral observations and invariants without inspecting arbitrary internal bytecode state.",
             ),
             UncertaintyNote(
                 topic="Downstream Business Impact",
                 claim="Impact on downstream business consumers depends on consumer tolerance and application domain context.",
-                support_level=EvidenceSupportLevel.UNCERTAIN,
+                support_level=EvidenceSupportLevel.INFERENCE,
                 reason="External downstream systems were not evaluated in this isolated certification session.",
             ),
         ]
@@ -218,13 +224,14 @@ class DeterministicExplanationGenerator:
         # 9. Investigation Recommendations
         investigation_recommendations: list[InvestigationRecommendation] = []
         if regression_count > 0:
+            evidence_refs = [e.evidence_id for e in evidence_traces if e.evidence_id][:3]
             investigation_recommendations.append(
                 InvestigationRecommendation(
                     priority=1,
                     title="Inspect Pinpointed Counterexamples & Regressions",
                     description=f"Review the {min(regression_count, 5)} specific input cases where target output diverged from reference.",
                     rationale="Direct counterexamples provide reproducible test vectors to isolate defect locations.",
-                    evidence_references=[e.evidence_id for e in evidence_traces[:3]],
+                    evidence_references=evidence_refs,
                 )
             )
             investigation_recommendations.append(
@@ -261,6 +268,12 @@ class DeterministicExplanationGenerator:
         )
 
         explanation_id = f"EXP-{context.certification_id[:12]}"
+        cache_key = context.compute_cache_key(
+            mode="deterministic",
+            use_company_knowledge=bool(context.knowledge_context),
+            prompt_version="v1.0",
+        )
+
         explanation = CertificationExplanation(
             explanation_id=explanation_id,
             certification_id=context.certification_id,
@@ -281,6 +294,8 @@ class DeterministicExplanationGenerator:
             company_knowledge_context=context.knowledge_context,
             investigation_recommendations=investigation_recommendations,
             context_fingerprint=context.compute_context_fingerprint(),
+            cache_key=cache_key,
+            persistence_status="SUCCESS",
             generation_metadata=metadata,
         )
         explanation.content_hash = explanation.compute_content_hash()
