@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import re
 import time
 from typing import Any, Optional
 
@@ -281,41 +282,69 @@ class IntelligenceEngine:
                     filtered_evids = [e for e in raw_evids if e in context.valid_evidence_ids] if isinstance(raw_evids, list) else []
                     filtered_rules = [r for r in raw_rules if r in context.valid_rule_ids] if isinstance(raw_rules, list) else []
 
-                    support_str = str(ans_data.get("support_level", "DETERMINISTIC_FACT")).upper()
-                    try:
-                        sup_enum = EvidenceSupportLevel(support_str)
-                    except ValueError:
-                        sup_enum = EvidenceSupportLevel.DETERMINISTIC_FACT
+                    # Shared claim validation: reject if hallucinating fake IDs or contradicting factual values
+                    answer_text = str(ans_data.get("answer", ""))
+                    has_factual_hallucination = False
 
-                    meta = GenerationMetadata(
-                        provider=llm_resp.provider_name,
-                        model=llm_resp.model_name,
-                        generation_mode="LLM",
-                        prompt_version="v1.0",
-                        schema_version="1.0.0",
-                        latency_ms=round(elapsed_ms, 2),
-                        fallback_occurred=llm_resp.fallback_occurred,
-                    )
+                    # If the LLM referenced fake evidence or rule IDs
+                    if (raw_evids and len(filtered_evids) < len(raw_evids)) or (raw_rules and len(filtered_rules) < len(raw_rules)):
+                        logger.warning("Q&A answer contained ungrounded evidence or rule IDs.")
 
-                    return AskCertificationResponse(
-                        question=clean_question,
-                        answer=str(ans_data.get("answer", "Answer produced from authoritative certification context.")),
-                        support_level=sup_enum,
-                        referenced_evidence_ids=filtered_evids,
-                        referenced_rule_ids=filtered_rules,
-                        referenced_document_ids=list(set(referenced_doc_ids)),
-                        uncertainties=ans_data.get("uncertainties", []),
-                        authoritative_verdict=context.authoritative_verdict,
-                        context_fingerprint=context.compute_context_fingerprint(),
-                        generation_metadata=meta,
-                    )
+                    # Validate factual numbers in answer against authoritative differences
+                    for diff in context.differences_summary:
+                        auth_tgt = diff.get("target_value")
+                        auth_ref = diff.get("reference_value")
+                        # If authoritative target is 95, and answer explicitly states target is 97 (or another number)
+                        if auth_tgt is not None and isinstance(auth_tgt, (int, float)):
+                            # Check if answer claims a different target number with word 'target'
+                            m = re.search(r"target\s*(?:output|value)?\s*(?:is|=|was|produced|of)\s*(\d+(?:\.\d+)?)", answer_text, re.IGNORECASE)
+                            if m:
+                                claimed_val = float(m.group(1))
+                                if abs(claimed_val - float(auth_tgt)) > 1e-6:
+                                    logger.warning(f"Q&A answer hallucinated target value {claimed_val} vs authoritative {auth_tgt}. Rejecting claim.")
+                                    has_factual_hallucination = True
+                                    break
+
+                    if not has_factual_hallucination and answer_text:
+                        support_str = str(ans_data.get("support_level", "DETERMINISTIC_FACT")).upper()
+                        try:
+                            sup_enum = EvidenceSupportLevel(support_str)
+                        except ValueError:
+                            sup_enum = EvidenceSupportLevel.DETERMINISTIC_FACT
+
+                        meta = GenerationMetadata(
+                            provider=llm_resp.provider_name,
+                            model=llm_resp.model_name,
+                            generation_mode="LLM",
+                            prompt_version="v1.0",
+                            schema_version="1.0.0",
+                            latency_ms=round(elapsed_ms, 2),
+                            fallback_occurred=llm_resp.fallback_occurred,
+                        )
+
+                        return AskCertificationResponse(
+                            question=clean_question,
+                            answer=answer_text,
+                            support_level=sup_enum,
+                            referenced_evidence_ids=filtered_evids,
+                            referenced_rule_ids=filtered_rules,
+                            referenced_document_ids=list(set(referenced_doc_ids)),
+                            uncertainties=ans_data.get("uncertainties", []),
+                            authoritative_verdict=context.authoritative_verdict,
+                            context_fingerprint=context.compute_context_fingerprint(),
+                            generation_metadata=meta,
+                        )
             except Exception as exc:
                 logger.warning(f"Interactive LLM QA failed: {exc}. Falling back to deterministic answer.")
 
-        # Deterministic Q&A Answer Synthesis
+        # Deterministic Q&A Answer Synthesis (Dimension-aware)
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         verdict = context.authoritative_verdict
         score_pct = context.equivalence_score * 100
+
+        # Dynamically determine observed differing dimensions
+        diff_dims = sorted(list({str(d.get("dimension", "OUTPUT")).upper() for d in context.differences_summary if d.get("dimension")}))
+        diff_dims_str = ", ".join(diff_dims) if diff_dims else "OUTPUT"
 
         det_answer = (
             f"Authoritative Certification Status: {verdict} (Equivalence Score: {score_pct:.1f}%). "
@@ -324,7 +353,7 @@ class IntelligenceEngine:
         )
         if context.regression_cases_count > 0:
             det_answer += (
-                f" The primary deviations occurred in the output dimension, affecting rules: "
+                f" The primary deviations occurred in the {diff_dims_str} dimension, affecting rules: "
                 f"{', '.join(context.valid_rule_ids[:3]) or 'observed invariants'}."
             )
 
@@ -334,7 +363,7 @@ class IntelligenceEngine:
             generation_mode="DETERMINISTIC",
             latency_ms=round(elapsed_ms, 2),
             fallback_occurred=True,
-            fallback_reason="Offline or deterministic mode selected",
+            fallback_reason="Offline, deterministic mode, or validation fallback triggered",
         )
 
         return AskCertificationResponse(

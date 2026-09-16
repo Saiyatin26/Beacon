@@ -93,7 +93,7 @@ class ExplanationValidator:
                     continue
                 dim_str = str(raw_d.get("dimension", "")).strip().upper()
 
-                # BLOCKER 7 & 24: No Invalid Dimension Coercion!
+                # No Invalid Dimension Coercion
                 if dim_str not in allowed_dimensions:
                     errors.append(f"Invalid dimension '{dim_str}' rejected (no coercion to OUTPUT).")
                     continue
@@ -104,7 +104,7 @@ class ExplanationValidator:
                 raw_evids = raw_d.get("evidence_ids", [])
                 filtered_evids = [eid for eid in raw_evids if eid in valid_evid_set] if isinstance(raw_evids, list) else []
 
-                # BLOCKER 8 & 25: No Default PASS! Derive status from authoritative context if missing or invalid
+                # No Default PASS! Derive status from authoritative context if missing or invalid
                 raw_status = raw_d.get("status")
                 dim_diffs = [
                     d for d in context.differences_summary
@@ -126,7 +126,7 @@ class ExplanationValidator:
                     else:
                         dim_status = "DIFFERENT" if dim_diffs else ("INCONCLUSIVE" if missing_for_dim else "UNKNOWN")
 
-                # Filter findings & validate factual values (BLOCKER 6, 22, 23)
+                # Filter findings & validate factual values
                 raw_findings = raw_d.get("findings", [])
                 validated_findings: list[ExplanationFinding] = []
                 if isinstance(raw_findings, list):
@@ -134,7 +134,15 @@ class ExplanationValidator:
                         if not isinstance(rf, dict) or not rf.get("statement"):
                             continue
 
-                        f_evids = [eid for eid in rf.get("evidence_ids", []) if eid in valid_evid_set] if isinstance(rf.get("evidence_ids"), list) else []
+                        f_evids_raw = rf.get("evidence_ids", [])
+                        if isinstance(f_evids_raw, list):
+                            invalid_evids = [eid for eid in f_evids_raw if eid not in valid_evid_set]
+                            if invalid_evids:
+                                errors.append(f"Invalid evidence IDs {invalid_evids} in finding rejected.")
+                            f_evids = [eid for eid in f_evids_raw if eid in valid_evid_set]
+                        else:
+                            f_evids = []
+
                         inp_id = rf.get("input_id")
                         if inp_id and valid_input_set and inp_id not in valid_input_set:
                             errors.append(f"Hallucinated input_id '{inp_id}' in finding rejected.")
@@ -143,7 +151,7 @@ class ExplanationValidator:
                         ref_val = rf.get("reference_value")
                         tgt_val = rf.get("target_value")
 
-                        # Value validation against authoritative diffs
+                        # Factual value validation against authoritative diffs
                         if inp_id and inp_id in diffs_by_input:
                             auth_diff = diffs_by_input[inp_id]
                             auth_ref = auth_diff.get("reference_value")
@@ -192,7 +200,7 @@ class ExplanationValidator:
                     )
                 )
 
-        # 4. Rule Impacts Validation (BLOCKER 9 & 26: No Invented Rule IDs)
+        # 4. Rule Impacts Validation (No Invented Rule IDs)
         raw_rules = raw_payload.get("rule_impacts", [])
         validated_rules: list[RuleImpact] = []
 
@@ -265,7 +273,9 @@ class ExplanationValidator:
                 )
 
         # 7. Construct Full Explanation with Authoritative Ground Truth
-        explanation_id = f"EXP-{context.certification_id[:12]}"
+        fp = context.compute_context_fingerprint()
+        mode_tag = metadata.generation_mode.lower()[:4]
+        explanation_id = f"EXP-{context.certification_id[:8]}-{fp[:8]}-{mode_tag}"
         cache_key = context.compute_cache_key(
             mode=metadata.generation_mode.lower(),
             use_company_knowledge=bool(context.knowledge_context),
@@ -297,7 +307,7 @@ class ExplanationValidator:
             uncertainty_notes=validated_uncertainties,
             company_knowledge_context=context.knowledge_context,
             investigation_recommendations=validated_recs,
-            context_fingerprint=context.compute_context_fingerprint(),
+            context_fingerprint=fp,
             cache_key=cache_key,
             generation_metadata=metadata,
         )

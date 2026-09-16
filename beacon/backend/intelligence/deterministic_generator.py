@@ -7,6 +7,7 @@ from authoritative certification context without external LLM dependencies.
 from typing import Any, Optional
 import hashlib
 
+from common.contracts import compute_canonical_input_hash
 from evaluation.models import BehaviorDimension
 from .models import (
     AffectedInput,
@@ -92,13 +93,19 @@ class DeterministicExplanationGenerator:
 
         # 4. Dimension Explanations
         dimension_explanations: list[DimensionExplanation] = []
+        differing_dimensions_set: set[str] = set()
+
         for dim in context.dimensions_evaluated:
             # Check differences for this dimension
             dim_diffs = [
                 d for d in context.differences_summary
                 if str(d.get("dimension", "")).upper() == dim.value
             ]
-            dim_status = "DIFFERENT" if dim_diffs else "PASS"
+            if dim_diffs:
+                dim_status = "DIFFERENT"
+                differing_dimensions_set.add(dim.value)
+            else:
+                dim_status = "PASS"
 
             # Check if missing evidence exists for this dimension
             missing_for_dim = [m for m in context.missing_evidence if m.dimension == dim]
@@ -111,17 +118,18 @@ class DeterministicExplanationGenerator:
             for idx, diff in enumerate(dim_diffs[:10]):
                 ref_val = diff.get("reference_value")
                 tgt_val = diff.get("target_value")
-                inp_id = diff.get("input_id", f"INP-{idx+1}")
+                inp_id = diff.get("input_id")
                 evid_ref = diff.get("reference_evidence_id")
                 evid_tgt = diff.get("target_evidence_id")
                 diff_evids = [e for e in (evid_ref, evid_tgt) if e and e in context.valid_evidence_ids]
                 dim_evids.update(diff_evids)
 
+                inp_label = f"Input '{inp_id}'" if inp_id else f"Evaluated case {idx+1}"
                 findings.append(
                     ExplanationFinding(
                         finding_id=f"FIND-{dim.value}-{idx+1}",
                         dimension=dim,
-                        statement=f"Input {inp_id} produced divergent {dim.value} behavior: reference={ref_val}, target={tgt_val}.",
+                        statement=f"{inp_label} produced divergent {dim.value} behavior: reference={ref_val}, target={tgt_val}.",
                         support=EvidenceSupportLevel.DETERMINISTIC_FACT,
                         evidence_ids=diff_evids,
                         input_id=inp_id,
@@ -135,7 +143,7 @@ class DeterministicExplanationGenerator:
                 DimensionExplanation(
                     dimension=dim,
                     status=dim_status,
-                    reference_summary=f"Reference produced valid observations across evaluated inputs.",
+                    reference_summary="Reference produced valid observations across evaluated inputs.",
                     target_summary=f"Target evaluated with {len(dim_diffs)} detected differences.",
                     difference_summary=f"Discrepancies observed in {len(dim_diffs)} inputs." if dim_diffs else "No differences detected.",
                     tolerance_applied="Standard deterministic comparison policy",
@@ -159,7 +167,7 @@ class DeterministicExplanationGenerator:
                     rule_id=rule_id,
                     rule_description=rule_desc,
                     status=status,
-                    observed_behavior=r.get("observed_behavior", f"Rule evaluated against test domain."),
+                    observed_behavior=r.get("observed_behavior", "Rule evaluated against test domain."),
                     supporting_evidence_ids=rule_evids,
                     relationship_to_verdict=r.get("relationship_to_verdict", "Evaluated during certification."),
                     limitation="Empirical observation confirms output divergence without modifying rule definitions.",
@@ -169,35 +177,46 @@ class DeterministicExplanationGenerator:
         # 6. Evidence Traces (Strictly real evidence IDs, or None when evidence absent)
         evidence_traces: list[EvidenceTrace] = []
         for idx, diff in enumerate(context.differences_summary[:15]):
-            inp_id = diff.get("input_id", f"INP-{idx+1}")
+            inp_id = diff.get("input_id")
             evid_tgt = diff.get("target_evidence_id")
             evid_ref = diff.get("reference_evidence_id")
+            diff_dim_str = str(diff.get("dimension", "OUTPUT")).upper()
+            try:
+                diff_dim_enum = BehaviorDimension(diff_dim_str)
+            except ValueError:
+                diff_dim_enum = BehaviorDimension.OUTPUT
 
-            # Only trace when evidence or diff exists
-            trace_hash_src = f"{inp_id}:{evid_tgt or 'NO_EVID'}"
+            # Provenance and hash
+            inp_label = inp_id or f"case-{idx+1}"
+            trace_hash_src = f"{inp_label}:{evid_tgt or 'NO_EVID'}:{diff_dim_str}"
             evidence_traces.append(
                 EvidenceTrace(
                     claim_id=f"CLAIM-{idx+1}",
-                    claim_text=f"Target output differed from reference for input {inp_id}",
+                    claim_text=f"Target {diff_dim_str} differed from reference for input {inp_label}",
                     evidence_id=evid_tgt,
-                    input_id=inp_id,
-                    dimension=BehaviorDimension.OUTPUT,
+                    input_id=inp_id or "",
+                    dimension=diff_dim_enum,
                     role="target",
                     source_type="runtime_execution",
-                    evidence_hash=hashlib.sha256(trace_hash_src.encode()).hexdigest(),
+                    evidence_hash=hashlib.sha256(trace_hash_src.encode("utf-8")).hexdigest(),
                     provenance={"reference_evidence_id": evid_ref, "input_id": inp_id},
                 )
             )
 
-        # 7. Affected Inputs (Authoritative mapping)
+        # 7. Affected Inputs (Authoritative mapping without fake IDs)
         affected_inputs: list[AffectedInput] = []
         for idx, diff in enumerate(context.differences_summary[:20]):
-            inp_id = diff.get("input_id", f"INP-{idx+1}")
+            inp_id = diff.get("input_id")
+            inp_vals = diff.get("input_values", {})
+            inp_hash = diff.get("input_hash")
+            if not inp_hash and inp_vals:
+                inp_hash = compute_canonical_input_hash(inp_vals)
+
             affected_inputs.append(
                 AffectedInput(
-                    input_id=inp_id,
-                    input_hash=hashlib.sha256(str(diff.get("input_values", inp_id)).encode()).hexdigest(),
-                    input_values=diff.get("input_values", {}),
+                    input_id=inp_id or "",
+                    input_hash=inp_hash or "",
+                    input_values=inp_vals,
                     legacy_output=diff.get("reference_value"),
                     modern_output=diff.get("target_value"),
                     violated_rules=diff.get("violated_oracle_ids", []),
@@ -221,7 +240,7 @@ class DeterministicExplanationGenerator:
             ),
         ]
 
-        # 9. Investigation Recommendations
+        # 9. Investigation Recommendations (Derived strictly from observed dimensions)
         investigation_recommendations: list[InvestigationRecommendation] = []
         if regression_count > 0:
             evidence_refs = [e.evidence_id for e in evidence_traces if e.evidence_id][:3]
@@ -234,15 +253,57 @@ class DeterministicExplanationGenerator:
                     evidence_references=evidence_refs,
                 )
             )
-            investigation_recommendations.append(
-                InvestigationRecommendation(
-                    priority=2,
-                    title="Validate Condition Boundaries & Rounding Arithmetic",
-                    description="Check numeric calculations, boundary conditions, and floating-point precision in target implementation.",
-                    rationale="Numeric discrepancies frequently stem from decimal formatting or operator differences.",
-                    evidence_references=[],
+            # Add dimension-specific guidance
+            if "BOUNDARY" in differing_dimensions_set:
+                investigation_recommendations.append(
+                    InvestigationRecommendation(
+                        priority=2,
+                        title="Audit Boundary Conditions and Off-by-One Thresholds",
+                        description="Inspect edge cases, conditional branches, and inequality boundaries.",
+                        rationale="Boundary dimension discrepancies were detected in evaluation.",
+                        evidence_references=[],
+                    )
                 )
-            )
+            elif "STATE" in differing_dimensions_set:
+                investigation_recommendations.append(
+                    InvestigationRecommendation(
+                        priority=2,
+                        title="Audit Database and Physical State Delta Transformations",
+                        description="Verify persistence layer operations, row mutations, and commit sequences.",
+                        rationale="State dimension discrepancies were detected in evaluation.",
+                        evidence_references=[],
+                    )
+                )
+            elif "ERROR" in differing_dimensions_set:
+                investigation_recommendations.append(
+                    InvestigationRecommendation(
+                        priority=2,
+                        title="Audit Error Status Codes and Exception Handling",
+                        description="Check error response codes, exception types, and error message structures.",
+                        rationale="Error dimension discrepancies were detected in evaluation.",
+                        evidence_references=[],
+                    )
+                )
+            elif "WORKFLOW" in differing_dimensions_set:
+                investigation_recommendations.append(
+                    InvestigationRecommendation(
+                        priority=2,
+                        title="Audit Workflow Execution Order and Step Sequences",
+                        description="Inspect asynchronous choreography and orchestration ordering.",
+                        rationale="Workflow dimension discrepancies were detected in evaluation.",
+                        evidence_references=[],
+                    )
+                )
+            else:
+                investigation_recommendations.append(
+                    InvestigationRecommendation(
+                        priority=2,
+                        title="Audit Output Value Calculations and Formatting",
+                        description="Inspect calculations, field serializations, and value mappings in target service.",
+                        rationale="Output discrepancies were observed during evaluation.",
+                        evidence_references=[],
+                    )
+                )
         else:
             investigation_recommendations.append(
                 InvestigationRecommendation(
@@ -267,7 +328,8 @@ class DeterministicExplanationGenerator:
             reproducibility="DETERMINISTIC_CANONICAL",
         )
 
-        explanation_id = f"EXP-{context.certification_id[:12]}"
+        fp = context.compute_context_fingerprint()
+        explanation_id = f"EXP-{context.certification_id[:8]}-{fp[:8]}-det"
         cache_key = context.compute_cache_key(
             mode="deterministic",
             use_company_knowledge=bool(context.knowledge_context),
@@ -293,7 +355,7 @@ class DeterministicExplanationGenerator:
             uncertainty_notes=uncertainty_notes,
             company_knowledge_context=context.knowledge_context,
             investigation_recommendations=investigation_recommendations,
-            context_fingerprint=context.compute_context_fingerprint(),
+            context_fingerprint=fp,
             cache_key=cache_key,
             persistence_status="SUCCESS",
             generation_metadata=metadata,
