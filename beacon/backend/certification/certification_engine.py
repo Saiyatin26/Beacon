@@ -14,6 +14,7 @@ import uuid
 
 from oracle.models import OracleDefinition, OracleSet
 from oracle.serializer import compute_oracle_set_hash
+from evaluation.models import BehaviorDimension
 from .adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter
 from .engine import CrossVersionCertificationEngine
 from .input_generator import generate_certification_test_suite
@@ -190,6 +191,26 @@ class CertificationEngine:
                 oset_ver = 1
             oset_hash = getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", "") if oracle_set else ""
 
+            constructed_regressions = []
+            if evaluation_result and getattr(evaluation_result, "differences", None):
+                for diff in evaluation_result.differences:
+                    constructed_regressions.append(
+                        BehavioralRegression(
+                            regression_id=getattr(diff, "difference_id", f"REG-{uuid.uuid4().hex[:6]}"),
+                            oracle_id="oracle_behavioral_equivalence",
+                            oracle_version=1,
+                            input_id=getattr(diff, "input_id", "inp_unknown"),
+                            input_values=getattr(diff, "details", {}).get("input", {}) if isinstance(getattr(diff, "details", None), dict) else {},
+                            expected_behavior=getattr(diff, "reference_value", None),
+                            legacy_output=getattr(diff, "reference_value", None),
+                            modern_output=getattr(diff, "target_value", None),
+                            failed_assertion="OUTPUT_VALUE_MISMATCH",
+                            severity="medium",
+                            evidence_ids=getattr(diff, "evidence_ids", []) or [],
+                            dimension=getattr(diff, "dimension", BehaviorDimension.OUTPUT),
+                        )
+                    )
+
             temp_artifact = CertificationArtifact(
                 certification_id=cert_id,
                 project_id=project_id,
@@ -218,7 +239,7 @@ class CertificationEngine:
                 ),
                 domain_scores={},
                 oracle_summaries=oracle_summaries,
-                regressions=[],
+                regressions=constructed_regressions,
                 reference_inconsistencies=[],
                 warnings=[],
                 blocking_reasons=blocking_reasons,

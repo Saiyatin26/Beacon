@@ -329,7 +329,12 @@ class ExplanationContext(BaseModel):
             ),
             "knowledge_retrieval_fingerprint": self.knowledge_context.retrieval_fingerprint if self.knowledge_context else "",
         }
-        canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        canonical_json = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=lambda o: o.model_dump(mode="json") if hasattr(o, "model_dump") else (o.dict() if hasattr(o, "dict") else str(o)),
+        )
         return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
     def compute_cache_key(self, mode: str = "auto", use_company_knowledge: bool = True, prompt_version: str = "v1.0") -> str:

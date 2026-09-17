@@ -113,6 +113,8 @@ async def lifespan(app: FastAPI):
     # 4. Safe interrupted operations recovery (executed once at startup)
     try:
         recover_interrupted_operations()
+        from workflow.recovery import workflow_recovery
+        workflow_recovery.recover_interrupted_workflows()
     except Exception as _exc:
         logger.warning(f"Startup interrupted operation recovery encountered non-fatal error: {_exc}")
 
@@ -237,6 +239,11 @@ app.include_router(knowledge_router)
 # Phase 10 (V2) Intelligent Agent & Detailed Certification Explanations Routes
 from api.intelligence_router import intelligence_router
 app.include_router(intelligence_router)
+
+# Phase 11 (V2) Production Readiness, Operationalization, and Canonical Workflow Routes
+from api.workflow_router import workflow_router
+app.include_router(workflow_router)
+
 
 
 

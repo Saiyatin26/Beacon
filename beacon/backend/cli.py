@@ -118,6 +118,8 @@ def cmd_certify(args):
         seed=args.seed,
     )
 
+    certification_repository.save_artifact(artifact)
+
     if args.format == "json":
         print(artifact.model_dump_json(indent=2))
     elif args.format == "html":

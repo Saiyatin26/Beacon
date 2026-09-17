@@ -16,7 +16,7 @@ from application import (
     ApplicationSpec,
     application_registry,
 )
-from auth import get_current_active_user, User
+from auth import get_current_active_user, User, Permission, verify_user_project_permission
 from certification import (
     CertificationArtifact,
     CertificationContext,
@@ -125,7 +125,12 @@ def certify_application(
     req: ApplicationCertifyRequest = ApplicationCertifyRequest(),
     current_user: User = Depends(get_current_active_user),
 ):
-    """Executes deterministic behavioral equivalence certification for an application."""
+    """Executes deterministic behavioral equivalence certification for an application via Canonical V2 Workflow Engine."""
+    from workflow.models import WorkflowRunRequest, WorkflowErrorCode
+    from workflow.engine import workflow_engine
+
+    verify_user_project_permission(current_user, app_id, Permission.CERTIFY)
+
     spec = application_registry.get_application(app_id)
     if not spec:
         raise HTTPException(
@@ -134,128 +139,62 @@ def certify_application(
         )
 
     try:
-        # 1. Resolve adapters
-        ref_adapter, target_adapter = application_resolver.resolve_adapters(
-            spec=spec,
+        wf_req = WorkflowRunRequest(
+            application_id=app_id,
             target_index=req.target_index,
-        )
-
-        # 2. Resolve inputs
-        test_inputs = application_resolver.resolve_inputs(
-            spec=spec,
             custom_inputs=req.custom_inputs,
-        )
-
-        # 3. Resolve OracleSet
-        oracle_set = application_resolver.resolve_oracle_set(spec=spec)
-
-        # 4. Construct execution policy
-        policy = CertificationPolicy(
-            policy_id=f"POL-{spec.application_id}",
-            min_equivalence_score=req.policy_min_equivalence_score,
-            min_oracle_coverage=req.policy_min_oracle_coverage,
-            min_applicable_probes_per_oracle=0,
-            allow_warnings=req.allow_warnings,
-            block_on_critical_regression=True,
-            block_on_reference_inconsistent=True,
-        )
-
-        # 5. Build context
-        context = CertificationContext(
-            benchmark_id=spec.application_id,
-            benchmark_name=spec.name,
-            benchmark_version=spec.version,
-            legacy_implementation_id=ref_adapter.name,
-            legacy_implementation_hash=getattr(ref_adapter, "implementation_hash", ""),
-            modernized_implementation_id=target_adapter.name,
-            modernized_implementation_hash=getattr(target_adapter, "implementation_hash", ""),
-            oracle_set_id=oracle_set.oracle_set_id,
-            oracle_set_hash=getattr(oracle_set, "oracle_set_hash", ""),
-            evaluation_mode=spec.rule_config.mode if spec.rule_config else "CONTROLLED",
             policy_min_equivalence_score=req.policy_min_equivalence_score,
-            policy_allow_warnings=req.allow_warnings,
+            policy_min_oracle_coverage=req.policy_min_oracle_coverage,
+            allow_warnings=req.allow_warnings,
+            explain=req.explain,
+            explanation_mode="deterministic",
+            user_id=current_user.user_id,
         )
 
-        # Resolve Phase 8 Threshold Resolution
-        from threshold.engine import ThresholdEngine
-        from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdStrategy
-        from threshold.persistence import threshold_persistence
+        result = workflow_engine.execute_workflow(wf_req)
 
-        thresh_engine = ThresholdEngine()
-        th_policy = threshold_persistence.get_policy(f"POL-{spec.application_id}")
-        if not th_policy:
-            th_policy = ThresholdPolicy(
-                policy_id=f"POL-{spec.application_id}",
-                version="1.0.0",
-                metric=DifferenceMetric.ABSOLUTE_DIFF,
-                strategy=ThresholdStrategy.FIXED,
-                parameters={"value": 0.0},
-            )
-            threshold_persistence.save_policy(th_policy)
+        if result.error_code:
+            if result.error_code in (WorkflowErrorCode.APPLICATION_NOT_FOUND,):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Application '{app_id}' not found",
+                )
+            elif result.error_code in (WorkflowErrorCode.INVALID_INPUT, WorkflowErrorCode.ADAPTER_RESOLUTION_FAILED, WorkflowErrorCode.PREFLIGHT_FAILED):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=result.error_message or "Application resolution or validation failed",
+                )
+            elif result.error_code in (WorkflowErrorCode.INTERNAL_ERROR, WorkflowErrorCode.PERSISTENCE_FAILED):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=result.error_message or "Internal execution failed",
+                )
 
-        threshold_res = thresh_engine.resolve_threshold(
-            metric=th_policy.metric,
-            policy=th_policy,
-        )
-        threshold_persistence.save_resolution(threshold_res)
-
-        # 6. Execute deterministic certification
-        artifact = certification_engine.certify(
-            legacy_adapter=ref_adapter,
-            modern_adapter=target_adapter,
-            test_inputs=test_inputs,
-            oracle_set=oracle_set,
-            context=context,
-            policy=policy,
-            threshold_resolution=threshold_res,
-        )
-
-        # 7. Persist artifact
-        certification_repository.save_artifact(artifact)
-
-        status_val = artifact.certification_status.value if hasattr(artifact.certification_status, "value") else str(artifact.certification_status)
         response_payload: dict[str, Any] = {
             "application_id": spec.application_id,
             "application_name": spec.name,
             "domain": spec.domain,
-            "status": status_val,
-            "equivalence_score": artifact.equivalence_score,
-            "artifact_id": artifact.artifact_id,
-            "artifact_hash": artifact.artifact_hash,
-            "unique_input_count": artifact.metrics.unique_input_count if artifact.metrics else len(test_inputs),
-            "regressions_count": len(artifact.regressions),
-            "regressions": [r.model_dump() for r in artifact.regressions[:10]],
+            "status": result.status,
+            "equivalence_score": result.equivalence_score,
+            "artifact_id": result.artifact_id,
+            "artifact_hash": result.artifact_hash,
+            "unique_input_count": result.unique_input_count,
+            "regressions_count": result.regressions_count,
+            "regressions": result.regressions[:10] if result.regressions else [],
+            "workflow_run_id": result.workflow_run_id,
         }
 
-        # 8. Optional post-certification AI explanation
-        if req.explain:
-            from intelligence.engine import intelligence_engine
-            from intelligence.context_builder import explanation_context_builder
-            try:
-                ctx = explanation_context_builder.build_context(
-                    certification_id=artifact.certification_id,
-                    artifact=artifact,
-                    threshold_resolution=threshold_res,
-                    execution_mode="v2",
-                )
-                exp = intelligence_engine.generate_explanation(context=ctx, mode="deterministic")
-                response_payload["explanation"] = exp.model_dump(mode="json")
-            except Exception as e_err:
-                logger.warning(f"Phase 10 explanation generation failed: {e_err}")
-                explanation = certification_explainer.generate_explanation(artifact)
-                response_payload["explanation"] = explanation
+        if result.explanation:
+            response_payload["explanation"] = result.explanation
 
         return response_payload
 
-    except ApplicationResolutionError as exc:
-        logger.warning(f"Application resolution failed for application '{app_id}': {exc}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Application resolution error: {str(exc)}",
-        )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Certification failed for application '{app_id}': {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Certification execution failed: {str(exc)}",
         )
+
