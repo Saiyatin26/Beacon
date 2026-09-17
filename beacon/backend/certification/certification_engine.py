@@ -63,6 +63,7 @@ class CertificationEngine:
         field_bounds: Optional[dict[str, tuple[float, float]]] = None,
         domain_of: Optional[dict[str, str]] = None,
         context: Optional[CertificationContext] = None,
+        threshold_resolution: Optional[Any] = None,
         n_samples: int = 100,
         seed: int = 42,
     ) -> CertificationArtifact:
@@ -71,6 +72,10 @@ class CertificationEngine:
         modern_adapter = modern_adapter or target_adapter or modernized_adapter or candidate_adapter
         if application_id and project_id == "default":
             project_id = application_id
+
+        if threshold_resolution and context:
+            context.threshold_resolution_id = getattr(threshold_resolution, "resolution_id", None)
+            context.threshold_resolution_fingerprint = getattr(threshold_resolution, "fingerprint", None)
 
         cert_policy = policy or CertificationPolicy()
         pol_hash = cert_policy.compute_hash()
@@ -727,9 +732,8 @@ class CertificationEngine:
             input_set_hash=input_set_hash,
             certification_policy_id=cert_policy.policy_id,
             certification_policy_version=cert_policy.version,
-            certification_policy_hash=pol_hash,
-            threshold_resolution_id=getattr(final_context, "threshold_resolution_id", None),
-            threshold_resolution_fingerprint=getattr(final_context, "threshold_resolution_fingerprint", None),
+            threshold_resolution_id=getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else getattr(final_context, "threshold_resolution_id", None),
+            threshold_resolution_fingerprint=getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else getattr(final_context, "threshold_resolution_fingerprint", None),
             certification_engine_version="1.0.0",
             timestamp=timestamp,
             reproducibility_state=repro_state,

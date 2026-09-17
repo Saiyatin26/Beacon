@@ -221,7 +221,7 @@ class ExplanationContextBuilder:
                 if not inp_hash and getattr(r, "input_values", None):
                     inp_hash = compute_canonical_input_hash(r.input_values)
 
-                # Determine actual dimension (Never default to OUTPUT)
+                # Determine actual dimension
                 raw_dim = getattr(r, "dimension", None) or getattr(r, "domain", None)
                 dim_str = "UNKNOWN"
                 if raw_dim:
@@ -229,6 +229,8 @@ class ExplanationContextBuilder:
                         dim_str = raw_dim.value
                     elif str(raw_dim).upper() in {d.value for d in BehaviorDimension}:
                         dim_str = str(raw_dim).upper()
+                elif getattr(r, "legacy_output", None) is not None or getattr(r, "modern_output", None) is not None:
+                    dim_str = BehaviorDimension.OUTPUT.value
 
                 diff_record = {
                     "difference_id": r.regression_id,
@@ -419,7 +421,7 @@ class ExplanationContextBuilder:
                 )
             )
 
-        # Derive evaluated dimensions dynamically from EvaluationResult and observations
+        # Derive evaluated dimensions strictly from Phase 4 EvaluationResult
         evaluated_dims_set = set()
         if evaluation_result:
             if hasattr(evaluation_result, "dimensions_evaluated") and evaluation_result.dimensions_evaluated:
@@ -428,19 +430,39 @@ class ExplanationContextBuilder:
                         evaluated_dims_set.add(d)
                     elif isinstance(d, str) and hasattr(BehaviorDimension, d.upper()):
                         evaluated_dims_set.add(BehaviorDimension[d.upper()])
+
+            if hasattr(evaluation_result, "summary") and evaluation_result.summary:
+                if hasattr(evaluation_result.summary, "dimension_summaries") and evaluation_result.summary.dimension_summaries:
+                    for dim_key in evaluation_result.summary.dimension_summaries.keys():
+                        if isinstance(dim_key, BehaviorDimension):
+                            evaluated_dims_set.add(dim_key)
+                        elif isinstance(dim_key, str) and hasattr(BehaviorDimension, dim_key.upper()):
+                            evaluated_dims_set.add(BehaviorDimension[dim_key.upper()])
+
+            if hasattr(evaluation_result, "input_results") and evaluation_result.input_results:
+                for ir in evaluation_result.input_results:
+                    if hasattr(ir, "dimension_results") and ir.dimension_results:
+                        for dim_key in ir.dimension_results.keys():
+                            if isinstance(dim_key, BehaviorDimension):
+                                evaluated_dims_set.add(dim_key)
+                            elif isinstance(dim_key, str) and hasattr(BehaviorDimension, dim_key.upper()):
+                                evaluated_dims_set.add(BehaviorDimension[dim_key.upper()])
+
             if evaluation_result.differences:
                 for diff in evaluation_result.differences:
                     if isinstance(diff.dimension, BehaviorDimension):
                         evaluated_dims_set.add(diff.dimension)
+                    elif isinstance(diff.dimension, str) and hasattr(BehaviorDimension, diff.dimension.upper()):
+                        evaluated_dims_set.add(BehaviorDimension[diff.dimension.upper()])
+        elif differences_summary:
+            for d in differences_summary:
+                dim_str = d.get("dimension")
+                if dim_str and dim_str != "UNKNOWN" and hasattr(BehaviorDimension, str(dim_str).upper()):
+                    evaluated_dims_set.add(BehaviorDimension[str(dim_str).upper()])
 
-        if not evaluated_dims_set:
-            evaluated_dims_set = {
-                BehaviorDimension.OUTPUT,
-                BehaviorDimension.ERROR,
-                BehaviorDimension.BOUNDARY,
-                BehaviorDimension.STATE,
-                BehaviorDimension.WORKFLOW,
-            }
+        if not evaluated_dims_set and artifact and artifact.metrics and (getattr(artifact.metrics, "unique_input_count", 0) > 0 or getattr(artifact.metrics, "matching_case_count", 0) > 0):
+            evaluated_dims_set.add(BehaviorDimension.OUTPUT)
+
         dimensions_evaluated = sorted(list(evaluated_dims_set), key=lambda d: d.value)
 
         # 7. Optional Phase 9 Knowledge Context Retrieval

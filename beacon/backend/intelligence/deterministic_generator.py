@@ -86,8 +86,9 @@ class DeterministicExplanationGenerator:
 
         # 3. Behavioral Summary
         dim_names = [d.value for d in context.dimensions_evaluated]
+        dim_desc = ", ".join(dim_names) if dim_names else "dimensions could not be established from authoritative evaluation data"
         behavioral_summary = (
-            f"Evaluated {len(dim_names)} behavioral dimensions ({', '.join(dim_names) if dim_names else 'OUTPUT'}). "
+            f"Evaluated {len(dim_names)} behavioral dimensions ({dim_desc}). "
             f"Observed {matching_count} matching outcomes and {regression_count} behavioral deviations."
         )
 
@@ -95,7 +96,28 @@ class DeterministicExplanationGenerator:
         dimension_explanations: list[DimensionExplanation] = []
         differing_dimensions_set: set[str] = set()
 
-        for dim in context.dimensions_evaluated:
+        dims_to_explain: list[BehaviorDimension] = []
+        seen_dims: set[BehaviorDimension] = set()
+
+        for d in context.dimensions_evaluated:
+            if d not in seen_dims:
+                seen_dims.add(d)
+                dims_to_explain.append(d)
+
+        for m in context.missing_evidence:
+            if m.dimension and m.dimension not in seen_dims:
+                seen_dims.add(m.dimension)
+                dims_to_explain.append(m.dimension)
+
+        for diff in context.differences_summary:
+            dim_str = diff.get("dimension")
+            if dim_str and dim_str != "UNKNOWN" and hasattr(BehaviorDimension, str(dim_str).upper()):
+                bdim = BehaviorDimension[str(dim_str).upper()]
+                if bdim not in seen_dims:
+                    seen_dims.add(bdim)
+                    dims_to_explain.append(bdim)
+
+        for dim in dims_to_explain:
             # Check differences for this dimension
             dim_diffs = [
                 d for d in context.differences_summary
