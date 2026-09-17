@@ -117,14 +117,23 @@ def render_explanation_prompt(
     company_knowledge_block: str = "No company documentation was retrieved for this run.",
 ) -> tuple[str, str]:
     """Renders the system and user prompts for explanation generation."""
+    eq_val = context_dict.get("equivalence_score")
+    eq_str = f"{(eq_val * 100):.2f}" if eq_val is not None else "N/A (Unavailable)"
+    total_inps = context_dict.get("unique_inputs_count")
+    total_str = str(total_inps) if total_inps is not None else "N/A (Unavailable)"
+    match_cnt = context_dict.get("matching_cases_count")
+    match_str = str(match_cnt) if match_cnt is not None else "N/A (Unavailable)"
+    reg_cnt = context_dict.get("regression_cases_count")
+    reg_str = str(reg_cnt) if reg_cnt is not None else "N/A (Unavailable)"
+
     user_prompt = EXPLANATION_USER_PROMPT_TEMPLATE.format(
         certification_id=context_dict.get("certification_id", ""),
         application_id=context_dict.get("application_id", ""),
         authoritative_verdict=context_dict.get("authoritative_verdict", "NOT_CERTIFIED"),
-        equivalence_score_pct=f"{(context_dict.get('equivalence_score', 0.0) * 100):.2f}",
-        unique_inputs_count=context_dict.get("unique_inputs_count", 0),
-        matching_cases_count=context_dict.get("matching_cases_count", 0),
-        regression_cases_count=context_dict.get("regression_cases_count", 0),
+        equivalence_score_pct=eq_str,
+        unique_inputs_count=total_str,
+        matching_cases_count=match_str,
+        regression_cases_count=reg_str,
         dimensions=", ".join(context_dict.get("dimensions", [])),
         valid_evidence_ids=json.dumps(context_dict.get("valid_evidence_ids", [])),
         valid_rule_ids=json.dumps(context_dict.get("valid_rule_ids", [])),

@@ -267,10 +267,10 @@ class ExplanationContext(BaseModel):
     project_id: str = "default_project"
     session_id: Optional[str] = None
     authoritative_verdict: str = "NOT_CERTIFIED"
-    equivalence_score: float = 0.0
-    unique_inputs_count: int = 0
-    matching_cases_count: int = 0
-    regression_cases_count: int = 0
+    equivalence_score: Optional[float] = None
+    unique_inputs_count: Optional[int] = None
+    matching_cases_count: Optional[int] = None
+    regression_cases_count: Optional[int] = None
     dimensions_evaluated: list[BehaviorDimension] = Field(default_factory=list)
     differences_summary: list[dict[str, Any]] = Field(default_factory=list)
     valid_evidence_ids: list[str] = Field(default_factory=list)
@@ -294,7 +294,7 @@ class ExplanationContext(BaseModel):
             "project_id": self.project_id,
             "session_id": self.session_id or "",
             "authoritative_verdict": self.authoritative_verdict,
-            "equivalence_score": round(self.equivalence_score, 6),
+            "equivalence_score": round(self.equivalence_score, 6) if self.equivalence_score is not None else None,
             "unique_inputs_count": self.unique_inputs_count,
             "matching_cases_count": self.matching_cases_count,
             "regression_cases_count": self.regression_cases_count,

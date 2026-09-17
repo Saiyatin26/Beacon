@@ -74,50 +74,60 @@ class CertificationEngine:
         if application_id and project_id == "default":
             project_id = application_id
 
-        if evaluation_result is not None and not legacy_adapter and not modern_adapter:
-            # Direct authoritative Phase 4 + Phase 7 + Phase 8 flow
+        if not legacy_adapter and not modern_adapter:
+            # Direct authoritative Phase 4 + Phase 7 + Phase 8 flow (or missing evaluation authority)
             cert_id = getattr(context, "certification_id", None) or f"CERT-{uuid.uuid4().hex[:8]}"
             cert_policy = policy or getattr(context, "policy", None) or CertificationPolicy()
             pol_hash = cert_policy.compute_hash() if hasattr(cert_policy, "compute_hash") else getattr(cert_policy, "policy_hash", "")
             timestamp = datetime.now(timezone.utc).isoformat()
             
-            project_id = application_id or project_id or getattr(evaluation_result, "application_id", "default")
-            
-            total_inp = 0
-            equiv_inp = 0
-            diff_inp = 0
-            if getattr(evaluation_result, "summary", None):
-                total_inp = evaluation_result.summary.total_inputs
-                equiv_inp = evaluation_result.summary.equivalent_inputs
-                diff_inp = evaluation_result.summary.different_inputs
-            elif getattr(evaluation_result, "input_results", None):
-                total_inp = len(evaluation_result.input_results)
-                equiv_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.EQUIVALENT)
-                diff_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.DIFFERENT)
+            project_id = application_id or project_id or "default"
             res_id = getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else (getattr(context, "threshold_resolution_id", None) if context else None)
             res_fp = getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else (getattr(context, "threshold_resolution_fingerprint", None) if context else None)
 
-            # Strict Phase 8 Threshold Authority Enforcement
-            if not threshold_resolution or not res_id or not res_fp or not str(res_id).strip() or not str(res_fp).strip():
+            if evaluation_result is None:
                 final_status = CertificationStatus.INCONCLUSIVE
                 is_certified = False
                 score = 0.0
-                blocking_reasons = ["Phase 8 ThresholdResolution authority missing, unanchored, or unverified"]
+                blocking_reasons = ["Authoritative Phase 4 EvaluationResult is missing or unavailable"]
+                total_inp = 0
+                equiv_inp = 0
+                diff_inp = 0
             else:
-                eff_thresh = getattr(threshold_resolution, "effective_threshold", 0.0)
-                if diff_inp > 0:
-                    if float(diff_inp) / float(total_inp) <= float(eff_thresh) if total_inp > 0 else False:
-                        final_status = CertificationStatus.CERTIFIED_WITH_WARNINGS if getattr(cert_policy, "allow_warnings", True) else CertificationStatus.NOT_CERTIFIED
-                        is_certified = (final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS))
-                    else:
-                        final_status = CertificationStatus.NOT_CERTIFIED
-                        is_certified = False
-                    score = float(equiv_inp) / float(total_inp) if total_inp > 0 else 0.0
+                project_id = getattr(evaluation_result, "application_id", project_id)
+                total_inp = 0
+                equiv_inp = 0
+                diff_inp = 0
+                if getattr(evaluation_result, "summary", None):
+                    total_inp = evaluation_result.summary.total_inputs
+                    equiv_inp = evaluation_result.summary.equivalent_inputs
+                    diff_inp = evaluation_result.summary.different_inputs
+                elif getattr(evaluation_result, "input_results", None):
+                    total_inp = len(evaluation_result.input_results)
+                    equiv_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.EQUIVALENT)
+                    diff_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.DIFFERENT)
+
+                # Strict Phase 8 Threshold Authority Enforcement
+                if not threshold_resolution or not res_id or not res_fp or not str(res_id).strip() or not str(res_fp).strip():
+                    final_status = CertificationStatus.INCONCLUSIVE
+                    is_certified = False
+                    score = 0.0
+                    blocking_reasons = ["Phase 8 ThresholdResolution authority missing, unanchored, or unverified"]
                 else:
-                    final_status = CertificationStatus.CERTIFIED
-                    is_certified = True
-                    score = 1.0 if total_inp > 0 else 1.0
-                blocking_reasons = []
+                    eff_thresh = getattr(threshold_resolution, "effective_threshold", 0.0)
+                    if diff_inp > 0:
+                        if float(diff_inp) / float(total_inp) <= float(eff_thresh) if total_inp > 0 else False:
+                            final_status = CertificationStatus.CERTIFIED_WITH_WARNINGS if getattr(cert_policy, "allow_warnings", True) else CertificationStatus.NOT_CERTIFIED
+                            is_certified = (final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS))
+                        else:
+                            final_status = CertificationStatus.NOT_CERTIFIED
+                            is_certified = False
+                        score = float(equiv_inp) / float(total_inp) if total_inp > 0 else 0.0
+                    else:
+                        final_status = CertificationStatus.CERTIFIED
+                        is_certified = True
+                        score = 1.0 if total_inp > 0 else 1.0
+                    blocking_reasons = []
 
             oracle_summaries = []
             if oracle_set and hasattr(oracle_set, "rules"):

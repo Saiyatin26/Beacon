@@ -35,7 +35,7 @@ class DeterministicExplanationGenerator:
     ) -> CertificationExplanation:
         """Generates a complete CertificationExplanation deterministically."""
         verdict = context.authoritative_verdict
-        score_pct = context.equivalence_score * 100
+        score_pct = (context.equivalence_score * 100) if context.equivalence_score is not None else 0.0
         total_inputs = context.unique_inputs_count
         matching_count = context.matching_cases_count
         regression_count = context.regression_cases_count
@@ -44,30 +44,36 @@ class DeterministicExplanationGenerator:
         if verdict in ("CERTIFIED", "EQUIVALENT", "MATCH_PASS"):
             exec_summary = (
                 f"BEACON certified behavioral equivalence between reference and target implementations "
-                f"with a quantified equivalence score of {score_pct:.1f}%. Across {total_inputs} uniquely evaluated "
+                f"with a quantified equivalence score of {score_pct:.1f}%. Across {total_inputs or 0} uniquely evaluated "
                 f"inputs, all observed behavioral dimensions and invariant assertions were satisfied."
             )
         elif verdict in ("CERTIFIED_WITH_WARNINGS",):
             exec_summary = (
                 f"BEACON certified the candidate implementation with warnings (equivalence score: {score_pct:.1f}%). "
-                f"While primary invariants matched across {matching_count} of {total_inputs} inputs, non-critical "
+                f"While primary invariants matched across {matching_count or 0} of {total_inputs or 0} inputs, non-critical "
                 f"deviations or warnings were recorded."
             )
         elif verdict in ("NOT_CERTIFIED", "DIFFERENT", "MODERN_REGRESSION"):
             exec_summary = (
                 f"BEACON detected behavioral differences between reference and target implementations "
-                f"(equivalence score: {score_pct:.1f}%). A total of {regression_count} counterexamples were identified "
-                f"across {total_inputs} evaluated inputs where the target deviated from expected reference behavior."
+                f"(equivalence score: {score_pct:.1f}%). A total of {regression_count or 0} counterexamples were identified "
+                f"across {total_inputs or 0} evaluated inputs where the target deviated from expected reference behavior."
             )
         elif verdict in ("INSUFFICIENT_COVERAGE", "INCONCLUSIVE"):
-            exec_summary = (
-                f"BEACON evaluation concluded with status {verdict}. The test input domain or available execution evidence "
-                f"did not provide sufficient coverage to conclusively certify behavioral equivalence."
-            )
+            if total_inputs is None:
+                exec_summary = (
+                    f"BEACON evaluation concluded with status {verdict}. Authoritative evaluation results were missing or "
+                    f"unavailable, preventing conclusive verification of behavioral equivalence."
+                )
+            else:
+                exec_summary = (
+                    f"BEACON evaluation concluded with status {verdict}. The test input domain or available execution evidence "
+                    f"did not provide sufficient coverage to conclusively certify behavioral equivalence."
+                )
         else:
             exec_summary = (
                 f"Certification evaluation concluded with authoritative status {verdict}. "
-                f"{regression_count} regressions or inconsistencies were detected across {total_inputs} inputs."
+                f"{regression_count or 0} regressions or inconsistencies were detected across {total_inputs or 0} inputs."
             )
 
         # 2. Scope Summary
@@ -78,7 +84,7 @@ class DeterministicExplanationGenerator:
             "evaluated_inputs": total_inputs,
             "matching_cases": matching_count,
             "regression_cases": regression_count,
-            "equivalence_score": round(context.equivalence_score, 4),
+            "equivalence_score": round(context.equivalence_score, 4) if context.equivalence_score is not None else None,
             "dimensions": [d.value for d in context.dimensions_evaluated],
             "rules_evaluated_count": len(context.rules_context),
             "thresholds_applied_count": len(context.thresholds_context),
@@ -87,10 +93,16 @@ class DeterministicExplanationGenerator:
         # 3. Behavioral Summary
         dim_names = [d.value for d in context.dimensions_evaluated]
         dim_desc = ", ".join(dim_names) if dim_names else "dimensions could not be established from authoritative evaluation data"
-        behavioral_summary = (
-            f"Evaluated {len(dim_names)} behavioral dimensions ({dim_desc}). "
-            f"Observed {matching_count} matching outcomes and {regression_count} behavioral deviations."
-        )
+        if total_inputs is None:
+            behavioral_summary = (
+                f"Evaluated {len(dim_names)} behavioral dimensions ({dim_desc}). "
+                f"Evaluation metrics are unavailable as authoritative EvaluationResult was not supplied."
+            )
+        else:
+            behavioral_summary = (
+                f"Evaluated {len(dim_names)} behavioral dimensions ({dim_desc}). "
+                f"Observed {matching_count or 0} matching outcomes and {regression_count or 0} behavioral deviations."
+            )
 
         # 4. Dimension Explanations (Strictly conservative: never collapses UNKNOWN or INCONCLUSIVE to PASS)
         dimension_explanations: list[DimensionExplanation] = []
@@ -269,7 +281,7 @@ class DeterministicExplanationGenerator:
 
         # 9. Investigation Recommendations (Derived strictly from observed dimensions)
         investigation_recommendations: list[InvestigationRecommendation] = []
-        if regression_count > 0:
+        if regression_count and regression_count > 0:
             evidence_refs = [e.evidence_id for e in evidence_traces if e.evidence_id][:3]
             investigation_recommendations.append(
                 InvestigationRecommendation(
@@ -331,6 +343,16 @@ class DeterministicExplanationGenerator:
                         evidence_references=[],
                     )
                 )
+        elif total_inputs is None:
+            investigation_recommendations.append(
+                InvestigationRecommendation(
+                    priority=1,
+                    title="Provide Authoritative Evaluation Results",
+                    description="Supply an authoritative Phase 4 EvaluationResult to enable behavioral equivalence assessment.",
+                    rationale="Certification cannot proceed without evaluated empirical observations.",
+                    evidence_references=[],
+                )
+            )
         else:
             investigation_recommendations.append(
                 InvestigationRecommendation(

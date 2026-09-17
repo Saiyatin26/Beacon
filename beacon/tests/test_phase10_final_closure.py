@@ -1617,3 +1617,75 @@ def test_missing_threshold_resolution_fails_closed_in_v2_direct_path():
     assert "ThresholdResolution" in artifact.blocking_reasons[0]
 
 
+def test_missing_evaluation_result_fails_closed_in_v2_direct_path():
+    """Mandatory Test: EvaluationResult is None, ThresholdResolution is valid.
+    
+    Strict V2 CertificationEngine MUST produce INCONCLUSIVE / Fail-Closed.
+    It MUST NOT produce CERTIFIED or an implicit score of 1.0 or fake 0 regressions.
+    ExplanationContext MUST represent metrics as None/unavailable, not fake numeric facts.
+    """
+    thresh_res = ThresholdResolution(
+        resolution_id="RES-VALID-101",
+        policy_id="POL-101",
+        policy_version="1.0.0",
+        metric=DifferenceMetric.PERCENTAGE_DIFF,
+        strategy=ThresholdStrategy.FIXED,
+        final_value=0.05,
+        status=ThresholdStatus.RESOLVED,
+        fingerprint="fp_valid_101",
+        sample_count=100,
+        effective_threshold=0.05,
+    )
+
+    cert_engine = CertificationEngine()
+    cert_ctx = CertificationContext(
+        certification_id="CERT-NO-EVAL",
+        project_id="app_no_eval",
+        evaluation_mode="CONTROLLED",
+    )
+
+    # 1. CertificationEngine with EvaluationResult = None
+    artifact = cert_engine.certify(
+        context=cert_ctx,
+        evaluation_result=None,
+        threshold_resolution=thresh_res,
+    )
+
+    assert artifact.status == CertificationStatus.INCONCLUSIVE
+    assert artifact.certified is False
+    assert artifact.score == 0.0
+    assert len(artifact.blocking_reasons) > 0
+    assert "EvaluationResult" in artifact.blocking_reasons[0]
+
+    # 2. ExplanationContextBuilder with EvaluationResult = None in strict V2
+    ctx = explanation_context_builder.build_context(
+        certification_id="CERT-NO-EVAL",
+        artifact=artifact,
+        evaluation_result=None,
+        threshold_resolution=thresh_res,
+        execution_mode="v2",
+        use_company_knowledge=False,
+    )
+
+    assert ctx.authoritative_verdict == "INCONCLUSIVE"
+    assert ctx.unique_inputs_count is None
+    assert ctx.matching_cases_count is None
+    assert ctx.regression_cases_count is None
+    assert ctx.equivalence_score is None
+
+    # Must contain missing evaluation evidence disclosure
+    missing_outputs = [m for m in ctx.missing_evidence if m.dimension == BehaviorDimension.OUTPUT]
+    assert len(missing_outputs) > 0
+    assert "EvaluationResult" in missing_outputs[0].description
+
+    # 3. DeterministicExplanationGenerator with missing EvaluationResult context
+    exp = deterministic_generator.generate_explanation(ctx)
+    assert exp.overall_verdict == "INCONCLUSIVE"
+    assert exp.is_authoritative_match is False
+    assert exp.authoritative_match_status == "INCONCLUSIVE"
+    assert exp.scope_summary.get("evaluated_inputs") is None
+    assert exp.scope_summary.get("equivalence_score") is None
+    assert "unavailable" in exp.behavioral_summary.lower()
+
+
+

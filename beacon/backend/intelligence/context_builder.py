@@ -514,6 +514,16 @@ class ExplanationContextBuilder:
                 )
             )
 
+        if is_strict_v2 and not evaluation_result:
+            missing_evidence.append(
+                MissingEvidence(
+                    dimension=BehaviorDimension.OUTPUT,
+                    description="Authoritative Phase 4 EvaluationResult was not provided for this certification run.",
+                    implication="Behavioral equivalence could not be conclusively verified due to missing evaluation authority.",
+                    status="INCONCLUSIVE",
+                )
+            )
+
         # Derive evaluated dimensions strictly from Phase 4 EvaluationResult
         evaluated_dims_set = set()
         if evaluation_result:
@@ -596,7 +606,11 @@ class ExplanationContextBuilder:
         redacted_rules = redact_sensitive_data(rules_context)
 
         # Derive evaluation counts authoritatively from Phase 4 EvaluationResult if present
-        equiv_score = 0.0
+        equiv_score: Optional[float] = None
+        total_inputs: Optional[int] = None
+        matching_count: Optional[int] = None
+        regression_count: Optional[int] = None
+
         if evaluation_result:
             if hasattr(evaluation_result, "summary") and evaluation_result.summary and (getattr(evaluation_result.summary, "total_inputs", 0) > 0 or getattr(evaluation_result.summary, "evaluated_inputs", 0) > 0):
                 total_inputs = getattr(evaluation_result.summary, "evaluated_inputs", 0) or getattr(evaluation_result.summary, "total_inputs", 0)
@@ -611,18 +625,21 @@ class ExplanationContextBuilder:
                 total_inputs = len(valid_input_ids) or regression_count or 1
                 matching_count = max(0, total_inputs - regression_count)
 
-            if total_inputs > 0:
-                equiv_score = float(matching_count) / float(total_inputs)
+            if total_inputs is not None and total_inputs > 0:
+                equiv_score = float(matching_count or 0) / float(total_inputs)
+            else:
+                equiv_score = 0.0
         elif not is_strict_v2:
             total_inputs = len(valid_input_ids) or (artifact.metrics.unique_input_count if artifact and artifact.metrics else 1)
             matching_count = (artifact.metrics.matching_case_count if artifact and artifact.metrics else 0)
             regression_count = len(differences_summary) or (artifact.metrics.regression_case_count if artifact and artifact.metrics else 0)
             equiv_score = artifact.score if artifact else 0.0
         else:
-            total_inputs = 0
-            matching_count = 0
-            regression_count = 0
-            equiv_score = 0.0
+            # Strict V2 with missing EvaluationResult: represent as unavailable/None, not fake numerical evaluation
+            total_inputs = None
+            matching_count = None
+            regression_count = None
+            equiv_score = None
 
         # 9. Construct Context
         context = ExplanationContext(
