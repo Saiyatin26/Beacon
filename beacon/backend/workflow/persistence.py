@@ -72,6 +72,17 @@ class WorkflowPersistenceStore:
                 """
             )
             conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS v2_workflow_idempotency (
+                    request_fingerprint TEXT PRIMARY KEY,
+                    workflow_run_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_wrun_app ON v2_workflow_runs(application_id);"
             )
             conn.execute(
@@ -79,6 +90,67 @@ class WorkflowPersistenceStore:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_wrun_state ON v2_workflow_runs(state);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_v2_idemp_wrun ON v2_workflow_idempotency(workflow_run_id);"
+            )
+            conn.commit()
+
+    def acquire_persistent_reservation(
+        self,
+        request_fingerprint: str,
+        workflow_run_id: str,
+    ) -> tuple[bool, Optional[str]]:
+        """Atomically reserves or checks persistent idempotency for a request fingerprint across processes."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE request_fingerprint = ?",
+                (request_fingerprint,),
+            ).fetchone()
+
+            if row:
+                existing_run_id = row["workflow_run_id"]
+                existing_status = row["status"]
+                if existing_status == "COMPLETED":
+                    return False, existing_run_id
+                if existing_status == "IN_PROGRESS" and existing_run_id != workflow_run_id:
+                    # Active concurrent execution
+                    return False, existing_run_id
+
+            conn.execute(
+                """
+                INSERT INTO v2_workflow_idempotency (request_fingerprint, workflow_run_id, status, created_at, updated_at)
+                VALUES (?, ?, 'IN_PROGRESS', ?, ?)
+                ON CONFLICT(request_fingerprint) DO UPDATE SET
+                    workflow_run_id = excluded.workflow_run_id,
+                    status = 'IN_PROGRESS',
+                    updated_at = excluded.updated_at;
+                """,
+                (request_fingerprint, workflow_run_id, now, now),
+            )
+            conn.commit()
+            return True, workflow_run_id
+
+    def finalize_persistent_reservation(
+        self,
+        request_fingerprint: str,
+        workflow_run_id: str,
+        status: str = "COMPLETED",
+    ) -> None:
+        """Updates persistent idempotency record upon completion or failure."""
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO v2_workflow_idempotency (request_fingerprint, workflow_run_id, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(request_fingerprint) DO UPDATE SET
+                    workflow_run_id = excluded.workflow_run_id,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at;
+                """,
+                (request_fingerprint, workflow_run_id, status, now, now),
             )
             conn.commit()
 
@@ -216,6 +288,7 @@ class WorkflowPersistenceStore:
         """Clears all workflow records (for test isolation)."""
         with self._lock, self._get_connection() as conn:
             conn.execute("DELETE FROM v2_workflow_runs;")
+            conn.execute("DELETE FROM v2_workflow_idempotency;")
             conn.commit()
 
     def _row_to_model(self, row: sqlite3.Row) -> WorkflowRun:

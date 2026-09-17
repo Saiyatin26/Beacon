@@ -34,8 +34,8 @@ class WorkflowIdempotencyManager:
         return self.persistence.find_run_by_fingerprint(fp, completed_only=True)
 
     @contextmanager
-    def acquire_execution_lock(self, fingerprint: str):
-        """Acquires a per-fingerprint execution lock to prevent concurrent redundant runs."""
+    def acquire_execution_lock(self, fingerprint: str, run_id: Optional[str] = None):
+        """Acquires an execution lock (thread-safe and persistent across processes) to prevent concurrent redundant runs."""
         with self._global_lock:
             if fingerprint not in self._active_locks:
                 self._active_locks[fingerprint] = threading.Lock()
@@ -45,14 +45,21 @@ class WorkflowIdempotencyManager:
         if not acquired:
             raise TimeoutError(f"Timed out acquiring workflow execution lock for fingerprint '{fingerprint[:12]}'")
 
+        res_ok = True
         try:
-            yield
+            if run_id:
+                res_ok, existing_id = self.persistence.acquire_persistent_reservation(fingerprint, run_id)
+            yield res_ok
         finally:
             lock.release()
             with self._global_lock:
                 if fingerprint in self._active_locks:
                     # Clean up unused locks
                     del self._active_locks[fingerprint]
+
+    def finalize_run(self, fingerprint: str, run_id: str, status: str = "COMPLETED") -> None:
+        """Finalizes the persistent reservation for a completed or failed run."""
+        self.persistence.finalize_persistent_reservation(fingerprint, run_id, status=status)
 
 
 workflow_idempotency = WorkflowIdempotencyManager()

@@ -8,7 +8,10 @@ forbidden_patterns = [
     (re.compile(r'get\(\s*["\']dimension["\']\s*,\s*["\']OUTPUT["\']\s*\)'), 'Default dimension OUTPUT fallback'),
     (re.compile(r'FROM\s+threshold_resolutions.*ORDER\s+BY.*LIMIT', re.IGNORECASE | re.DOTALL), 'Latest threshold resolution fallback'),
     (re.compile(r'valid_evidence_ids\[:5\]'), 'Arbitrary top-5 evidence grounding'),
-    (re.compile(r'elif\s+pol_ver'), 'Policy version threshold fallback')
+    (re.compile(r'elif\s+pol_ver'), 'Policy version threshold fallback'),
+    (re.compile(r'ref_val\s*==\s*tgt_val'), 'Ad-hoc output equality comparison bypassing Phase 4 BehavioralEvaluationEngine'),
+    (re.compile(r'cls_str\s*=\s*"MATCH"\s*if\s*ref_val\s*==\s*tgt_val'), 'Ad-hoc certification case reconstruction bypassing EvaluationResult'),
+    (re.compile(r'ThresholdPolicy\(.*FIXED.*0\.0'), 'Default zero-diff threshold policy fallback creation in workflow'),
 ]
 
 violations = []

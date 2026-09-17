@@ -28,6 +28,33 @@ class WorkflowState(str, Enum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
+VALID_WORKFLOW_STATE_TRANSITIONS: dict[WorkflowState, set[WorkflowState]] = {
+    WorkflowState.INITIALIZED: {WorkflowState.VALIDATING, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.VALIDATING: {WorkflowState.CAPTURING_EVIDENCE, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.CAPTURING_EVIDENCE: {WorkflowState.EVALUATING, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.EVALUATING: {WorkflowState.RESOLVING_ORACLES, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.RESOLVING_ORACLES: {WorkflowState.RESOLVING_THRESHOLDS, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.RESOLVING_THRESHOLDS: {WorkflowState.CERTIFYING, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.CERTIFYING: {WorkflowState.EXPLAINING, WorkflowState.PERSISTING, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.EXPLAINING: {WorkflowState.PERSISTING, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.PERSISTING: {WorkflowState.COMPLETED, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.COMPLETED: set(),
+    WorkflowState.FAILED: {WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
+    WorkflowState.INCONCLUSIVE: {WorkflowState.INCONCLUSIVE, WorkflowState.FAILED},
+}
+
+
+def is_valid_state_transition(current: WorkflowState, target: WorkflowState, is_recovery: bool = False) -> bool:
+    """Validates whether a workflow state transition is permissible."""
+    if current == target:
+        return True
+    if is_recovery:
+        # In recovery, an in-flight uncompleted run may transition to COMPLETED, FAILED, or INCONCLUSIVE
+        return target in (WorkflowState.COMPLETED, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE)
+    allowed = VALID_WORKFLOW_STATE_TRANSITIONS.get(current, set())
+    return target in allowed
+
+
 class WorkflowErrorCode(str, Enum):
     """Machine-readable, unambiguous error taxonomy for V2 workflow failures."""
     INVALID_INPUT = "INVALID_INPUT"

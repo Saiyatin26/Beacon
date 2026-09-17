@@ -12,6 +12,7 @@ from auth import (
     Permission,
     User,
     get_current_active_user,
+    require_system_admin,
     verify_user_project_permission,
 )
 from workflow.models import (
@@ -115,12 +116,9 @@ def list_workflow_runs(
     summary="Trigger interrupted workflow recovery scan",
 )
 def recover_workflows(
-    current_user: User = Depends(get_current_active_user),
+    current_user: User = Depends(require_system_admin),
 ) -> dict[str, Any]:
     """Scans and recovers any non-terminal workflow runs safely."""
-    if getattr(current_user, "role", None) not in ("admin", "system_admin"):
-        verify_user_project_permission(current_user, "*", Permission.ADMIN)
-
     recovered = workflow_recovery.recover_interrupted_workflows()
     return {
         "status": "SUCCESS",

@@ -5,23 +5,23 @@ Phase 1 (App Registry & Preflight)
     ↓
 Phase 2 (Adapters & Dynamic Ingestion)
     ↓
-Phase 3 (Evidence Records & Evidence Store)
+Phase 3 (Evidence Records, Manifest & EvidenceBundle)
     ↓
-Phase 4 (Behavioral Evaluation Result)
+Phase 4 (BehavioralEvaluationEngine — Authoritative EvaluationResult)
     ↓
-Phase 5 (Business Rule Understanding & Controlled Mode)
+Phase 5 (ControlledAssessmentEngine — Controlled Mode Assessment)
     ↓
-Phase 6 (Behavioral Invariant Discovery)
+Phase 6 (RuleDiscoveryEngine — Candidate Discovery)
     ↓
-Phase 7 (Reconciled OracleSet)
+Phase 7 (RuleReconciliationEngine — Authoritative OracleSet)
     ↓
-Phase 8 (Exact ThresholdResolution & Fingerprint)
+Phase 8 (ThresholdEngine — Exact ThresholdResolution & Fingerprint)
     ↓
-CertificationEngine (Authoritative Artifact)
+CertificationEngine (Authoritative CertificationArtifact)
     ↓
 Phase 10 (Grounded Explanation & Grounding Validation)
     ↓
-Phase 11 (Transactional WAL Persistence & Structured Audit Logging)
+Phase 11 (Atomic SQLite Persistence & Structured Audit Logging)
 
 Zero reconstruction of missing authority: fails closed immediately.
 """
@@ -40,14 +40,20 @@ from application.registry import ApplicationRegistry, application_registry
 from application.resolver import ApplicationResolutionError, ApplicationResolver, application_resolver
 from certification.certification_engine import CertificationEngine, certification_engine
 from certification.models import (
+    BehavioralRegression,
     CertificationArtifact,
     CertificationCase,
     CertificationContext,
+    CertificationInputSet,
     CertificationPolicy,
     CertificationStatus,
+    CertificationTestInput,
     compute_artifact_content_hash,
+    compute_input_set_canonical_hash,
 )
 from certification.repository import CertificationRepository, certification_repository
+from discovery.engine import RuleDiscoveryEngine
+from discovery.models import DiscoveryResult
 from evaluation.engine import BehavioralEvaluationEngine, behavioral_evaluation_engine
 from evaluation.models import (
     BehaviorDifference,
@@ -61,6 +67,8 @@ from evaluation.models import (
 from execution.evidence_models import (
     EvidenceBundle,
     EvidenceCaptureStatus,
+    EvidenceManifest,
+    EvidenceManifestItem,
     EvidencePersistenceStatus,
     EvidenceRecord,
     EvidenceType,
@@ -72,7 +80,11 @@ from intelligence.engine import IntelligenceEngine, intelligence_engine
 from intelligence.models import CertificationExplanation, ExplanationRequest
 from operations.logging_config import log_operational_event
 from oracle.models import OracleSet
+from reconciliation.engine import RuleReconciliationEngine
 from reconciliation.persistence import ReconciliationPersistenceStore, reconciliation_persistence
+from rules.engine import ControlledAssessmentEngine
+from rules.models import BusinessRule, ControlledEvaluationResult
+from rules.registry import RuleRegistry, rule_registry
 from threshold.engine import ThresholdEngine, threshold_engine
 from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdResolution, ThresholdStrategy
 from threshold.persistence import ThresholdPersistenceStore, threshold_persistence
@@ -99,6 +111,10 @@ class CanonicalV2WorkflowEngine:
         app_resolver: Optional[ApplicationResolver] = None,
         ev_store: Optional[EvidenceStore] = None,
         eval_eng: Optional[BehavioralEvaluationEngine] = None,
+        controlled_eng: Optional[ControlledAssessmentEngine] = None,
+        rules_registry: Optional[RuleRegistry] = None,
+        discovery_eng: Optional[RuleDiscoveryEngine] = None,
+        reconcile_eng: Optional[RuleReconciliationEngine] = None,
         rec_persistence: Optional[ReconciliationPersistenceStore] = None,
         thresh_eng: Optional[ThresholdEngine] = None,
         thresh_persistence: Optional[ThresholdPersistenceStore] = None,
@@ -113,6 +129,10 @@ class CanonicalV2WorkflowEngine:
         self.app_resolver = app_resolver or application_resolver
         self.ev_store = ev_store or evidence_store
         self.eval_eng = eval_eng or behavioral_evaluation_engine
+        self.controlled_eng = controlled_eng or ControlledAssessmentEngine()
+        self.rules_registry = rules_registry or rule_registry
+        self.discovery_eng = discovery_eng or RuleDiscoveryEngine()
+        self.reconcile_eng = reconcile_eng or RuleReconciliationEngine()
         self.rec_persistence = rec_persistence or reconciliation_persistence
         self.thresh_eng = thresh_eng or threshold_engine
         self.thresh_persistence = thresh_persistence or threshold_persistence
@@ -169,34 +189,44 @@ class CanonicalV2WorkflowEngine:
                     return init_res
                 spec, ref_adapter, target_adapter, test_inputs = init_res
 
-                # 3. Stage 2: Phase 3 Evidence Collection
+                # 3. Stage 2: Phase 3 Evidence Collection & Bundle Assembly
                 ev_res = self._stage_capture_evidence(spec, ref_adapter, target_adapter, test_inputs, run, timings)
                 if isinstance(ev_res, WorkflowResult):
                     return ev_res
-                all_evidence_records, evaluated_input_cases = ev_res
+                bundle, all_evidence_records, evaluated_input_cases = ev_res
 
-                # 4. Stage 3: Phase 4 Behavioral Evaluation
-                eval_result = self._stage_evaluate_behavior(spec, evaluated_input_cases, run, timings)
+                # 4. Stage 3: Phase 4 Authoritative Behavioral Evaluation
+                eval_result = self._stage_evaluate_behavior(spec, bundle, test_inputs, run, timings)
                 if isinstance(eval_result, WorkflowResult):
                     return eval_result
                 if not eval_result:
                     return self._fail_run(run, WorkflowErrorCode.EVALUATION_FAILED, "EvaluationResult missing.")
 
-                # 5. Stage 4: Phase 7 OracleSet Verification
-                oracle_set = self._stage_resolve_oracles(spec, run, timings)
+                # 5. Stage 4: Phase 5 Controlled Mode Assessment (when applicable)
+                user_rules, ctrl_result = self._stage_evaluate_controlled_mode(spec, bundle, eval_result, run, timings)
+                if isinstance(ctrl_result, WorkflowResult):
+                    return ctrl_result
+
+                # 6. Stage 5: Phase 6 Invariant Discovery (when applicable)
+                disc_result = self._stage_discover_rules(spec, bundle, eval_result, request, run, timings)
+                if isinstance(disc_result, WorkflowResult):
+                    return disc_result
+
+                # 7. Stage 6: Phase 7 OracleSet Reconciliation
+                oracle_set = self._stage_reconcile_oracles(spec, user_rules, disc_result, bundle, run, timings)
                 if isinstance(oracle_set, WorkflowResult):
                     return oracle_set
                 if not oracle_set:
                     return self._fail_run(run, WorkflowErrorCode.ORACLE_AUTHORITY_MISSING, "OracleSet resolution missing.")
 
-                # 6. Stage 5: Phase 8 Exact Threshold Resolution
+                # 8. Stage 7: Phase 8 Exact Threshold Resolution
                 threshold_res = self._stage_resolve_thresholds(spec, run, timings)
                 if isinstance(threshold_res, WorkflowResult):
                     return threshold_res
                 if not threshold_res:
                     return self._fail_run(run, WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING, "ThresholdResolution missing.")
 
-                # 7. Stage 6: Certification Engine Execution
+                # 9. Stage 8: Certification Engine Execution
                 artifact = self._stage_execute_certification(
                     spec=spec,
                     ref_adapter=ref_adapter,
@@ -212,7 +242,7 @@ class CanonicalV2WorkflowEngine:
                 if isinstance(artifact, WorkflowResult):
                     return artifact
 
-                # 8. Stage 7: Phase 10 Grounded Explanation (Optional)
+                # 10. Stage 9: Phase 10 Grounded Explanation (Optional)
                 explanation_dict = self._stage_generate_explanation(
                     artifact=artifact,
                     eval_result=eval_result,
@@ -223,10 +253,10 @@ class CanonicalV2WorkflowEngine:
                     run=run,
                 )
 
-                # 9. Stage 8: Transactional Persistence & Audit
+                # 11. Stage 10: Atomic Persistence & Audit
                 audit_status_str = self._stage_persist_and_audit(
                     artifact=artifact,
-                    evaluated_input_cases=evaluated_input_cases,
+                    test_inputs=test_inputs,
                     spec=spec,
                     threshold_res=threshold_res,
                     eval_result=eval_result,
@@ -319,7 +349,7 @@ class CanonicalV2WorkflowEngine:
             spec=spec,
             custom_inputs=resolved_custom_inputs,
         )
-        if not test_inputs:
+        if not test_inputs or len(test_inputs) == 0:
             return self._fail_run(
                 run,
                 WorkflowErrorCode.INVALID_INPUT,
@@ -345,7 +375,11 @@ class CanonicalV2WorkflowEngine:
         session_id = f"SESS-{run.workflow_run_id}"
         run.evidence_session_id = session_id
         all_evidence_records: list[EvidenceRecord] = []
+        manifest_items: list[EvidenceManifestItem] = []
         evaluated_input_cases: list[dict[str, Any]] = []
+
+        ref_exec_ids = []
+        tgt_exec_ids = []
 
         for idx, inp in enumerate(test_inputs):
             inp_vals = getattr(inp, "values", None) or getattr(inp, "input_values", None) or getattr(inp, "data", None) or (inp if isinstance(inp, dict) else {})
@@ -363,20 +397,42 @@ class CanonicalV2WorkflowEngine:
                 ref_val = ref_res
 
             ref_eid = f"EVID-REF-{run.workflow_run_id[:6]}-{idx+1}"
+            ref_exec_id = f"EXEC-REF-{run.workflow_run_id[:6]}-{idx+1}"
+            ref_exec_ids.append(ref_exec_id)
+
+            ref_payload = {
+                "output": ref_val,
+                "input": inp_vals,
+                "raw_output": getattr(ref_res, "raw_outputs", ref_val),
+            }
+
             rec_ref = EvidenceRecord(
                 evidence_id=ref_eid,
                 session_id=session_id,
+                execution_id=ref_exec_id,
+                application_id=spec.application_id,
                 role="reference",
                 input_id=inp_id,
                 evidence_type=EvidenceType.OUTPUT,
-                content_hash=hashlib.sha256(json.dumps(ref_val, sort_keys=True, default=str).encode()).hexdigest(),
-                payload={"output": ref_val, "input": inp_vals},
-                size_bytes=len(str(ref_val)),
+                payload=ref_payload,
                 capture_status=EvidenceCaptureStatus.CAPTURED,
                 persistence_status=EvidencePersistenceStatus.PERSISTED,
             )
             self.ev_store.save_record(rec_ref)
             all_evidence_records.append(rec_ref)
+
+            manifest_items.append(
+                EvidenceManifestItem(
+                    evidence_id=ref_eid,
+                    evidence_type=EvidenceType.OUTPUT,
+                    role="reference",
+                    input_id=inp_id,
+                    content_hash=rec_ref.content_hash,
+                    size_bytes=rec_ref.size_bytes,
+                    capture_status=EvidenceCaptureStatus.CAPTURED,
+                    persistence_status=EvidencePersistenceStatus.PERSISTED,
+                )
+            )
 
             # Execute target
             tgt_res = target_adapter.execute(inp_vals) if hasattr(target_adapter, "execute") else target_adapter(inp_vals)
@@ -390,20 +446,42 @@ class CanonicalV2WorkflowEngine:
                 tgt_val = tgt_res
 
             tgt_eid = f"EVID-TGT-{run.workflow_run_id[:6]}-{idx+1}"
+            tgt_exec_id = f"EXEC-TGT-{run.workflow_run_id[:6]}-{idx+1}"
+            tgt_exec_ids.append(tgt_exec_id)
+
+            tgt_payload = {
+                "output": tgt_val,
+                "input": inp_vals,
+                "raw_output": getattr(tgt_res, "raw_outputs", tgt_val),
+            }
+
             rec_tgt = EvidenceRecord(
                 evidence_id=tgt_eid,
                 session_id=session_id,
+                execution_id=tgt_exec_id,
+                application_id=spec.application_id,
                 role="target",
                 input_id=inp_id,
                 evidence_type=EvidenceType.OUTPUT,
-                content_hash=hashlib.sha256(json.dumps(tgt_val, sort_keys=True, default=str).encode()).hexdigest(),
-                payload={"output": tgt_val, "input": inp_vals},
-                size_bytes=len(str(tgt_val)),
+                payload=tgt_payload,
                 capture_status=EvidenceCaptureStatus.CAPTURED,
                 persistence_status=EvidencePersistenceStatus.PERSISTED,
             )
             self.ev_store.save_record(rec_tgt)
             all_evidence_records.append(rec_tgt)
+
+            manifest_items.append(
+                EvidenceManifestItem(
+                    evidence_id=tgt_eid,
+                    evidence_type=EvidenceType.OUTPUT,
+                    role="target",
+                    input_id=inp_id,
+                    content_hash=rec_tgt.content_hash,
+                    size_bytes=rec_tgt.size_bytes,
+                    capture_status=EvidenceCaptureStatus.CAPTURED,
+                    persistence_status=EvidencePersistenceStatus.PERSISTED,
+                )
+            )
 
             evaluated_input_cases.append({
                 "input_id": inp_id,
@@ -414,113 +492,229 @@ class CanonicalV2WorkflowEngine:
                 "tgt_eid": tgt_eid,
             })
 
+        # Assemble canonical EvidenceManifest & EvidenceBundle
+        input_set_id = f"INPSET-{run.workflow_run_id[:8]}"
+        input_set_hash = compute_input_set_canonical_hash(test_inputs)
+
+        manifest = EvidenceManifest(
+            session_id=session_id,
+            correlation_id=run.workflow_run_id,
+            application_id=spec.application_id,
+            input_set_id=input_set_id,
+            input_set_hash=input_set_hash,
+            items=manifest_items,
+        )
+
+        bundle = EvidenceBundle(
+            bundle_id=f"BUNDLE-{run.workflow_run_id}",
+            session_id=session_id,
+            correlation_id=run.workflow_run_id,
+            application_id=spec.application_id,
+            input_set_id=input_set_id,
+            reference_execution_ids=ref_exec_ids,
+            target_execution_ids=tgt_exec_ids,
+            manifest=manifest,
+            bundle_hash=manifest.bundle_hash,
+            records=all_evidence_records,
+            persistence_status=EvidencePersistenceStatus.PERSISTED,
+        )
+
+        self.ev_store.save_bundle(bundle)
+
+        # Verify bundle integrity
+        recomputed_bundle_hash = manifest.compute_bundle_hash()
+        if bundle.bundle_hash != recomputed_bundle_hash:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.EVIDENCE_CAPTURE_FAILED,
+                f"EvidenceBundle tamper detection: hash mismatch '{bundle.bundle_hash}' vs '{recomputed_bundle_hash}'.",
+            )
+
         timings["evidence_capture_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
-        return all_evidence_records, evaluated_input_cases
+        return bundle, all_evidence_records, evaluated_input_cases
 
     def _stage_evaluate_behavior(
         self,
         spec: ApplicationSpec,
-        evaluated_input_cases: list[dict[str, Any]],
+        bundle: EvidenceBundle,
+        test_inputs: list[Any],
         run: WorkflowRun,
         timings: dict[str, float],
-    ) -> Optional[EvaluationResult]:
+    ) -> Any:
         t_stage = time.perf_counter()
         run.state = WorkflowState.EVALUATING
         self.persistence.save_run(run)
 
-        input_results: list[InputEvaluationResult] = []
-        differences: list[BehaviorDifference] = []
-        equiv_count = 0
-        diff_count = 0
+        # Fail closed immediately if bundle hash does not match manifest
+        if not bundle.manifest or bundle.bundle_hash != bundle.manifest.compute_bundle_hash():
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.EVIDENCE_TAMPERED,
+                f"EvidenceBundle integrity failure: bundle_hash mismatch detected.",
+            )
 
-        for idx, c in enumerate(evaluated_input_cases):
-            inp_id = c["input_id"]
-            ref_val = c["ref_val"]
-            tgt_val = c["tgt_val"]
-            ref_eid = c["ref_eid"]
-            tgt_eid = c["tgt_eid"]
+        # Invoke the authoritative Phase 4 BehavioralEvaluationEngine
+        comparison_pol = getattr(spec, "comparison_policy", None) or "default_v2"
+        try:
+            eval_result = self.eval_eng.evaluate_bundle(
+                bundle=bundle,
+                policy=comparison_pol,
+                verify_integrity=True,
+            )
+        except Exception as exc:
+            logger.error(f"Phase 4 BehavioralEvaluationEngine failed for '{run.workflow_run_id}': {exc}", exc_info=True)
+            return self._fail_run(run, WorkflowErrorCode.EVALUATION_FAILED, f"BehavioralEvaluationEngine failed: {str(exc)}")
 
-            is_match = (ref_val == tgt_val)
-            if is_match:
-                equiv_count += 1
-                input_results.append(
-                    InputEvaluationResult(
-                        input_id=inp_id,
-                        verdict=EvaluationVerdict.EQUIVALENT,
-                        status=EvaluationVerdict.EQUIVALENT,
-                        differences=[],
-                    )
-                )
-            else:
-                diff_count += 1
-                diff_id = f"DIFF-{run.workflow_run_id[:6]}-{idx+1}"
-                b_diff = BehaviorDifference(
-                    difference_id=diff_id,
-                    dimension=BehaviorDimension.OUTPUT,
-                    difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
-                    reference_value=ref_val,
-                    target_value=tgt_val,
-                    input_id=inp_id,
-                    reference_evidence_id=ref_eid,
-                    target_evidence_id=tgt_eid,
-                    evidence_ids=[ref_eid, tgt_eid],
-                    details={"ref": ref_val, "tgt": tgt_val},
-                )
-                differences.append(b_diff)
-                input_results.append(
-                    InputEvaluationResult(
-                        input_id=inp_id,
-                        verdict=EvaluationVerdict.DIFFERENT,
-                        status=EvaluationVerdict.DIFFERENT,
-                        differences=[b_diff],
-                    )
-                )
+        if not eval_result or not getattr(eval_result, "evaluation_id", None):
+            return self._fail_run(run, WorkflowErrorCode.EVALUATION_FAILED, "EvaluationResult is missing or malformed.")
 
-        total_cases = len(evaluated_input_cases)
-        eval_score = float(equiv_count) / float(total_cases) if total_cases > 0 else 0.0
-        eval_verdict = EvaluationVerdict.EQUIVALENT if diff_count == 0 else EvaluationVerdict.DIFFERENT
+        # Fail closed on tamper / integrity issues reported by evaluation engine
+        if eval_result.metadata and eval_result.metadata.get("integrity_issues_count", 0) > 0:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.EVIDENCE_TAMPERED,
+                f"Behavioral evaluation rejected bundle due to integrity violations: {eval_result.metadata.get('integrity_issues')}",
+            )
 
-        eval_result = EvaluationResult(
-            evaluation_id=f"EVAL-{run.workflow_run_id}",
-            application_id=spec.application_id,
-            run_id=run.workflow_run_id,
-            verdict=eval_verdict,
-            summary=EvaluationSummary(
-                total_inputs=total_cases,
-                evaluated_inputs=total_cases,
-                equivalent_inputs=equiv_count,
-                different_inputs=diff_count,
-                inconclusive_inputs=0,
-                equivalence_score=eval_score,
-                total_differences=len(differences),
-            ),
-            input_results=input_results,
-            differences=differences,
-            dimensions_evaluated=[BehaviorDimension.OUTPUT],
-        )
+        # Verify evaluation belongs to current application and inputs
+        if eval_result.summary.total_inputs != len(test_inputs):
+            logger.warning(
+                f"Evaluation total inputs ({eval_result.summary.total_inputs}) != test inputs count ({len(test_inputs)})"
+            )
+
         run.evaluation_id = eval_result.evaluation_id
         timings["evaluation_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
         return eval_result
 
-    def _stage_resolve_oracles(
+    def _stage_evaluate_controlled_mode(
         self,
         spec: ApplicationSpec,
+        bundle: EvidenceBundle,
+        eval_result: EvaluationResult,
         run: WorkflowRun,
         timings: dict[str, float],
-    ) -> Optional[OracleSet]:
+    ) -> Any:
+        t_stage = time.perf_counter()
+        is_controlled = bool(spec.rule_config and getattr(spec.rule_config, "mode", "").upper() == "CONTROLLED")
+        user_rules: list[BusinessRule] = []
+
+        try:
+            user_rules = self.rules_registry.list_rules()
+        except Exception:
+            user_rules = []
+
+        if is_controlled or len(user_rules) > 0:
+            try:
+                ctrl_result = self.controlled_eng.evaluate_controlled_mode(
+                    rules=user_rules,
+                    bundle=bundle,
+                    phase4_result=eval_result,
+                )
+                run.metadata["controlled_evaluation_id"] = ctrl_result.evaluation_id
+                run.metadata["controlled_compliance_verdict"] = (
+                    ctrl_result.overall_verdict.value
+                    if hasattr(ctrl_result.overall_verdict, "value")
+                    else str(ctrl_result.overall_verdict)
+                )
+                timings["controlled_mode_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
+                return user_rules, ctrl_result
+            except Exception as exc:
+                logger.warning(f"Controlled mode evaluation error for '{run.workflow_run_id}': {exc}")
+                return user_rules, None
+
+        run.metadata["phase5_applicable"] = False
+        timings["controlled_mode_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
+        return user_rules, None
+
+    def _stage_discover_rules(
+        self,
+        spec: ApplicationSpec,
+        bundle: EvidenceBundle,
+        eval_result: EvaluationResult,
+        request: WorkflowRunRequest,
+        run: WorkflowRun,
+        timings: dict[str, float],
+    ) -> Any:
+        t_stage = time.perf_counter()
+        enable_disc = getattr(request, "enable_discovery", False) or getattr(spec, "enable_discovery", False)
+        if enable_disc:
+            try:
+                disc_result = self.discovery_eng.discover_rules(
+                    bundle=bundle,
+                    phase4_result=eval_result,
+                    persist=True,
+                )
+                run.metadata["discovery_id"] = disc_result.discovery_id
+                run.metadata["discovered_candidate_count"] = len(disc_result.candidates)
+                timings["discovery_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
+                return disc_result
+            except Exception as exc:
+                logger.warning(f"Rule discovery failed for '{run.workflow_run_id}': {exc}")
+                return None
+
+        run.metadata["phase6_applicable"] = False
+        timings["discovery_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
+        return None
+
+    def _stage_reconcile_oracles(
+        self,
+        spec: ApplicationSpec,
+        user_rules: list[BusinessRule],
+        disc_result: Optional[DiscoveryResult],
+        bundle: EvidenceBundle,
+        run: WorkflowRun,
+        timings: dict[str, float],
+    ) -> Any:
         t_stage = time.perf_counter()
         run.state = WorkflowState.RESOLVING_ORACLES
         self.persistence.save_run(run)
 
+        # 1. First attempt authoritative reconciliation through Phase 7 RuleReconciliationEngine
+        recon_oracle_set: Optional[OracleSet] = None
         try:
-            oracle_set = self.app_resolver.resolve_oracle_set(spec=spec)
+            recon_res = self.reconcile_eng.reconcile(
+                application_id=spec.application_id,
+                user_rules=user_rules,
+                discovery_result=disc_result,
+                evidence_bundle=bundle,
+                session_id=bundle.session_id,
+                persist=True,
+            )
+            if recon_res and recon_res.oracle_set and (len(recon_res.oracle_set.rules) > 0 or len(recon_res.oracle_set.oracles) > 0):
+                recon_oracle_set = recon_res.oracle_set
         except Exception as exc:
-            logger.warning(f"Oracle set resolution error: {exc}")
-            return None
+            logger.debug(f"Rule reconciliation note for '{spec.application_id}': {exc}")
 
-        if oracle_set:
-            run.oracle_set_id = getattr(oracle_set, "oracle_set_id", "")
-            run.oracle_set_hash = getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", "")
+        # 2. Fall back to application resolver registered OracleSet if reconciliation had no user/discovered rules
+        oracle_set = recon_oracle_set or self.app_resolver.resolve_oracle_set(spec=spec)
+
+        if not oracle_set:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
+                f"No authoritative OracleSet could be resolved for application '{spec.application_id}'.",
+            )
+
+        oset_id = getattr(oracle_set, "oracle_set_id", "")
+        oset_hash = getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", "")
+        if not oset_id or not oset_hash:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
+                f"OracleSet authority is missing required identity or cryptographic hash.",
+            )
+
+        # Verify no empty OracleSet is treated as valid certification authority
+        rules_count = len(getattr(oracle_set, "rules", [])) + len(getattr(oracle_set, "oracles", []))
+        if rules_count == 0:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
+                f"OracleSet '{oset_id}' contains zero rules/oracles (empty oracle authority forbidden).",
+            )
+
+        run.oracle_set_id = oset_id
+        run.oracle_set_hash = oset_hash
         timings["oracle_resolution_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
         return oracle_set
 
@@ -529,26 +723,43 @@ class CanonicalV2WorkflowEngine:
         spec: ApplicationSpec,
         run: WorkflowRun,
         timings: dict[str, float],
-    ) -> Optional[ThresholdResolution]:
+    ) -> Any:
         t_stage = time.perf_counter()
         run.state = WorkflowState.RESOLVING_THRESHOLDS
         self.persistence.save_run(run)
 
+        # Retrieve authoritative policy without fabricating silent defaults
         th_policy = self.thresh_persistence.get_policy(f"POL-{spec.application_id}")
         if not th_policy:
-            th_policy = ThresholdPolicy(
-                policy_id=f"POL-{spec.application_id}",
-                version="1.0.0",
-                metric=DifferenceMetric.ABSOLUTE_DIFF,
-                strategy=ThresholdStrategy.FIXED,
-                parameters={"value": 0.0},
+            th_policy = self.thresh_persistence.get_policy(spec.application_id)
+
+        if not th_policy:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+                f"Authoritative ThresholdPolicy 'POL-{spec.application_id}' is missing. Production workflows cannot fabricate default policies.",
             )
-            self.thresh_persistence.save_policy(th_policy)
 
         threshold_res = self.thresh_eng.resolve_threshold(
             metric=th_policy.metric,
             policy=th_policy,
         )
+        if not threshold_res:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+                f"Failed to resolve threshold for metric '{th_policy.metric.value}'.",
+            )
+
+        # Strict Authority Check: threshold fingerprint verification
+        expected_fp = threshold_res.compute_fingerprint()
+        if threshold_res.fingerprint != expected_fp:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.THRESHOLD_FINGERPRINT_MISMATCH,
+                f"Threshold fingerprint mismatch: expected '{expected_fp}', found '{threshold_res.fingerprint}'.",
+            )
+
         self.thresh_persistence.save_resolution(threshold_res)
 
         run.threshold_resolution_id = threshold_res.resolution_id
@@ -615,6 +826,13 @@ class CanonicalV2WorkflowEngine:
             threshold_resolution=threshold_res,
         )
 
+        if not artifact or not getattr(artifact, "certification_id", None):
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.CERTIFICATION_FAILED,
+                "CertificationEngine failed to produce a valid CertificationArtifact.",
+            )
+
         run.certification_id = artifact.certification_id
         status_str = artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status)
         run.certification_status = status_str
@@ -676,7 +894,7 @@ class CanonicalV2WorkflowEngine:
     def _stage_persist_and_audit(
         self,
         artifact: CertificationArtifact,
-        evaluated_input_cases: list[dict[str, Any]],
+        test_inputs: list[Any],
         spec: ApplicationSpec,
         threshold_res: ThresholdResolution,
         eval_result: EvaluationResult,
@@ -687,36 +905,53 @@ class CanonicalV2WorkflowEngine:
         run.state = WorkflowState.PERSISTING
         self.persistence.save_run(run)
 
-        # Save artifact in repository
-        self.cert_repo.save_artifact(artifact)
+        # 1. Build canonical CertificationInputSet
+        input_set_id = f"INPSET-{artifact.certification_id}"
+        input_set_hash = compute_input_set_canonical_hash(test_inputs)
+        input_set = CertificationInputSet(
+            input_set_id=input_set_id,
+            version=1,
+            generator_type="canonical_workflow",
+            input_count=len(test_inputs),
+            canonical_hash=input_set_hash,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
 
-        # Persist per-input cases for full Phase 11 reproducibility
+        # 2. Derive CertificationCases strictly from authoritative EvaluationResult & Artifact
         cases_to_save: list[CertificationCase] = []
-        for idx, c in enumerate(evaluated_input_cases):
-            inp_id = c["input_id"]
-            ref_val = c["ref_val"]
-            tgt_val = c["tgt_val"]
-            cls_str = "MATCH" if ref_val == tgt_val else "MODERN_REGRESSION"
-            inp_json = json.dumps(c["input_values"], sort_keys=True, default=str)
+        for idx, item_res in enumerate(eval_result.input_results):
+            inp_id = item_res.input_id
+            is_equiv = (item_res.verdict == EvaluationVerdict.EQUIVALENT)
+            cls_str = "MATCH" if is_equiv else "MODERN_REGRESSION"
+            diff_str = json.dumps([d.model_dump(mode="json") for d in item_res.differences], sort_keys=True)
+            inp_json = json.dumps(getattr(test_inputs[idx], "values", test_inputs[idx]), sort_keys=True, default=str) if idx < len(test_inputs) else "{}"
+
             cases_to_save.append(
                 CertificationCase(
                     case_id=f"CASE-{artifact.certification_id}-{idx+1}",
                     run_id=artifact.certification_id,
-                    input_set_id=artifact.input_set_id,
+                    input_set_id=input_set_id,
                     case_index=idx,
                     input_id=inp_id,
                     input_json=inp_json,
                     input_hash=hashlib.sha256(inp_json.encode()).hexdigest(),
-                    legacy_output_json=json.dumps(ref_val, sort_keys=True, default=str),
-                    modern_output_json=json.dumps(tgt_val, sort_keys=True, default=str),
+                    legacy_output_json=diff_str,
+                    modern_output_json=diff_str,
                     execution_time_ms=0.0,
-                    oracle_result="PASS" if ref_val == tgt_val else "VIOLATED",
+                    oracle_result="PASS" if is_equiv else "VIOLATED",
                     classification=cls_str,
-                    severity="medium" if ref_val != tgt_val else "none",
+                    severity="none" if is_equiv else "medium",
                 )
             )
-        self.cert_repo.save_certification_cases(cases_to_save)
 
+        # 3. Atomically persist CertificationInputSet, Cases, and Artifact in a single SQLite transaction
+        self.cert_repo.save_certification_run_atomic(
+            input_set=input_set,
+            cases=cases_to_save,
+            artifact=artifact,
+        )
+
+        # 4. Record structured audit log
         status_str = artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status)
         audit_ok = audit_logger.log(
             project_id=spec.application_id,
@@ -734,6 +969,8 @@ class CanonicalV2WorkflowEngine:
         )
         audit_status_str = "PERSISTED" if audit_ok else "FAILED"
 
+        # 5. Finalize persistent reservation and mark workflow COMPLETED
+        self.idempotency_mgr.finalize_run(run.request_fingerprint, run.workflow_run_id, status="COMPLETED")
         run.state = WorkflowState.COMPLETED
         run.completed_at = datetime.now(timezone.utc).isoformat()
         timings["persistence_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
@@ -744,7 +981,7 @@ class CanonicalV2WorkflowEngine:
         run: WorkflowRun,
         error_code: WorkflowErrorCode,
         error_message: str,
-        audit_status: str = "PERSISTED",
+        audit_status: str = "FAILED",
     ) -> WorkflowResult:
         """Helper to fail a WorkflowRun in a fail-closed, auditable state."""
         run.state = WorkflowState.FAILED
@@ -753,6 +990,7 @@ class CanonicalV2WorkflowEngine:
         run.completed_at = datetime.now(timezone.utc).isoformat()
         try:
             self.persistence.save_run(run)
+            self.idempotency_mgr.finalize_run(run.request_fingerprint, run.workflow_run_id, status="FAILED")
         except Exception:
             pass
 
@@ -799,9 +1037,10 @@ class CanonicalV2WorkflowEngine:
             artifact_hash=artifact.artifact_hash if artifact else None,
             threshold_resolution_id=run.threshold_resolution_id,
             threshold_resolution_fingerprint=run.threshold_resolution_fingerprint,
-            unique_input_count=artifact.metrics.unique_input_count if artifact and artifact.metrics else None,
+            unique_input_count=artifact.metrics.unique_input_count if (artifact and artifact.metrics) else None,
             regressions_count=len(artifact.regressions) if artifact else 0,
             regressions=[r.model_dump(mode="json") for r in artifact.regressions] if artifact else [],
+            explanation=None,
             audit_status="PERSISTED",
             timings_ms=run.stage_timings_ms,
         )
