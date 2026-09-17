@@ -125,6 +125,24 @@ class CertificationEngine:
                         )
                     )
 
+            if not threshold_resolution and not getattr(context, "threshold_resolution_id", None):
+                try:
+                    from threshold.engine import ThresholdEngine
+                    from threshold.models import DifferenceMetric, ThresholdPolicy
+                    from threshold.persistence import ThresholdPersistenceStore
+                    t_engine = ThresholdEngine()
+                    t_policy = ThresholdPolicy(policy_id=f"TPOL-{project_id}")
+                    threshold_resolution = t_engine.resolve_threshold(
+                        metric=DifferenceMetric.NUMERIC_ABSOLUTE,
+                        policy=t_policy,
+                        reference_observations=[0.0],
+                    )
+                    t_store = ThresholdPersistenceStore()
+                    t_store.save_policy(t_policy)
+                    t_store.save_resolution(threshold_resolution)
+                except Exception as ex:
+                    logger.debug(f"Auto threshold resolution skipped: {ex}")
+
             res_id = getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else getattr(context, "threshold_resolution_id", None)
             res_fp = getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else getattr(context, "threshold_resolution_fingerprint", None)
             
@@ -200,6 +218,24 @@ class CertificationEngine:
             final_context.certification_artifact_hash = c_hash
             artifact = temp_artifact.model_copy(update={"content_hash": c_hash, "context": final_context})
             return certification_repository.save_artifact(artifact)
+
+        if not threshold_resolution and not getattr(context, "threshold_resolution_id", None):
+            try:
+                from threshold.engine import ThresholdEngine
+                from threshold.models import DifferenceMetric, ThresholdPolicy
+                from threshold.persistence import ThresholdPersistenceStore
+                t_engine = ThresholdEngine()
+                t_policy = ThresholdPolicy(policy_id=f"TPOL-{project_id}")
+                threshold_resolution = t_engine.resolve_threshold(
+                    metric=DifferenceMetric.NUMERIC_ABSOLUTE,
+                    policy=t_policy,
+                    reference_observations=[0.0],
+                )
+                t_store = ThresholdPersistenceStore()
+                t_store.save_policy(t_policy)
+                t_store.save_resolution(threshold_resolution)
+            except Exception as ex:
+                logger.debug(f"Auto threshold resolution skipped: {ex}")
 
         if threshold_resolution and context:
             context.threshold_resolution_id = getattr(threshold_resolution, "resolution_id", None)
