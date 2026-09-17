@@ -286,8 +286,8 @@ class IntelligenceEngine:
         }
 
         # Check for provider availability
-        provider_name = preferred_provider or settings.llm_provider or "auto"
-        if provider_name != "offline":
+        provider_name = preferred_provider or settings.llm_provider or "offline"
+        if preferred_provider not in ("offline", "deterministic") and provider_name not in ("offline", "deterministic"):
             system_prompt, user_prompt = render_qa_prompt(clean_question, context_dict, knowledge_block)
             try:
                 llm_resp = self.provider_manager.generate(
@@ -333,7 +333,7 @@ class IntelligenceEngine:
             except Exception as exc:
                 logger.warning(f"Interactive LLM QA failed: {exc}. Falling back to deterministic answer.")
 
-        # Deterministic Q&A Answer Synthesis (Dimension-aware & conservative)
+        # Deterministic Q&A Answer Synthesis with Claim-Intent Routing
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         verdict = context.authoritative_verdict
         score_pct = context.equivalence_score * 100
@@ -342,16 +342,95 @@ class IntelligenceEngine:
         diff_dims = sorted(list({str(d.get("dimension")).upper() for d in context.differences_summary if d.get("dimension")}))
         diff_dims_str = ", ".join(diff_dims) if diff_dims else "UNKNOWN"
 
-        det_answer = (
-            f"Authoritative Certification Status: {verdict} (Equivalence Score: {score_pct:.1f}%). "
-            f"Evaluated {context.unique_inputs_count} inputs with {context.matching_cases_count} matches "
-            f"and {context.regression_cases_count} counterexamples."
-        )
-        if context.regression_cases_count > 0:
-            det_answer += (
-                f" The primary deviations occurred in the {diff_dims_str} dimension, affecting rules: "
-                f"{', '.join(context.valid_rule_ids[:3]) or 'observed invariants'}."
-            )
+        q_lower = clean_question.lower()
+        qa_evidence_ids: list[str] = []
+        qa_rule_ids: list[str] = []
+
+        if any(w in q_lower for w in ("threshold", "policy", "tolerance", "cutoff")):
+            # Threshold question intent -> Answer directly from ThresholdResolution
+            if context.thresholds_context:
+                t = context.thresholds_context[0]
+                pol_id = t.get("policy_id", "default")
+                res_val = t.get("resolved_threshold", "N/A")
+                metric = t.get("metric", "equivalence")
+                strat = t.get("strategy", "DYNAMIC")
+                res_id = t.get("resolution_id", "N/A")
+                res_fp = t.get("resolution_fingerprint", "N/A")
+                fb_used = t.get("fallback_used", False)
+                fb_reason = t.get("fallback_reason")
+                det_answer = (
+                    f"Threshold Resolution Authority: Policy '{pol_id}' resolved threshold {res_val} "
+                    f"for metric '{metric}' using strategy '{strat}' (Resolution ID: {res_id}, Fingerprint: {res_fp})."
+                )
+                if fb_used:
+                    det_answer += f" Note: Configured Phase 8 fallback was utilized (Reason: {fb_reason})."
+            else:
+                det_answer = "No authoritative Phase 8 threshold resolution was established for this certification."
+
+        elif any(w in q_lower for w in ("state", "database", "filesystem", "db", "storage")):
+            # State question intent -> Answer directly from StateEvidenceFacts
+            if context.state_facts:
+                det_answer = f"Authoritative State Evidence: Evaluated {len(context.state_facts)} physical state snapshot records."
+                for sf in context.state_facts:
+                    if sf.evidence_id not in qa_evidence_ids:
+                        qa_evidence_ids.append(sf.evidence_id)
+                    det_answer += f" Resource '{sf.resource or sf.evidence_id}' (Role: {sf.role}): delta_detected={sf.delta_detected}."
+            else:
+                det_answer = "State behavior was not observed: Physical database and memory state snapshots were not collected."
+
+        elif any(w in q_lower for w in ("workflow", "trace", "step", "sequence", "lifecycle", "transition")):
+            # Workflow question intent -> Answer directly from WorkflowTraceFacts
+            if context.workflow_facts:
+                det_answer = f"Authoritative Workflow Trace: Evaluated {len(context.workflow_facts)} execution trace telemetry events."
+                for wf in context.workflow_facts[:5]:
+                    if wf.evidence_id not in qa_evidence_ids:
+                        qa_evidence_ids.append(wf.evidence_id)
+                    det_answer += f" Step {wf.sequence} ({wf.event_type}): action='{wf.action}'."
+            else:
+                det_answer = "Workflow step sequence equivalence cannot be established: Trace telemetry was not captured."
+
+        else:
+            # Check for input-specific question intent
+            target_diff = None
+            for diff in context.differences_summary:
+                diff_inp = diff.get("input_id")
+                if diff_inp and str(diff_inp).lower() in q_lower:
+                    target_diff = diff
+                    break
+
+            if target_diff:
+                inp_id = target_diff.get("input_id")
+                ref_val = target_diff.get("reference_value")
+                tgt_val = target_diff.get("target_value")
+                dim = target_diff.get("dimension", "UNKNOWN")
+                det_answer = (
+                    f"Input '{inp_id}' produced divergent behavior in {dim} dimension: "
+                    f"reference={ref_val}, target={tgt_val}."
+                )
+                for eid in target_diff.get("evidence_ids", []):
+                    if eid in context.valid_evidence_ids and eid not in qa_evidence_ids:
+                        qa_evidence_ids.append(eid)
+                for rid in target_diff.get("violated_oracle_ids", []):
+                    if rid in context.valid_rule_ids and rid not in qa_rule_ids:
+                        qa_rule_ids.append(rid)
+            else:
+                det_answer = (
+                    f"Authoritative Certification Status: {verdict} (Equivalence Score: {score_pct:.1f}%). "
+                    f"Evaluated {context.unique_inputs_count} inputs with {context.matching_cases_count} matches "
+                    f"and {context.regression_cases_count} counterexamples."
+                )
+                if context.regression_cases_count > 0:
+                    det_answer += (
+                        f" Deviations observed in {diff_dims_str} dimension across rules: "
+                        f"{', '.join(context.valid_rule_ids[:3]) or 'observed invariants'}."
+                    )
+                for diff in context.differences_summary[:5]:
+                    for eid in diff.get("evidence_ids", []):
+                        if eid in context.valid_evidence_ids and eid not in qa_evidence_ids:
+                            qa_evidence_ids.append(eid)
+                    for rid in diff.get("violated_oracle_ids", []):
+                        if rid in context.valid_rule_ids and rid not in qa_rule_ids:
+                            qa_rule_ids.append(rid)
 
         meta = GenerationMetadata(
             provider="offline",
@@ -361,25 +440,6 @@ class IntelligenceEngine:
             fallback_occurred=True,
             fallback_reason="Offline, deterministic mode, or validation fallback triggered",
         )
-
-        # Claim-specific referenced evidence and rule IDs rather than arbitrary top-5
-        qa_evidence_ids: list[str] = []
-        for diff in context.differences_summary:
-            for eid in diff.get("evidence_ids", []):
-                if eid in context.valid_evidence_ids and eid not in qa_evidence_ids:
-                    qa_evidence_ids.append(eid)
-            ref_e = diff.get("reference_evidence_id")
-            tgt_e = diff.get("target_evidence_id")
-            if ref_e and ref_e in context.valid_evidence_ids and ref_e not in qa_evidence_ids:
-                qa_evidence_ids.append(ref_e)
-            if tgt_e and tgt_e in context.valid_evidence_ids and tgt_e not in qa_evidence_ids:
-                qa_evidence_ids.append(tgt_e)
-
-        qa_rule_ids: list[str] = []
-        for diff in context.differences_summary:
-            for r_id in diff.get("violated_oracle_ids", []):
-                if r_id in context.valid_rule_ids and r_id not in qa_rule_ids:
-                    qa_rule_ids.append(r_id)
 
         resp = AskCertificationResponse(
             question=clean_question,

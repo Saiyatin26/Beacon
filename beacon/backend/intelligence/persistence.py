@@ -132,19 +132,19 @@ class IntelligencePersistenceStore:
                     cursor.execute("""
                         SELECT payload_json FROM certification_explanations
                         WHERE certification_id = ? AND cache_key = ?
-                        ORDER BY created_at DESC LIMIT 1
+                        ORDER BY rowid DESC LIMIT 1
                     """, (certification_id, cache_key))
                 elif context_fingerprint:
                     cursor.execute("""
                         SELECT payload_json FROM certification_explanations
                         WHERE certification_id = ? AND context_fingerprint = ?
-                        ORDER BY created_at DESC LIMIT 1
+                        ORDER BY rowid DESC LIMIT 1
                     """, (certification_id, context_fingerprint))
                 else:
                     cursor.execute("""
                         SELECT payload_json FROM certification_explanations
                         WHERE certification_id = ?
-                        ORDER BY created_at DESC LIMIT 1
+                        ORDER BY rowid DESC LIMIT 1
                     """, (certification_id,))
 
                 row = cursor.fetchone()

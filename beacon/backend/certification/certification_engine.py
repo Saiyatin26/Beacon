@@ -64,6 +64,7 @@ class CertificationEngine:
         domain_of: Optional[dict[str, str]] = None,
         context: Optional[CertificationContext] = None,
         threshold_resolution: Optional[Any] = None,
+        evaluation_result: Optional[Any] = None,
         n_samples: int = 100,
         seed: int = 42,
     ) -> CertificationArtifact:
@@ -72,6 +73,133 @@ class CertificationEngine:
         modern_adapter = modern_adapter or target_adapter or modernized_adapter or candidate_adapter
         if application_id and project_id == "default":
             project_id = application_id
+
+        if evaluation_result is not None and not legacy_adapter and not modern_adapter:
+            # Direct authoritative Phase 4 + Phase 7 + Phase 8 flow
+            cert_id = getattr(context, "certification_id", None) or f"CERT-{uuid.uuid4().hex[:8]}"
+            cert_policy = policy or getattr(context, "policy", None) or CertificationPolicy()
+            pol_hash = cert_policy.compute_hash() if hasattr(cert_policy, "compute_hash") else getattr(cert_policy, "policy_hash", "")
+            timestamp = datetime.now(timezone.utc).isoformat()
+            
+            project_id = application_id or project_id or getattr(evaluation_result, "application_id", "default")
+            
+            total_inp = 0
+            equiv_inp = 0
+            diff_inp = 0
+            if getattr(evaluation_result, "summary", None):
+                total_inp = evaluation_result.summary.total_inputs
+                equiv_inp = evaluation_result.summary.equivalent_inputs
+                diff_inp = evaluation_result.summary.different_inputs
+            elif getattr(evaluation_result, "input_results", None):
+                total_inp = len(evaluation_result.input_results)
+                equiv_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.EQUIVALENT)
+                diff_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.DIFFERENT)
+
+            score = 1.0 if total_inp > 0 and diff_inp == 0 else (equiv_inp / total_inp if total_inp > 0 else 1.0)
+            final_status = CertificationStatus.NOT_CERTIFIED if diff_inp > 0 else CertificationStatus.CERTIFIED
+            is_certified = (final_status == CertificationStatus.CERTIFIED)
+
+            oracle_summaries = []
+            if oracle_set and hasattr(oracle_set, "rules"):
+                for r in oracle_set.rules:
+                    oracle_summaries.append(
+                        PerOracleCertificationSummary(
+                            oracle_id=r.rule_id,
+                            oracle_version=getattr(r, "version", 1),
+                            oracle_hash=getattr(r, "fingerprint", ""),
+                            severity="critical" if getattr(r, "rule_type", "") == "invariant" else "medium",
+                            confidence=r.confidence,
+                            domain="equivalence",
+                            condition_str=r.canonical_expression,
+                            consequence_str="EQUIVALENT",
+                            total_probes=total_inp,
+                            applicable_probes=total_inp,
+                            matching_probes=equiv_inp,
+                            legacy_passes=equiv_inp,
+                            modern_passes=equiv_inp,
+                            modern_regressions=diff_inp,
+                            reference_inconsistencies=0,
+                            mutual_violations=0,
+                            invalid_inputs=0,
+                            execution_errors=0,
+                        )
+                    )
+
+            res_id = getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else getattr(context, "threshold_resolution_id", None)
+            res_fp = getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else getattr(context, "threshold_resolution_fingerprint", None)
+            
+            if context:
+                context.threshold_resolution_id = res_id
+                context.threshold_resolution_fingerprint = res_fp
+                context.certification_run_id = cert_id
+                context.run_timestamp = timestamp
+                context.run_status = final_status.value if hasattr(final_status, "value") else str(final_status)
+
+            final_context = context or CertificationContext(
+                benchmark_id=project_id,
+                benchmark_version="1.0.0",
+                benchmark_name=project_id,
+                benchmark_provenance="CONTROLLED",
+                evaluation_mode="CONTROLLED",
+                modernization_variant_id="modern",
+                modernization_variant_name="Modernized Implementation",
+                legacy_implementation_id="reference",
+                modernized_implementation_id="target",
+                policy_id=cert_policy.policy_id,
+                policy_version=getattr(cert_policy, "version", 1),
+                policy_hash=pol_hash,
+                certification_run_id=cert_id,
+                run_timestamp=timestamp,
+                run_status=final_status.value if hasattr(final_status, "value") else str(final_status),
+                threshold_resolution_id=res_id,
+                threshold_resolution_fingerprint=res_fp,
+            )
+
+            oset_id = getattr(oracle_set, "oracle_set_id", "") if oracle_set else ""
+            oset_ver = getattr(oracle_set, "version", "1.0.0") if oracle_set else "1.0.0"
+            oset_hash = getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", "") if oracle_set else ""
+
+            temp_artifact = CertificationArtifact(
+                certification_id=cert_id,
+                project_id=project_id,
+                legacy_version="1.0.0",
+                modernized_version="2.0.0",
+                oracle_set_id=oset_id,
+                oracle_set_version=oset_ver,
+                oracle_set_hash=oset_hash,
+                input_set_id=getattr(evaluation_result, "evaluation_id", ""),
+                input_set_hash="",
+                certification_policy_id=cert_policy.policy_id,
+                certification_policy_version=getattr(cert_policy, "version", 1),
+                certification_policy_hash=pol_hash,
+                certification_engine_version="1.0.0",
+                timestamp=timestamp,
+                status=final_status,
+                certified=is_certified,
+                score=score,
+                metrics=CertificationMetrics(
+                    unique_input_count=total_inp,
+                    matching_case_count=equiv_inp,
+                    regression_case_count=diff_inp,
+                    oracle_count=len(oracle_summaries),
+                    oracle_coverage_pct=1.0 if oracle_summaries else 0.0,
+                    overall_equivalence_score=score,
+                ),
+                domain_scores={},
+                oracle_summaries=oracle_summaries,
+                regressions=[],
+                reference_inconsistencies=[],
+                warnings=[],
+                blocking_reasons=[],
+                content_hash="",
+                context=final_context,
+                threshold_resolution_id=res_id,
+                threshold_resolution_fingerprint=res_fp,
+            )
+            c_hash = compute_artifact_content_hash(temp_artifact)
+            final_context.certification_artifact_hash = c_hash
+            artifact = temp_artifact.model_copy(update={"content_hash": c_hash, "context": final_context})
+            return certification_repository.save_artifact(artifact)
 
         if threshold_resolution and context:
             context.threshold_resolution_id = getattr(threshold_resolution, "resolution_id", None)

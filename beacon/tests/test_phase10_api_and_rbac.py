@@ -3,6 +3,7 @@
 Verifies explanation generation, retrieval, interactive Q&A, and multi-tenant RBAC enforcement.
 """
 
+import uuid
 import pytest
 from fastapi.testclient import TestClient
 
@@ -75,7 +76,7 @@ class TestPhase10ApiAndRbac:
 
 
         # 2. Create Certification Artifact for proj_alice
-        self.cert_id = "CERT-PHASE10-ALICE-01"
+        self.cert_id = f"CERT-PHASE10-ALICE-{uuid.uuid4().hex[:8]}"
         artifact_raw = CertificationArtifact(
             certification_id=self.cert_id,
             project_id="proj_alice",

@@ -21,6 +21,7 @@ from evaluation.models import (
     BehaviorDifference,
     BehaviorDimension,
     DifferenceType,
+    DimensionEvaluationSummary,
     EvaluationResult,
     EvaluationSummary,
     EvaluationVerdict,
@@ -946,7 +947,8 @@ def test_phase9_knowledge_cannot_override_empirical_evidence():
     exp = deterministic_generator.generate_explanation(ctx)
     # Verdict MUST remain DIFFERENT despite contradictory documentation
     assert exp.overall_verdict == "DIFFERENT"
-    assert exp.is_authoritative_match is True
+    assert exp.is_authoritative_match is False
+    assert exp.authoritative_match_status == "NOT_CERTIFIED"
 
 
 def test_adversarial_e_fingerprint_only_lookup_fails_closed():
@@ -1125,4 +1127,437 @@ def test_adversarial_k_artifact_evaluation_conflict_preserves_phase4():
     assert ctx.authoritative_verdict == "EQUIVALENT"
     assert ctx.matching_cases_count == 10
     assert ctx.regression_cases_count == 0
+
+
+# ==============================================================================
+# Cross-Phase Evidence Resolution & Projection Tests
+# ==============================================================================
+
+def test_unresolved_candidate_evidence_tracked_and_fails_grounding():
+    """Unresolvable evidence ID in a difference is excluded from valid set, tracked in unresolved, and fails claim grounding."""
+    # EVID-REAL is real Phase 3 record
+    rec = EvidenceRecord(
+        evidence_id="EVID-REAL",
+        session_id="SESS-UNRES",
+        role="reference",
+        input_id="INP-U1",
+        evidence_type=EvidenceType.OUTPUT,
+        content_hash="h_u1",
+        size_bytes=10,
+        capture_status="CAPTURED",
+    )
+    evidence_store.save_record(rec)
+
+    # Difference claims EVID-REAL and EVID-GHOST
+    diff = BehaviorDifference(
+        difference_id="DIFF-U1",
+        dimension=BehaviorDimension.OUTPUT,
+        difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
+        input_id="INP-U1",
+        reference_value="A",
+        target_value="B",
+        reference_evidence_id="EVID-REAL",
+        target_evidence_id="EVID-GHOST",  # Non-existent ghost record!
+        evidence_ids=["EVID-REAL", "EVID-GHOST"],
+    )
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-UNRES",
+        verdict=EvaluationVerdict.DIFFERENT,
+        status=EvaluationVerdict.DIFFERENT,
+        differences=[diff],
+    )
+
+    ctx = explanation_context_builder.build_context(
+        "CERT-UNRES",
+        evidence_records=[rec],
+        evaluation_result=eval_res,
+        use_company_knowledge=False,
+    )
+
+    assert "EVID-REAL" in ctx.valid_evidence_ids
+    assert "EVID-GHOST" not in ctx.valid_evidence_ids
+    assert "EVID-GHOST" in ctx.unresolved_evidence_ids
+
+    # Claim asserting EVID-GHOST is strictly rejected by grounding validator
+    claim = GroundingClaim(
+        claim_type=GroundingClaimType.EVIDENCE_REFERENCE,
+        statement="Target behavior captured by EVID-GHOST",
+        evidence_ids=["EVID-GHOST"],
+    )
+    is_valid, errors, validated = grounding_validator.validate_claims([claim], ctx)
+    assert not is_valid
+    assert any("UNSUPPORTED_EVIDENCE_REFERENCE" in err for err in errors)
+
+
+def test_state_evidence_fact_projection_changes_and_no_changes():
+    """Physical state evidence records (database & filesystem) are projected into StateEvidenceFacts."""
+    rec_db = EvidenceRecord(
+        evidence_id="EVID-DB-MUTATION",
+        session_id="SESS-STATE",
+        role="target",
+        input_id="INP-S1",
+        evidence_type=EvidenceType.DATABASE,
+        payload={
+            "table": "accounts",
+            "table_row_counts_before": {"accounts": 100},
+            "table_row_counts_after": {"accounts": 101},
+            "delta": {"inserted_id": "ACC-999"},
+            "delta_detected": True,
+        },
+        content_hash="h_db1",
+        size_bytes=50,
+        capture_status="CAPTURED",
+    )
+    rec_fs = EvidenceRecord(
+        evidence_id="EVID-FS-IDENTICAL",
+        session_id="SESS-STATE",
+        role="reference",
+        input_id="INP-S1",
+        evidence_type=EvidenceType.FILESYSTEM,
+        payload={
+            "configured_paths": ["/tmp/data"],
+            "delta_detected": False,
+        },
+        content_hash="h_fs1",
+        size_bytes=30,
+        capture_status="CAPTURED",
+    )
+
+    ctx = explanation_context_builder.build_context(
+        "CERT-STATE",
+        evidence_records=[rec_db, rec_fs],
+        use_company_knowledge=False,
+    )
+
+    assert len(ctx.state_facts) == 2
+    db_fact = next(s for s in ctx.state_facts if s.evidence_id == "EVID-DB-MUTATION")
+    assert db_fact.resource == "accounts"
+    assert db_fact.delta_detected is True
+    assert db_fact.role == "target"
+
+    fs_fact = next(s for s in ctx.state_facts if s.evidence_id == "EVID-FS-IDENTICAL")
+    assert fs_fact.delta_detected is False
+    assert fs_fact.role == "reference"
+
+    # Explanation generation preserves state_facts
+    exp = deterministic_generator.generate_explanation(ctx)
+    assert len(exp.state_facts) == 2
+
+
+def test_workflow_trace_fact_projection_and_qa_intent():
+    """TRACE evidence records are projected into WorkflowTraceFacts and queried via Q&A."""
+    rec_trace = EvidenceRecord(
+        evidence_id="EVID-TRACE-01",
+        session_id="SESS-TRACE",
+        role="target",
+        input_id="INP-W1",
+        evidence_type=EvidenceType.TRACE,
+        payload={
+            "events": [
+                {"sequence": 1, "event_type": "VALIDATE_INPUT", "details": {"action": "schema_validation"}},
+                {"sequence": 2, "event_type": "INVOKE_PAYMENT", "details": {"action": "charge_card", "divergence": "card_type_mismatch"}},
+            ]
+        },
+        content_hash="h_trace1",
+        size_bytes=80,
+        capture_status="CAPTURED",
+    )
+
+    ctx = explanation_context_builder.build_context(
+        "CERT-TRACE",
+        evidence_records=[rec_trace],
+        use_company_knowledge=False,
+    )
+
+    assert len(ctx.workflow_facts) == 2
+    step2 = next(w for w in ctx.workflow_facts if w.sequence == 2)
+    assert step2.event_type == "INVOKE_PAYMENT"
+    assert step2.observed_divergence == "card_type_mismatch"
+
+    # Q&A intent routing for workflow
+    ans = intelligence_engine.ask_certification(
+        certification_id="CERT-TRACE",
+        question="Which workflow step differed in execution?",
+        evidence_records=[rec_trace],
+        use_company_knowledge=False,
+        preferred_provider="offline",
+    )
+    assert "INVOKE_PAYMENT" in ans.answer or "VALIDATE_INPUT" in ans.answer
+    assert "EVID-TRACE-01" in ans.referenced_evidence_ids
+
+
+def test_qa_intent_routing_threshold():
+    """Threshold questions route to exact ThresholdResolution authority."""
+    res = ThresholdResolution(
+        resolution_id="RES-QA-THRESH",
+        policy_id="POL-QA",
+        policy_version="1.0.0",
+        metric=DifferenceMetric.ABSOLUTE_DIFF,
+        strategy=ThresholdStrategy.FIXED,
+        status=ThresholdStatus.RESOLVED,
+        final_value=0.045,
+        sample_count=100,
+        fingerprint="fp_qa_thresh",
+        fallback_used=True,
+        fallback_reason="Bootstrap sample window was small",
+    )
+    threshold_persistence.save_resolution(res)
+
+    art = CertificationArtifact(
+        certification_id="CERT-QA-THRESH",
+        project_id="qa_app",
+        status=CertificationStatus.CERTIFIED,
+        score=0.99,
+        certification_policy_id="POL-QA",
+        threshold_resolution_id="RES-QA-THRESH",
+        threshold_resolution_fingerprint="fp_qa_thresh",
+        metrics=CertificationMetrics(unique_input_count=10, matching_case_count=10, regression_case_count=0),
+    )
+
+    ans = intelligence_engine.ask_certification(
+        certification_id="CERT-QA-THRESH",
+        question="What threshold was used for this certification?",
+        artifact=art,
+        threshold_resolution=res,
+        use_company_knowledge=False,
+        preferred_provider="offline",
+    )
+    assert "0.045" in ans.answer
+    assert "RES-QA-THRESH" in ans.answer
+    assert "Bootstrap sample window was small" in ans.answer
+
+
+def test_is_authoritative_match_three_states():
+    """Verify distinct is_authoritative_match and authoritative_match_status values across all verdict types."""
+    # 1. CERTIFIED -> True, CERTIFIED
+    art_pass = CertificationArtifact(
+        certification_id="CERT-P", project_id="app_p", status=CertificationStatus.CERTIFIED,
+        score=1.0, metrics=CertificationMetrics(unique_input_count=5, matching_case_count=5, regression_case_count=0),
+    )
+    ctx_pass = explanation_context_builder.build_context("CERT-P", artifact=art_pass, use_company_knowledge=False)
+    exp_pass = deterministic_generator.generate_explanation(ctx_pass)
+    assert exp_pass.is_authoritative_match is True
+    assert exp_pass.authoritative_match_status == "CERTIFIED"
+
+    # 2. NOT_CERTIFIED -> False, NOT_CERTIFIED
+    art_fail = CertificationArtifact(
+        certification_id="CERT-F", project_id="app_f", status=CertificationStatus.NOT_CERTIFIED,
+        score=0.0, metrics=CertificationMetrics(unique_input_count=5, matching_case_count=0, regression_case_count=5),
+    )
+    ctx_fail = explanation_context_builder.build_context("CERT-F", artifact=art_fail, use_company_knowledge=False)
+    exp_fail = deterministic_generator.generate_explanation(ctx_fail)
+    assert exp_fail.is_authoritative_match is False
+    assert exp_fail.authoritative_match_status == "NOT_CERTIFIED"
+
+    # 3. INCONCLUSIVE -> False, INCONCLUSIVE
+    eval_incon = EvaluationResult(
+        evaluation_id="EVAL-INCON",
+        verdict=EvaluationVerdict.INCONCLUSIVE,
+        status=EvaluationVerdict.INCONCLUSIVE,
+    )
+    ctx_incon = explanation_context_builder.build_context("CERT-I", evaluation_result=eval_incon, use_company_knowledge=False)
+    exp_incon = deterministic_generator.generate_explanation(ctx_incon)
+    assert exp_incon.is_authoritative_match is False
+    assert exp_incon.authoritative_match_status == "INCONCLUSIVE"
+
+
+def test_full_real_end_to_end_phase3_to_phase10_chain():
+    """Real end-to-end integration: Phase 3 -> Phase 4 -> Phase 7 -> Phase 8 -> Certification -> Phase 10 Explanation -> Validation -> Persistence -> Audit."""
+    from certification.certification_engine import CertificationEngine
+    from certification.models import CertificationContext, CertificationPolicy
+    from execution.evidence_models import EvidenceManifest, EvidenceManifestItem
+
+    # 1. Phase 3: Create real paired evidence
+    rec_ref = EvidenceRecord(
+        evidence_id="EVID-E2E-REF-01",
+        session_id="SESS-E2E",
+        role="reference",
+        input_id="INP-E2E-1",
+        evidence_type=EvidenceType.OUTPUT,
+        payload={"output": {"price": 100}},
+        content_hash="h_e2e_ref",
+        size_bytes=30,
+        capture_status="CAPTURED",
+    )
+    rec_tgt = EvidenceRecord(
+        evidence_id="EVID-E2E-TGT-01",
+        session_id="SESS-E2E",
+        role="target",
+        input_id="INP-E2E-1",
+        evidence_type=EvidenceType.OUTPUT,
+        payload={"output": {"price": 100}},
+        content_hash="h_e2e_tgt",
+        size_bytes=30,
+        capture_status="CAPTURED",
+    )
+    evidence_store.save_record(rec_ref)
+    evidence_store.save_record(rec_tgt)
+    manifest = EvidenceManifest(
+        session_id="SESS-E2E",
+        correlation_id="CORR-E2E",
+        application_id="e2e_app",
+        input_set_id="INP-SET-E2E",
+        input_set_hash="h_inp_set_e2e",
+        items=[
+            EvidenceManifestItem(
+                evidence_id="EVID-E2E-REF-01",
+                evidence_type=EvidenceType.OUTPUT,
+                role="reference",
+                input_id="INP-E2E-1",
+                content_hash="h_e2e_ref",
+                size_bytes=30,
+                capture_status=EvidenceCaptureStatus.CAPTURED,
+                persistence_status=EvidencePersistenceStatus.PERSISTED,
+            ),
+            EvidenceManifestItem(
+                evidence_id="EVID-E2E-TGT-01",
+                evidence_type=EvidenceType.OUTPUT,
+                role="target",
+                input_id="INP-E2E-1",
+                content_hash="h_e2e_tgt",
+                size_bytes=30,
+                capture_status=EvidenceCaptureStatus.CAPTURED,
+                persistence_status=EvidencePersistenceStatus.PERSISTED,
+            ),
+        ],
+    )
+    bundle = EvidenceBundle(
+        bundle_id="BUNDLE-E2E",
+        session_id="SESS-E2E",
+        correlation_id="CORR-E2E",
+        application_id="e2e_app",
+        input_set_id="INP-SET-E2E",
+        manifest=manifest,
+        records=[rec_ref, rec_tgt],
+    )
+    evidence_store.save_bundle(bundle)
+
+    # 2. Phase 4: Create EvaluationResult with nonfunctional dimension preserved
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-E2E-01",
+        application_id="e2e_app",
+        verdict=EvaluationVerdict.EQUIVALENT,
+        status=EvaluationVerdict.EQUIVALENT,
+        dimensions_evaluated=[BehaviorDimension.OUTPUT, BehaviorDimension.NONFUNCTIONAL],
+        differences=[],
+        summary=EvaluationSummary(
+            total_inputs=1,
+            evaluated_inputs=1,
+            equivalent_inputs=1,
+            different_inputs=0,
+            inconclusive_inputs=0,
+            dimension_summaries={
+                BehaviorDimension.OUTPUT: DimensionEvaluationSummary(
+                    dimension=BehaviorDimension.OUTPUT,
+                    total_evaluated=1,
+                    equivalent_count=1,
+                    different_count=0,
+                    overall_verdict=EvaluationVerdict.EQUIVALENT,
+                ),
+                BehaviorDimension.NONFUNCTIONAL: DimensionEvaluationSummary(
+                    dimension=BehaviorDimension.NONFUNCTIONAL,
+                    total_evaluated=1,
+                    equivalent_count=1,
+                    different_count=0,
+                    overall_verdict=EvaluationVerdict.EQUIVALENT,
+                ),
+            },
+        ),
+    )
+
+    # 3. Phase 7: Create and persist OracleSet
+    rule = OracleRule(
+        rule_id="RULE-E2E-1",
+        rule_type="invariant",
+        canonical_expression="price == 100",
+        source=RuleProvenanceSource.DISCOVERED,
+        confidence=1.0,
+        support_count=10,
+        fingerprint="fp_rule_e2e",
+    )
+    oset = OracleSet(
+        oracle_set_id="OSET-E2E-01",
+        application_id="e2e_app",
+        version=1,
+        status=OracleSetStatus.READY,
+        rules=[rule],
+    )
+    reconciliation_persistence.save_oracle_set(oset)
+
+    # 4. Phase 8: Create and persist ThresholdResolution
+    policy = ThresholdPolicy(
+        policy_id="POL-E2E",
+        version="1.0.0",
+        metric=DifferenceMetric.ABSOLUTE_DIFF,
+        strategy=ThresholdStrategy.FIXED,
+        parameters={"value": 0.05},
+    )
+    threshold_persistence.save_policy(policy)
+
+    thresh_res = ThresholdResolution(
+        resolution_id="RES-E2E-01",
+        policy_id="POL-E2E",
+        policy_version="1.0.0",
+        metric=DifferenceMetric.ABSOLUTE_DIFF,
+        strategy=ThresholdStrategy.FIXED,
+        status=ThresholdStatus.RESOLVED,
+        final_value=0.05,
+        sample_count=50,
+        fingerprint="fp_res_e2e_01",
+    )
+    threshold_persistence.save_resolution(thresh_res)
+
+    # 5. Certification: Run certify() with real Phase 8 resolution bound
+    cert_engine = CertificationEngine()
+    cert_ctx = CertificationContext(
+        certification_id="CERT-E2E-FULL-01",
+        project_id="e2e_app",
+        session_id="SESS-E2E",
+        policy=CertificationPolicy(policy_id="POL-E2E", max_allowed_regressions=0, min_equivalence_score=0.95),
+        created_at="2026-09-17T00:00:00Z",
+        created_by="e2e_tester",
+    )
+    artifact = cert_engine.certify(
+        context=cert_ctx,
+        evaluation_result=eval_res,
+        oracle_set=oset,
+        threshold_resolution=thresh_res,
+    )
+
+    # Assert immutably bound in CertificationArtifact
+    assert artifact.threshold_resolution_id == "RES-E2E-01"
+    assert artifact.threshold_resolution_fingerprint == "fp_res_e2e_01"
+
+    # 6. Phase 10: Build ExplanationContext
+    exp_ctx = explanation_context_builder.build_context(
+        certification_id="CERT-E2E-FULL-01",
+        artifact=artifact,
+        evidence_bundle=bundle,
+        evaluation_result=eval_res,
+        oracle_set=oset,
+        threshold_resolution=thresh_res,
+        use_company_knowledge=False,
+    )
+
+    # Assert exact identity binding equality across entire chain
+    assert thresh_res.resolution_id == artifact.threshold_resolution_id == exp_ctx.thresholds_context[0]["resolution_id"]
+    assert thresh_res.fingerprint == artifact.threshold_resolution_fingerprint == exp_ctx.thresholds_context[0]["resolution_fingerprint"]
+
+    # 7. Generate explanation, validate, persist and audit
+    explanation = intelligence_engine.generate_explanation(
+        certification_id="CERT-E2E-FULL-01",
+        request=ExplanationRequest(mode="deterministic", use_company_knowledge=False),
+        artifact=artifact,
+        evidence_bundle=bundle,
+        evaluation_result=eval_res,
+        oracle_set=oset,
+        threshold_resolution=thresh_res,
+        user_id="e2e_tester",
+    )
+
+    assert explanation.overall_verdict == "EQUIVALENT"
+    assert explanation.is_authoritative_match is True
+    assert explanation.authoritative_match_status == "CERTIFIED"
+    assert explanation.persistence_status == "SUCCESS"
+    assert BehaviorDimension.NONFUNCTIONAL in [d.dimension for d in explanation.dimension_explanations]
 

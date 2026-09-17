@@ -86,6 +86,38 @@ class AuthoritativeFact(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
 
 
+class StateEvidenceFact(BaseModel):
+    """Authoritative projection of empirical physical state observations (DATABASE, FILESYSTEM)."""
+    model_config = ConfigDict(extra="ignore")
+
+    evidence_id: str
+    role: Optional[str] = None
+    evidence_type: str = "STATE"
+    resource: Optional[str] = None
+    before: Optional[Any] = None
+    after: Optional[Any] = None
+    delta: Optional[Any] = None
+    delta_detected: bool = False
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    timestamp: Optional[str] = None
+
+
+class WorkflowTraceFact(BaseModel):
+    """Authoritative projection of empirical execution trace timeline and event sequences."""
+    model_config = ConfigDict(extra="ignore")
+
+    evidence_id: str
+    role: Optional[str] = None
+    event_type: str = "INVOCATION"
+    sequence: int = 0
+    ordering: Optional[int] = None
+    action: Optional[str] = None
+    observed_divergence: Optional[str] = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    timestamp: Optional[str] = None
+
+
 class ExplanationFinding(BaseModel):
     """A single structured observation or finding within a dimension."""
     model_config = ConfigDict(extra="ignore")
@@ -242,11 +274,14 @@ class ExplanationContext(BaseModel):
     dimensions_evaluated: list[BehaviorDimension] = Field(default_factory=list)
     differences_summary: list[dict[str, Any]] = Field(default_factory=list)
     valid_evidence_ids: list[str] = Field(default_factory=list)
+    unresolved_evidence_ids: list[str] = Field(default_factory=list)
     valid_rule_ids: list[str] = Field(default_factory=list)
     valid_input_ids: list[str] = Field(default_factory=list)
     rules_context: list[dict[str, Any]] = Field(default_factory=list)
     thresholds_context: list[dict[str, Any]] = Field(default_factory=list)
     missing_evidence: list[MissingEvidence] = Field(default_factory=list)
+    state_facts: list[StateEvidenceFact] = Field(default_factory=list)
+    workflow_facts: list[WorkflowTraceFact] = Field(default_factory=list)
     knowledge_context: Optional[CompanyKnowledgeContext] = None
     user_question: Optional[str] = None
 
@@ -269,6 +304,7 @@ class ExplanationContext(BaseModel):
                 key=lambda x: str(x.get("input_id", "")) + str(x.get("difference_id", ""))
             ),
             "valid_evidence_ids": sorted(self.valid_evidence_ids),
+            "unresolved_evidence_ids": sorted(self.unresolved_evidence_ids),
             "valid_rule_ids": sorted(self.valid_rule_ids),
             "valid_input_ids": sorted(self.valid_input_ids),
             "rules_context": sorted(
@@ -282,6 +318,14 @@ class ExplanationContext(BaseModel):
             "missing_evidence": sorted(
                 [m.model_dump() for m in self.missing_evidence],
                 key=lambda x: str(x.get("dimension", "")) + str(x.get("description", ""))
+            ),
+            "state_facts": sorted(
+                [s.model_dump() for s in self.state_facts],
+                key=lambda x: str(x.get("evidence_id", ""))
+            ),
+            "workflow_facts": sorted(
+                [w.model_dump() for w in self.workflow_facts],
+                key=lambda x: str(x.get("evidence_id", "")) + str(x.get("sequence", ""))
             ),
             "knowledge_retrieval_fingerprint": self.knowledge_context.retrieval_fingerprint if self.knowledge_context else "",
         }
@@ -311,7 +355,8 @@ class CertificationExplanation(BaseModel):
 
     # Authoritative Ground Truth (Strictly derived from Phase 8 / Certification Artifact)
     overall_verdict: str
-    is_authoritative_match: bool = True
+    is_authoritative_match: bool = False
+    authoritative_match_status: str = "INCONCLUSIVE"  # CERTIFIED, NOT_CERTIFIED, INCONCLUSIVE, UNKNOWN
 
     # High-level Summaries
     executive_summary: str
@@ -324,6 +369,9 @@ class CertificationExplanation(BaseModel):
     evidence_traces: list[EvidenceTrace] = Field(default_factory=list)
     affected_inputs: list[AffectedInput] = Field(default_factory=list)
     missing_evidence: list[MissingEvidence] = Field(default_factory=list)
+    state_facts: list[StateEvidenceFact] = Field(default_factory=list)
+    workflow_facts: list[WorkflowTraceFact] = Field(default_factory=list)
+    unresolved_evidence_ids: list[str] = Field(default_factory=list)
     uncertainty_notes: list[UncertaintyNote] = Field(default_factory=list)
     company_knowledge_context: Optional[CompanyKnowledgeContext] = None
     investigation_recommendations: list[InvestigationRecommendation] = Field(default_factory=list)

@@ -58,7 +58,8 @@ class TestPhase10VerdictProtectionAndGuards:
         assert is_valid
         assert explanation is not None
         assert explanation.overall_verdict == "NOT_CERTIFIED", "Overall verdict must remain immutable and locked to authoritative result."
-        assert explanation.is_authoritative_match is True
+        assert explanation.is_authoritative_match is False
+        assert explanation.authoritative_match_status == "NOT_CERTIFIED"
 
     def test_hallucinated_evidence_and_rule_ids_are_filtered_out(self):
         """Verify hallucinated evidence IDs (e.g. EVID-999) and rule IDs (e.g. RULE-999) are filtered."""

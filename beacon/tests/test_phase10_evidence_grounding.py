@@ -22,6 +22,8 @@ from certification.models import (
 from intelligence.context_builder import ExplanationContextBuilder
 from intelligence.deterministic_generator import DeterministicExplanationGenerator
 from intelligence.engine import IntelligenceEngine
+from execution.evidence_models import EvidenceRecord, EvidenceType
+from execution.evidence_store import evidence_store
 
 
 def test_no_synthetic_evidence_ids_when_evidence_absent():
@@ -86,6 +88,32 @@ def test_no_synthetic_evidence_ids_when_evidence_absent():
 
 def test_real_evidence_ids_are_faithfully_preserved():
     """Verify that real Phase 3 evidence IDs are preserved in context, traces, and findings."""
+    evidence_store.save_record(
+        EvidenceRecord(
+            evidence_id="EVID-PHASE3-REF-100",
+            session_id="SESS-G-1",
+            role="reference",
+            input_id="INP-100",
+            evidence_type=EvidenceType.OUTPUT,
+            payload={"tier": "TIER_A"},
+            content_hash="h_ref_100",
+            size_bytes=20,
+            capture_status="CAPTURED",
+        )
+    )
+    evidence_store.save_record(
+        EvidenceRecord(
+            evidence_id="EVID-PHASE3-TGT-100",
+            session_id="SESS-G-1",
+            role="target",
+            input_id="INP-100",
+            evidence_type=EvidenceType.OUTPUT,
+            payload={"tier": "TIER_B"},
+            content_hash="h_tgt_100",
+            size_bytes=20,
+            capture_status="CAPTURED",
+        )
+    )
     builder = ExplanationContextBuilder()
     artifact = CertificationArtifact(
         certification_id="CERT-REAL-EVID-001",

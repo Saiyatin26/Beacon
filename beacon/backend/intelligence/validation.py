@@ -361,6 +361,16 @@ class GroundingValidator:
             prompt_version=metadata.prompt_version,
         )
 
+        is_match = authoritative_verdict in ("CERTIFIED", "EQUIVALENT", "MATCH_PASS")
+        if authoritative_verdict in ("CERTIFIED", "EQUIVALENT", "MATCH_PASS"):
+            match_status = "CERTIFIED"
+        elif authoritative_verdict in ("NOT_CERTIFIED", "DIFFERENT", "MODERN_REGRESSION"):
+            match_status = "NOT_CERTIFIED"
+        elif authoritative_verdict in ("INCONCLUSIVE", "INSUFFICIENT_COVERAGE"):
+            match_status = "INCONCLUSIVE"
+        else:
+            match_status = "UNKNOWN"
+
         explanation = CertificationExplanation(
             explanation_id=explanation_id,
             certification_id=context.certification_id,
@@ -368,7 +378,8 @@ class GroundingValidator:
             project_id=context.project_id,
             session_id=context.session_id,
             overall_verdict=authoritative_verdict,
-            is_authoritative_match=True,
+            is_authoritative_match=is_match,
+            authoritative_match_status=match_status,
             executive_summary=exec_summary,
             scope_summary={
                 "evaluated_inputs": context.unique_inputs_count,
@@ -383,6 +394,9 @@ class GroundingValidator:
             evidence_traces=[],
             affected_inputs=[],
             missing_evidence=context.missing_evidence,
+            state_facts=context.state_facts,
+            workflow_facts=context.workflow_facts,
+            unresolved_evidence_ids=context.unresolved_evidence_ids,
             uncertainty_notes=validated_uncertainties,
             company_knowledge_context=context.knowledge_context,
             investigation_recommendations=validated_recs,

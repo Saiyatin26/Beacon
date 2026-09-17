@@ -31,10 +31,35 @@ from .models import (
     ExplanationContext,
     MissingEvidence,
     RetrievedKnowledgeCitation,
+    StateEvidenceFact,
+    WorkflowTraceFact,
 )
 from .security import redact_sensitive_data
 
 logger = logging.getLogger("beacon.intelligence.context_builder")
+
+
+def resolve_authoritative_evidence(
+    evidence_id: str,
+    record_by_id: Optional[dict[str, EvidenceRecord]] = None,
+) -> Optional[EvidenceRecord]:
+    """Authoritatively resolves an evidence_id to a real Phase 3 EvidenceRecord.
+
+    Queries in-memory indexed records or the persistent EvidenceStore.
+    Returns the real EvidenceRecord if found, else None (fail closed).
+    Never creates synthetic or fake records from IDs alone.
+    """
+    if not evidence_id or not isinstance(evidence_id, str):
+        return None
+    if record_by_id and evidence_id in record_by_id:
+        return record_by_id[evidence_id]
+    try:
+        rec = evidence_store.get_record(evidence_id)
+        if rec and isinstance(rec, EvidenceRecord):
+            return rec
+    except Exception as exc:
+        logger.debug(f"Failed to query evidence_store for '{evidence_id}': {exc}")
+    return None
 
 
 class ExplanationContextBuilder:
@@ -55,6 +80,7 @@ class ExplanationContextBuilder:
         use_company_knowledge: bool = True,
         user_question: Optional[str] = None,
         custom_query: Optional[str] = None,
+        execution_mode: str = "auto",
     ) -> ExplanationContext:
         """Assembles authoritative context directly from canonical Phase 3–8 entities."""
         # 1. Resolve Certification Artifact (Identity & linkage metadata only)
@@ -104,6 +130,7 @@ class ExplanationContextBuilder:
         # Index evidence records strictly by ID and role metadata
         record_by_id: dict[str, EvidenceRecord] = {}
         valid_evid_ids: set[str] = set()
+        unresolved_evid_ids: set[str] = set()
 
         for rec in all_records:
             if rec.evidence_id:
@@ -127,33 +154,31 @@ class ExplanationContextBuilder:
                 tgt_eid = diff.target_evidence_id
                 diff_evids = getattr(diff, "evidence_ids", []) or []
 
-                if (not ref_eid or not tgt_eid):
-                    candidate_eids = list(diff_evids)
-                    if not candidate_eids and inp_id:
-                        candidate_eids = [rec.evidence_id for rec in all_records if rec.input_id == inp_id]
+                candidate_eids = list(diff_evids)
+                if ref_eid:
+                    candidate_eids.append(ref_eid)
+                if tgt_eid:
+                    candidate_eids.append(tgt_eid)
+                if not candidate_eids and inp_id:
+                    candidate_eids = [rec.evidence_id for rec in all_records if rec.input_id == inp_id]
 
-                    for eid in candidate_eids:
-                        rec = record_by_id.get(eid)
-                        if not rec:
-                            try:
-                                rec = evidence_store.get_record(eid)
-                            except Exception:
-                                pass
-                        if rec:
-                            role_str = str(rec.role).lower()
-                            if role_str in ("reference", "legacy") and not ref_eid:
-                                ref_eid = eid
-                            elif role_str in ("target", "modernized") and not tgt_eid:
-                                tgt_eid = eid
-
-                for eid in ([ref_eid, tgt_eid] + diff_evids):
-                    if eid:
-                        valid_evid_ids.add(eid)
+                for eid in candidate_eids:
+                    rec = resolve_authoritative_evidence(eid, record_by_id)
+                    if rec is not None:
+                        valid_evid_ids.add(rec.evidence_id)
+                        record_by_id[rec.evidence_id] = rec
+                        role_str = str(rec.role).lower()
+                        if role_str in ("reference", "legacy") and not ref_eid:
+                            ref_eid = eid
+                        elif role_str in ("target", "modernized") and not tgt_eid:
+                            tgt_eid = eid
+                    else:
+                        unresolved_evid_ids.add(eid)
 
                 # Ensure dimension is canonical
                 dim_str = diff.dimension.value if hasattr(diff.dimension, "value") else str(diff.dimension)
 
-                all_diff_evids = [e for e in ([ref_eid, tgt_eid] + diff_evids) if e]
+                all_diff_evids = [e for e in ([ref_eid, tgt_eid] + diff_evids) if e and e in valid_evid_ids]
                 seen_eids = set()
                 dedup_evids = []
                 for e in all_diff_evids:
@@ -167,8 +192,8 @@ class ExplanationContextBuilder:
                     "input_id": inp_id,
                     "reference_value": diff.reference_value,
                     "target_value": diff.target_value,
-                    "reference_evidence_id": ref_eid,
-                    "target_evidence_id": tgt_eid,
+                    "reference_evidence_id": ref_eid if ref_eid in valid_evid_ids else None,
+                    "target_evidence_id": tgt_eid if tgt_eid in valid_evid_ids else None,
                     "evidence_ids": dedup_evids,
                     "details": diff.details,
                     "difference_type": diff.difference_type.value if hasattr(diff.difference_type, "value") else str(diff.difference_type),
@@ -183,38 +208,27 @@ class ExplanationContextBuilder:
                     valid_input_ids.add(inp_id)
 
                 actual_evids = [e for e in getattr(r, "evidence_ids", []) if e]
-                for eid in actual_evids:
-                    valid_evid_ids.add(eid)
+                ref_eid = getattr(r, "reference_evidence_id", None)
+                tgt_eid = getattr(r, "target_evidence_id", None)
 
-                # Role resolution strictly from metadata (inspect EvidenceStore / record_by_id)
-                ref_eid: Optional[str] = None
-                tgt_eid: Optional[str] = None
-                resolved_eids: set[str] = set()
+                candidate_eids = list(actual_evids)
+                if ref_eid:
+                    candidate_eids.append(ref_eid)
+                if tgt_eid:
+                    candidate_eids.append(tgt_eid)
 
-                for eid in actual_evids:
-                    rec = record_by_id.get(eid)
-                    if not rec:
-                        try:
-                            rec = evidence_store.get_record(eid)
-                        except Exception:
-                            pass
-                    if rec:
-                        resolved_eids.add(eid)
+                for eid in candidate_eids:
+                    rec = resolve_authoritative_evidence(eid, record_by_id)
+                    if rec is not None:
+                        valid_evid_ids.add(rec.evidence_id)
+                        record_by_id[rec.evidence_id] = rec
                         role_str = str(rec.role).lower()
                         if role_str in ("reference", "legacy") and not ref_eid:
                             ref_eid = eid
                         elif role_str in ("target", "modernized") and not tgt_eid:
                             tgt_eid = eid
-
-                # Check explicit regression attributes if present
-                if not ref_eid and getattr(r, "reference_evidence_id", None) in actual_evids:
-                    ref_eid = getattr(r, "reference_evidence_id", None)
-                    if ref_eid:
-                        resolved_eids.add(ref_eid)
-                if not tgt_eid and getattr(r, "target_evidence_id", None) in actual_evids:
-                    tgt_eid = getattr(r, "target_evidence_id", None)
-                    if tgt_eid:
-                        resolved_eids.add(tgt_eid)
+                    else:
+                        unresolved_evid_ids.add(eid)
 
                 # Canonical input hash
                 inp_hash = getattr(r, "input_hash", None)
@@ -232,6 +246,8 @@ class ExplanationContextBuilder:
                 elif getattr(r, "legacy_output", None) is not None or getattr(r, "modern_output", None) is not None:
                     dim_str = BehaviorDimension.OUTPUT.value
 
+                valid_r_evids = [e for e in actual_evids if e in valid_evid_ids]
+
                 diff_record = {
                     "difference_id": r.regression_id,
                     "dimension": dim_str,
@@ -239,9 +255,9 @@ class ExplanationContextBuilder:
                     "input_hash": inp_hash,
                     "reference_value": r.legacy_output,
                     "target_value": r.modern_output,
-                    "reference_evidence_id": ref_eid,
-                    "target_evidence_id": tgt_eid,
-                    "evidence_ids": actual_evids,
+                    "reference_evidence_id": ref_eid if ref_eid in valid_evid_ids else None,
+                    "target_evidence_id": tgt_eid if tgt_eid in valid_evid_ids else None,
+                    "evidence_ids": valid_r_evids,
                     "input_values": r.input_values,
                     "failed_assertion": r.failed_assertion,
                     "severity": r.severity,
@@ -336,16 +352,28 @@ class ExplanationContextBuilder:
                                     }
                                 else:
                                     pol_hash = pol.compute_policy_hash() if hasattr(pol, "compute_policy_hash") else getattr(pol, "policy_hash", "")
+                                    fb_used = False
+                                    fb_reason = None
+                                    if row["resolution_json"]:
+                                        try:
+                                            rj = json.loads(row["resolution_json"])
+                                            fb_used = rj.get("fallback_used", False)
+                                            fb_reason = rj.get("fallback_reason")
+                                        except Exception:
+                                            pass
                                     threshold_dict = {
                                         "policy_id": pol.policy_id,
                                         "version": pol.version,
                                         "metric": pol.metric.value if hasattr(pol.metric, "value") else str(pol.metric),
                                         "strategy": pol.strategy.value if hasattr(pol.strategy, "value") else str(pol.strategy),
+                                        "resolution_id": exact_res_id,
                                         "policy_hash": pol_hash,
                                         "resolution_fingerprint": loaded_fp,
                                         "resolved_threshold": row["final_value"],
                                         "resolution_status": row["status"],
                                         "sample_count": row["sample_count"],
+                                        "fallback_used": fb_used,
+                                        "fallback_reason": fb_reason,
                                     }
                                 thresholds_context.append(threshold_dict)
                             else:
@@ -383,21 +411,86 @@ class ExplanationContextBuilder:
                     "version": getattr(resolved_thresh, "policy_version", "1.0.0"),
                     "metric": resolved_thresh.metric.value if hasattr(resolved_thresh.metric, "value") else str(resolved_thresh.metric),
                     "strategy": resolved_thresh.strategy.value if hasattr(resolved_thresh.strategy, "value") else str(resolved_thresh.strategy),
+                    "resolution_id": resolved_thresh.resolution_id,
                     "resolution_fingerprint": resolved_thresh.fingerprint,
                     "resolved_threshold": resolved_thresh.final_value,
                     "resolution_status": resolved_thresh.status.value if hasattr(resolved_thresh.status, "value") else str(resolved_thresh.status),
                     "sample_count": resolved_thresh.sample_count,
+                    "fallback_used": getattr(resolved_thresh, "fallback_used", False),
+                    "fallback_reason": getattr(resolved_thresh, "fallback_reason", None),
                 }
             thresholds_context.append(threshold_dict)
 
         # 6. Authoritative State & Workflow Evidence Analysis from Phase 3 Evidence Records
         missing_evidence: list[MissingEvidence] = []
+        state_facts: list[StateEvidenceFact] = []
+        workflow_facts: list[WorkflowTraceFact] = []
 
-        has_state_records = any(
-            r.evidence_type in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM)
-            for r in all_records
-        )
-        if not has_state_records:
+        for r in all_records:
+            if r.evidence_type in (EvidenceType.DATABASE, EvidenceType.FILESYSTEM):
+                payload = r.payload or {}
+                resource = (
+                    payload.get("table")
+                    or payload.get("connection_target")
+                    or (payload.get("configured_paths", [None])[0] if payload.get("configured_paths") else None)
+                    or r.metadata.get("resource")
+                )
+                before = payload.get("snapshot_before") or payload.get("table_row_counts_before") or payload.get("before_state")
+                after = payload.get("snapshot_after") or payload.get("table_row_counts_after") or payload.get("after_state")
+                delta = payload.get("delta") or payload.get("modified_files") or payload.get("created_files") or payload.get("deleted_files")
+                delta_detected = bool(payload.get("delta_detected", False) or delta)
+
+                state_facts.append(
+                    StateEvidenceFact(
+                        evidence_id=r.evidence_id,
+                        role=r.role,
+                        evidence_type=r.evidence_type.value,
+                        resource=str(resource) if resource else None,
+                        before=before,
+                        after=after,
+                        delta=delta,
+                        delta_detected=delta_detected,
+                        provenance=r.provenance,
+                        timestamp=r.timestamp,
+                    )
+                )
+
+            elif r.evidence_type == EvidenceType.TRACE:
+                payload = r.payload or {}
+                events = payload.get("events", [])
+                if isinstance(events, list) and events:
+                    for ev in events:
+                        if isinstance(ev, dict):
+                            workflow_facts.append(
+                                WorkflowTraceFact(
+                                    evidence_id=r.evidence_id,
+                                    role=r.role,
+                                    event_type=ev.get("event_type", "INVOCATION"),
+                                    sequence=ev.get("sequence", 0),
+                                    ordering=ev.get("sequence", 0),
+                                    action=ev.get("details", {}).get("action") or ev.get("source"),
+                                    observed_divergence=ev.get("details", {}).get("divergence"),
+                                    details=ev.get("details", {}) if isinstance(ev.get("details"), dict) else {},
+                                    provenance=r.provenance,
+                                    timestamp=ev.get("timestamp") or r.timestamp,
+                                )
+                            )
+                else:
+                    workflow_facts.append(
+                        WorkflowTraceFact(
+                            evidence_id=r.evidence_id,
+                            role=r.role,
+                            event_type="TRACE",
+                            sequence=r.sequence,
+                            ordering=r.sequence,
+                            action=r.source,
+                            details=payload,
+                            provenance=r.provenance,
+                            timestamp=r.timestamp,
+                        )
+                    )
+
+        if not state_facts:
             missing_evidence.append(
                 MissingEvidence(
                     dimension=BehaviorDimension.STATE,
@@ -407,11 +500,7 @@ class ExplanationContextBuilder:
                 )
             )
 
-        has_workflow_records = any(
-            r.evidence_type == EvidenceType.TRACE
-            for r in all_records
-        )
-        if not has_workflow_records:
+        if not workflow_facts:
             missing_evidence.append(
                 MissingEvidence(
                     dimension=BehaviorDimension.WORKFLOW,
@@ -540,11 +629,14 @@ class ExplanationContextBuilder:
             dimensions_evaluated=dimensions_evaluated,
             differences_summary=redacted_diffs,
             valid_evidence_ids=sorted(valid_evid_ids),
+            unresolved_evidence_ids=sorted(unresolved_evid_ids),
             valid_rule_ids=sorted(valid_rule_ids),
             valid_input_ids=sorted(valid_input_ids),
             rules_context=redacted_rules,
             thresholds_context=thresholds_context,
             missing_evidence=missing_evidence,
+            state_facts=state_facts,
+            workflow_facts=workflow_facts,
             knowledge_context=company_knowledge_context,
             user_question=user_question,
         )

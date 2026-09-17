@@ -363,6 +363,16 @@ class DeterministicExplanationGenerator:
             prompt_version="v1.0",
         )
 
+        is_match = verdict in ("CERTIFIED", "EQUIVALENT", "MATCH_PASS")
+        if verdict in ("CERTIFIED", "EQUIVALENT", "MATCH_PASS"):
+            match_status = "CERTIFIED"
+        elif verdict in ("NOT_CERTIFIED", "DIFFERENT", "MODERN_REGRESSION"):
+            match_status = "NOT_CERTIFIED"
+        elif verdict in ("INCONCLUSIVE", "INSUFFICIENT_COVERAGE"):
+            match_status = "INCONCLUSIVE"
+        else:
+            match_status = "UNKNOWN"
+
         explanation = CertificationExplanation(
             explanation_id=explanation_id,
             certification_id=context.certification_id,
@@ -370,7 +380,8 @@ class DeterministicExplanationGenerator:
             project_id=context.project_id,
             session_id=context.session_id,
             overall_verdict=verdict,
-            is_authoritative_match=True,
+            is_authoritative_match=is_match,
+            authoritative_match_status=match_status,
             executive_summary=exec_summary,
             scope_summary=scope_summary,
             behavioral_summary=behavioral_summary,
@@ -379,6 +390,9 @@ class DeterministicExplanationGenerator:
             evidence_traces=evidence_traces,
             affected_inputs=affected_inputs,
             missing_evidence=context.missing_evidence,
+            state_facts=context.state_facts,
+            workflow_facts=context.workflow_facts,
+            unresolved_evidence_ids=context.unresolved_evidence_ids,
             uncertainty_notes=uncertainty_notes,
             company_knowledge_context=context.knowledge_context,
             investigation_recommendations=investigation_recommendations,
