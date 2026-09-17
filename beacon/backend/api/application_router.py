@@ -229,8 +229,21 @@ def certify_application(
 
         # 8. Optional post-certification AI explanation
         if req.explain:
-            explanation = certification_explainer.generate_explanation(artifact)
-            response_payload["explanation"] = explanation
+            from intelligence.engine import intelligence_engine
+            from intelligence.context_builder import explanation_context_builder
+            try:
+                ctx = explanation_context_builder.build_context(
+                    certification_id=artifact.certification_id,
+                    artifact=artifact,
+                    threshold_resolution=threshold_res,
+                    execution_mode="v2",
+                )
+                exp = intelligence_engine.generate_explanation(context=ctx, mode="deterministic")
+                response_payload["explanation"] = exp.model_dump(mode="json")
+            except Exception as e_err:
+                logger.warning(f"Phase 10 explanation generation failed: {e_err}")
+                explanation = certification_explainer.generate_explanation(artifact)
+                response_payload["explanation"] = explanation
 
         return response_payload
 

@@ -85,12 +85,35 @@ def cmd_certify(args):
         allow_warnings=args.allow_warnings,
     )
 
+    from threshold.engine import ThresholdEngine
+    from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdStrategy
+    from threshold.persistence import threshold_persistence
+
+    thresh_engine = ThresholdEngine()
+    th_policy = threshold_persistence.get_policy(f"POL-{args.project_id}")
+    if not th_policy:
+        th_policy = ThresholdPolicy(
+            policy_id=f"POL-{args.project_id}",
+            version="1.0.0",
+            metric=DifferenceMetric.ABSOLUTE_DIFF,
+            strategy=ThresholdStrategy.FIXED,
+            parameters={"value": 0.0},
+        )
+        threshold_persistence.save_policy(th_policy)
+
+    threshold_res = thresh_engine.resolve_threshold(
+        metric=th_policy.metric,
+        policy=th_policy,
+    )
+    threshold_persistence.save_resolution(threshold_res)
+
     artifact = certification_engine.certify(
         project_id=args.project_id,
         legacy_adapter=legacy_adp,
         modern_adapter=modern_adp,
         oracle_set=oracle_set,
         policy=policy,
+        threshold_resolution=threshold_res,
         n_samples=args.samples,
         seed=args.seed,
     )

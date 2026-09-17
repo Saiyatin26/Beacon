@@ -351,7 +351,8 @@ class CertificationExplanation(BaseModel):
     generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     explanation_version: str = "1.0.0"
     cache_key: str = ""
-    persistence_status: str = "SUCCESS"  # SUCCESS, FAILED, NOT_PERSISTED
+    persistence_status: str = "PERSISTED"  # PERSISTED, FAILED, NOT_PERSISTED
+    audit_status: str = "PERSISTED"  # PERSISTED, FAILED, NOT_ATTEMPTED
 
     # Authoritative Ground Truth (Strictly derived from Phase 8 / Certification Artifact)
     overall_verdict: str
@@ -387,6 +388,7 @@ class CertificationExplanation(BaseModel):
         data.pop("content_hash", None)
         data.pop("generated_at", None)
         data.pop("persistence_status", None)
+        data.pop("audit_status", None)
         canonical_json = json.dumps(data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
@@ -419,4 +421,6 @@ class AskCertificationResponse(BaseModel):
     authoritative_verdict: str
     context_fingerprint: str
     generation_metadata: GenerationMetadata = Field(default_factory=GenerationMetadata)
+    persistence_status: str = "PERSISTED"
+    audit_status: str = "PERSISTED"
 

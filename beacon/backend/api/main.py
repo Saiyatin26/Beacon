@@ -1129,6 +1129,29 @@ def run_certification_v1(
     import time
     start_time = time.perf_counter()
     try:
+        # Resolve and bind Phase 8 dynamic threshold
+        from threshold.engine import ThresholdEngine
+        from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdStrategy
+        from threshold.persistence import threshold_persistence
+
+        thresh_engine = ThresholdEngine()
+        th_policy = threshold_persistence.get_policy(f"POL-{proj_id}")
+        if not th_policy:
+            th_policy = ThresholdPolicy(
+                policy_id=f"POL-{proj_id}",
+                version="1.0.0",
+                metric=DifferenceMetric.ABSOLUTE_DIFF,
+                strategy=ThresholdStrategy.FIXED,
+                parameters={"value": 0.0},
+            )
+            threshold_persistence.save_policy(th_policy)
+
+        threshold_res = thresh_engine.resolve_threshold(
+            metric=th_policy.metric,
+            policy=th_policy,
+        )
+        threshold_persistence.save_resolution(threshold_res)
+
         artifact = certification_engine.certify(
             project_id=proj_id,
             legacy_adapter=legacy_adp,
@@ -1138,6 +1161,7 @@ def run_certification_v1(
             test_inputs=test_inputs,
             field_bounds=field_bounds,
             context=context,
+            threshold_resolution=threshold_res,
             n_samples=request.n_samples,
             seed=request.seed,
         )
@@ -2393,6 +2417,29 @@ def run_custom_certification(
     import time
     start_time = time.perf_counter()
     try:
+        # Resolve and bind Phase 8 dynamic threshold
+        from threshold.engine import ThresholdEngine
+        from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdStrategy
+        from threshold.persistence import threshold_persistence
+
+        thresh_engine = ThresholdEngine()
+        th_policy = threshold_persistence.get_policy(f"POL-{req.project_id}")
+        if not th_policy:
+            th_policy = ThresholdPolicy(
+                policy_id=f"POL-{req.project_id}",
+                version="1.0.0",
+                metric=DifferenceMetric.ABSOLUTE_DIFF,
+                strategy=ThresholdStrategy.FIXED,
+                parameters={"value": 0.0},
+            )
+            threshold_persistence.save_policy(th_policy)
+
+        threshold_res = thresh_engine.resolve_threshold(
+            metric=th_policy.metric,
+            policy=th_policy,
+        )
+        threshold_persistence.save_resolution(threshold_res)
+
         artifact = certification_engine.certify(
             project_id=req.project_id,
             legacy_adapter=leg_adp,
@@ -2402,6 +2449,7 @@ def run_custom_certification(
             test_inputs=test_inputs,
             field_bounds={},
             context=context,
+            threshold_resolution=threshold_res,
             n_samples=len(test_inputs),
         )
         duration_ms = (time.perf_counter() - start_time) * 1000.0

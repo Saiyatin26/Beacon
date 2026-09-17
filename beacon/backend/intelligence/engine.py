@@ -109,7 +109,7 @@ class IntelligenceEngine:
             explanation.generation_metadata.latency_ms = round(elapsed_ms, 2)
             explanation.cache_key = expected_cache_key
             saved = self.persistence.save_explanation(explanation)
-            self.persistence.log_audit_event(
+            audit_ok = self.persistence.log_audit_event(
                 audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
                 user_id=user_id,
                 certification_id=context.certification_id,
@@ -120,6 +120,7 @@ class IntelligenceEngine:
                 context_fingerprint=explanation.context_fingerprint,
                 fallback_used=False,
             )
+            saved.audit_status = "PERSISTED" if audit_ok else "FAILED"
             return saved
 
         # 3. LLM / Assisted Mode Execution
@@ -185,7 +186,7 @@ class IntelligenceEngine:
                     validated_explanation.content_hash = validated_explanation.compute_content_hash()
 
                     saved = self.persistence.save_explanation(validated_explanation)
-                    self.persistence.log_audit_event(
+                    audit_ok = self.persistence.log_audit_event(
                         audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
                         user_id=user_id,
                         certification_id=context.certification_id,
@@ -196,6 +197,7 @@ class IntelligenceEngine:
                         context_fingerprint=validated_explanation.context_fingerprint,
                         fallback_used=llm_resp.fallback_occurred,
                     )
+                    saved.audit_status = "PERSISTED" if audit_ok else "FAILED"
                     return saved
                 else:
                     logger.warning(f"LLM output validation failed: {validation_errors}. Executing deterministic fallback.")
@@ -214,7 +216,7 @@ class IntelligenceEngine:
         fallback_explanation.generation_metadata.latency_ms = round(elapsed_ms, 2)
         fallback_explanation.cache_key = expected_cache_key
         saved = self.persistence.save_explanation(fallback_explanation)
-        self.persistence.log_audit_event(
+        audit_ok = self.persistence.log_audit_event(
             audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
             user_id=user_id,
             certification_id=context.certification_id,
@@ -225,6 +227,7 @@ class IntelligenceEngine:
             context_fingerprint=fallback_explanation.context_fingerprint,
             fallback_used=True,
         )
+        saved.audit_status = "PERSISTED" if audit_ok else "FAILED"
         return saved
 
     def ask_certification(
@@ -316,7 +319,7 @@ class IntelligenceEngine:
                         referenced_doc_ids=referenced_doc_ids,
                     )
                     if is_valid and qa_response:
-                        self.persistence.log_audit_event(
+                        audit_ok = self.persistence.log_audit_event(
                             audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
                             user_id=user_id,
                             certification_id=context.certification_id,
@@ -327,6 +330,7 @@ class IntelligenceEngine:
                             context_fingerprint=context.compute_context_fingerprint(),
                             fallback_used=False,
                         )
+                        qa_response.audit_status = "PERSISTED" if audit_ok else "FAILED"
                         return qa_response
                     else:
                         logger.warning(f"Interactive LLM QA validation failed: {validation_errors}. Executing deterministic fallback.")
@@ -453,7 +457,7 @@ class IntelligenceEngine:
             context_fingerprint=context.compute_context_fingerprint(),
             generation_metadata=meta,
         )
-        self.persistence.log_audit_event(
+        audit_ok = self.persistence.log_audit_event(
             audit_id=f"AUD-{hashlib.sha256(str(time.time()).encode()).hexdigest()[:12]}",
             user_id=user_id,
             certification_id=context.certification_id,
@@ -464,6 +468,7 @@ class IntelligenceEngine:
             context_fingerprint=context.compute_context_fingerprint(),
             fallback_used=True,
         )
+        resp.audit_status = "PERSISTED" if audit_ok else "FAILED"
         return resp
 
 
