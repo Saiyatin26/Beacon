@@ -19,6 +19,7 @@ def generate_html_report(artifact: CertificationArtifact) -> str:
         CertificationStatus.REFERENCE_INCONSISTENT: ("#8b5cf6", "#f5f3ff", "REFERENCE INCONSISTENT"),
         CertificationStatus.INSUFFICIENT_COVERAGE: ("#f97316", "#fff7ed", "INSUFFICIENT COVERAGE"),
         CertificationStatus.ORACLE_SET_INVALID: ("#dc2626", "#fef2f2", "ORACLE SET INVALID"),
+        CertificationStatus.INCONCLUSIVE: ("#6b7280", "#f3f4f6", "INCONCLUSIVE"),
     }
 
     badge_color, badge_bg, badge_text = status_colors.get(

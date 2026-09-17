@@ -94,10 +94,30 @@ class CertificationEngine:
                 total_inp = len(evaluation_result.input_results)
                 equiv_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.EQUIVALENT)
                 diff_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.DIFFERENT)
+            res_id = getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else (getattr(context, "threshold_resolution_id", None) if context else None)
+            res_fp = getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else (getattr(context, "threshold_resolution_fingerprint", None) if context else None)
 
-            score = 1.0 if total_inp > 0 and diff_inp == 0 else (equiv_inp / total_inp if total_inp > 0 else 1.0)
-            final_status = CertificationStatus.NOT_CERTIFIED if diff_inp > 0 else CertificationStatus.CERTIFIED
-            is_certified = (final_status == CertificationStatus.CERTIFIED)
+            # Strict Phase 8 Threshold Authority Enforcement
+            if not threshold_resolution or not res_id or not res_fp or not str(res_id).strip() or not str(res_fp).strip():
+                final_status = CertificationStatus.INCONCLUSIVE
+                is_certified = False
+                score = 0.0
+                blocking_reasons = ["Phase 8 ThresholdResolution authority missing, unanchored, or unverified"]
+            else:
+                eff_thresh = getattr(threshold_resolution, "effective_threshold", 0.0)
+                if diff_inp > 0:
+                    if float(diff_inp) / float(total_inp) <= float(eff_thresh) if total_inp > 0 else False:
+                        final_status = CertificationStatus.CERTIFIED_WITH_WARNINGS if getattr(cert_policy, "allow_warnings", True) else CertificationStatus.NOT_CERTIFIED
+                        is_certified = (final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS))
+                    else:
+                        final_status = CertificationStatus.NOT_CERTIFIED
+                        is_certified = False
+                    score = float(equiv_inp) / float(total_inp) if total_inp > 0 else 0.0
+                else:
+                    final_status = CertificationStatus.CERTIFIED
+                    is_certified = True
+                    score = 1.0 if total_inp > 0 else 1.0
+                blocking_reasons = []
 
             oracle_summaries = []
             if oracle_set and hasattr(oracle_set, "rules"):
@@ -125,9 +145,6 @@ class CertificationEngine:
                         )
                     )
 
-            res_id = getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else getattr(context, "threshold_resolution_id", None)
-            res_fp = getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else getattr(context, "threshold_resolution_fingerprint", None)
-            
             if context:
                 context.threshold_resolution_id = res_id
                 context.threshold_resolution_fingerprint = res_fp
@@ -156,7 +173,11 @@ class CertificationEngine:
             )
 
             oset_id = getattr(oracle_set, "oracle_set_id", "") if oracle_set else ""
-            oset_ver = getattr(oracle_set, "version", "1.0.0") if oracle_set else "1.0.0"
+            raw_oset_ver = getattr(oracle_set, "version", 1) if oracle_set else 1
+            try:
+                oset_ver = int(raw_oset_ver)
+            except (ValueError, TypeError):
+                oset_ver = 1
             oset_hash = getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", "") if oracle_set else ""
 
             temp_artifact = CertificationArtifact(
@@ -190,7 +211,7 @@ class CertificationEngine:
                 regressions=[],
                 reference_inconsistencies=[],
                 warnings=[],
-                blocking_reasons=[],
+                blocking_reasons=blocking_reasons,
                 content_hash="",
                 context=final_context,
                 threshold_resolution_id=res_id,

@@ -12,10 +12,12 @@ import pytest
 from certification.models import (
     BehavioralRegression,
     CertificationArtifact,
+    CertificationContext,
     CertificationMetrics,
     CertificationStatus,
     PerOracleCertificationSummary,
 )
+from certification.certification_engine import CertificationEngine, certification_engine
 from common.contracts import compute_canonical_input_hash
 from evaluation.models import (
     BehaviorDifference,
@@ -1560,4 +1562,58 @@ def test_full_real_end_to_end_phase3_to_phase10_chain():
     assert explanation.authoritative_match_status == "CERTIFIED"
     assert explanation.persistence_status == "SUCCESS"
     assert BehaviorDimension.NONFUNCTIONAL in [d.dimension for d in explanation.dimension_explanations]
+
+
+def test_missing_threshold_resolution_fails_closed_in_v2_direct_path():
+    """Mandatory Master Test: EvaluationResult has 0 differences, ThresholdResolution is None.
+    
+    Strict V2 CertificationEngine MUST produce INCONCLUSIVE / Fail-Closed.
+    It MUST NOT produce CERTIFIED or an implicit perfect score.
+    """
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-ZERO-DIFF",
+        application_id="app_zero_diff",
+        run_id="RUN-ZERO-DIFF",
+        verdict=EvaluationVerdict.EQUIVALENT,
+        summary=EvaluationSummary(
+            total_inputs=10,
+            evaluated_inputs=10,
+            equivalent_inputs=10,
+            different_inputs=0,
+            inconclusive_inputs=0,
+            equivalence_score=1.0,
+            total_differences=0,
+        ),
+        input_results=[
+            InputEvaluationResult(
+                input_id=f"inp_{i}",
+                verdict=EvaluationVerdict.EQUIVALENT,
+                status=EvaluationVerdict.EQUIVALENT,
+                differences=[],
+            ) for i in range(10)
+        ],
+        differences=[],
+    )
+
+    cert_engine = CertificationEngine()
+    cert_ctx = CertificationContext(
+        certification_id="CERT-NO-THRESH",
+        project_id="app_zero_diff",
+        evaluation_mode="CONTROLLED",
+    )
+
+    # Call certify with zero differences but NO ThresholdResolution
+    artifact = cert_engine.certify(
+        context=cert_ctx,
+        evaluation_result=eval_res,
+        threshold_resolution=None,
+    )
+
+    # Must be INCONCLUSIVE and NOT CERTIFIED
+    assert artifact.status == CertificationStatus.INCONCLUSIVE
+    assert artifact.certified is False
+    assert artifact.score == 0.0
+    assert len(artifact.blocking_reasons) > 0
+    assert "ThresholdResolution" in artifact.blocking_reasons[0]
+
 
