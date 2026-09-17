@@ -98,10 +98,14 @@ class ExplanationContextBuilder:
         )
         proj_id = getattr(artifact, "project_id", None) or "default_project"
 
+        mode_normalized = (execution_mode or "auto").strip().lower()
+        is_strict_v2 = mode_normalized == "v2"
+        is_legacy_mode = mode_normalized == "legacy"
+
         # Determine authoritative verdict
         if evaluation_result:
             verdict_str = evaluation_result.verdict.value if hasattr(evaluation_result.verdict, "value") else str(evaluation_result.verdict)
-        elif artifact:
+        elif artifact and not is_strict_v2:
             verdict_str = artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status)
         else:
             verdict_str = "INCONCLUSIVE"
@@ -200,8 +204,8 @@ class ExplanationContextBuilder:
                 }
                 differences_summary.append(diff_record)
 
-        elif artifact and artifact.regressions:
-            # Fallback to artifact regression counterexamples with strict role metadata checks
+        elif not is_strict_v2 and artifact and artifact.regressions:
+            # Fallback when in non-strict V2 / legacy mode with strict evidence resolution
             for r in artifact.regressions:
                 inp_id = getattr(r, "input_id", None) or None
                 if inp_id:
@@ -300,8 +304,8 @@ class ExplanationContextBuilder:
                     "provenance": "PHASE_7_RECONCILED",
                 }
                 rules_context.append(rule_dict)
-        elif artifact and artifact.oracle_summaries:
-            # Compatibility fallback explicitly marked
+        elif is_legacy_mode and artifact and artifact.oracle_summaries:
+            # Compatibility fallback explicitly restricted to legacy mode
             for s in artifact.oracle_summaries:
                 if s.oracle_id:
                     valid_rule_ids.add(s.oracle_id)
@@ -549,7 +553,7 @@ class ExplanationContextBuilder:
                 if dim_str and dim_str != "UNKNOWN" and hasattr(BehaviorDimension, str(dim_str).upper()):
                     evaluated_dims_set.add(BehaviorDimension[str(dim_str).upper()])
 
-        if not evaluated_dims_set and artifact and artifact.metrics and (getattr(artifact.metrics, "unique_input_count", 0) > 0 or getattr(artifact.metrics, "matching_case_count", 0) > 0):
+        if not is_strict_v2 and not evaluated_dims_set and artifact and artifact.metrics and (getattr(artifact.metrics, "unique_input_count", 0) > 0 or getattr(artifact.metrics, "matching_case_count", 0) > 0):
             evaluated_dims_set.add(BehaviorDimension.OUTPUT)
 
         dimensions_evaluated = sorted(list(evaluated_dims_set), key=lambda d: d.value)
@@ -604,16 +608,21 @@ class ExplanationContextBuilder:
                 matching_count = total_inputs - regression_count
             else:
                 regression_count = len(differences_summary)
-                total_inputs = len(valid_input_ids) or regression_count or (artifact.metrics.unique_input_count if artifact and artifact.metrics else 1)
+                total_inputs = len(valid_input_ids) or regression_count or 1
                 matching_count = max(0, total_inputs - regression_count)
 
             if total_inputs > 0:
                 equiv_score = float(matching_count) / float(total_inputs)
-        else:
+        elif not is_strict_v2:
             total_inputs = len(valid_input_ids) or (artifact.metrics.unique_input_count if artifact and artifact.metrics else 1)
             matching_count = (artifact.metrics.matching_case_count if artifact and artifact.metrics else 0)
             regression_count = len(differences_summary) or (artifact.metrics.regression_case_count if artifact and artifact.metrics else 0)
             equiv_score = artifact.score if artifact else 0.0
+        else:
+            total_inputs = 0
+            matching_count = 0
+            regression_count = 0
+            equiv_score = 0.0
 
         # 9. Construct Context
         context = ExplanationContext(

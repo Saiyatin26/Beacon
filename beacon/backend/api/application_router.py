@@ -177,31 +177,27 @@ def certify_application(
         )
 
         # Resolve Phase 8 Threshold Resolution
-        threshold_res = None
-        try:
-            from threshold.engine import ThresholdEngine
-            from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdStrategy
-            from threshold.persistence import threshold_persistence
+        from threshold.engine import ThresholdEngine
+        from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdStrategy
+        from threshold.persistence import threshold_persistence
 
-            thresh_engine = ThresholdEngine()
-            th_policy = threshold_persistence.get_policy(f"POL-{spec.application_id}")
-            if not th_policy:
-                th_policy = ThresholdPolicy(
-                    policy_id=f"POL-{spec.application_id}",
-                    version="1.0.0",
-                    metric=DifferenceMetric.ABSOLUTE_DIFF,
-                    strategy=ThresholdStrategy.FIXED,
-                    parameters={"value": 0.0},
-                )
-                threshold_persistence.save_policy(th_policy)
-
-            threshold_res = thresh_engine.resolve_threshold(
-                metric=th_policy.metric,
-                policy=th_policy,
+        thresh_engine = ThresholdEngine()
+        th_policy = threshold_persistence.get_policy(f"POL-{spec.application_id}")
+        if not th_policy:
+            th_policy = ThresholdPolicy(
+                policy_id=f"POL-{spec.application_id}",
+                version="1.0.0",
+                metric=DifferenceMetric.ABSOLUTE_DIFF,
+                strategy=ThresholdStrategy.FIXED,
+                parameters={"value": 0.0},
             )
-            threshold_persistence.save_resolution(threshold_res)
-        except Exception as t_err:
-            logger.debug(f"Phase 8 threshold resolution skipped or failed: {t_err}")
+            threshold_persistence.save_policy(th_policy)
+
+        threshold_res = thresh_engine.resolve_threshold(
+            metric=th_policy.metric,
+            policy=th_policy,
+        )
+        threshold_persistence.save_resolution(threshold_res)
 
         # 6. Execute deterministic certification
         artifact = certification_engine.certify(
