@@ -125,29 +125,41 @@ class ExplanationContextBuilder:
                 # Strictly metadata-driven role resolution (never filename, ID string, or list position)
                 ref_eid = diff.reference_evidence_id
                 tgt_eid = diff.target_evidence_id
+                diff_evids = getattr(diff, "evidence_ids", []) or []
 
-                if ref_eid:
-                    rec = record_by_id.get(ref_eid)
-                    if not rec and actual_session_id:
-                        try:
-                            rec = evidence_store.get_record(ref_eid)
-                        except Exception:
-                            pass
-                    if rec or not actual_session_id:
-                        valid_evid_ids.add(ref_eid)
+                if (not ref_eid or not tgt_eid):
+                    candidate_eids = list(diff_evids)
+                    if not candidate_eids and inp_id:
+                        candidate_eids = [rec.evidence_id for rec in all_records if rec.input_id == inp_id]
 
-                if tgt_eid:
-                    rec = record_by_id.get(tgt_eid)
-                    if not rec and actual_session_id:
-                        try:
-                            rec = evidence_store.get_record(tgt_eid)
-                        except Exception:
-                            pass
-                    if rec or not actual_session_id:
-                        valid_evid_ids.add(tgt_eid)
+                    for eid in candidate_eids:
+                        rec = record_by_id.get(eid)
+                        if not rec:
+                            try:
+                                rec = evidence_store.get_record(eid)
+                            except Exception:
+                                pass
+                        if rec:
+                            role_str = str(rec.role).lower()
+                            if role_str in ("reference", "legacy") and not ref_eid:
+                                ref_eid = eid
+                            elif role_str in ("target", "modernized") and not tgt_eid:
+                                tgt_eid = eid
+
+                for eid in ([ref_eid, tgt_eid] + diff_evids):
+                    if eid:
+                        valid_evid_ids.add(eid)
 
                 # Ensure dimension is canonical
                 dim_str = diff.dimension.value if hasattr(diff.dimension, "value") else str(diff.dimension)
+
+                all_diff_evids = [e for e in ([ref_eid, tgt_eid] + diff_evids) if e]
+                seen_eids = set()
+                dedup_evids = []
+                for e in all_diff_evids:
+                    if e not in seen_eids:
+                        seen_eids.add(e)
+                        dedup_evids.append(e)
 
                 diff_record = {
                     "difference_id": diff.difference_id,
@@ -157,7 +169,7 @@ class ExplanationContextBuilder:
                     "target_value": diff.target_value,
                     "reference_evidence_id": ref_eid,
                     "target_evidence_id": tgt_eid,
-                    "evidence_ids": [e for e in (ref_eid, tgt_eid) if e],
+                    "evidence_ids": dedup_evids,
                     "details": diff.details,
                     "difference_type": diff.difference_type.value if hasattr(diff.difference_type, "value") else str(diff.difference_type),
                 }
@@ -306,62 +318,74 @@ class ExplanationContextBuilder:
                 pol = threshold_persistence.get_policy(artifact.certification_policy_id)
                 if pol:
                     with threshold_persistence._get_connection() as conn:
-                        row = None
-                        if exact_res_id:
+                        if exact_res_id and exact_res_fp:
                             row = conn.execute(
                                 "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE resolution_id = ?",
                                 (exact_res_id,),
                             ).fetchone()
-                        elif exact_res_fp:
-                            row = conn.execute(
-                                "SELECT resolution_json, fingerprint, final_value, status, sample_count FROM threshold_resolutions WHERE fingerprint = ?",
-                                (exact_res_fp,),
-                            ).fetchone()
-
-                        if row:
-                            # Verify fingerprint integrity if expected fingerprint exists
-                            loaded_fp = row["fingerprint"]
-                            if exact_res_fp and loaded_fp != exact_res_fp:
-                                logger.error(f"Threshold resolution fingerprint mismatch: expected '{exact_res_fp}', got '{loaded_fp}'")
-                                threshold_dict = {
-                                    "policy_id": pol.policy_id,
-                                    "error": "THRESHOLD_CONTEXT_ERROR: Fingerprint mismatch",
-                                    "status": "ERROR",
-                                }
+                            if row:
+                                loaded_fp = row["fingerprint"]
+                                if loaded_fp != exact_res_fp:
+                                    logger.error(f"Threshold resolution fingerprint mismatch: expected '{exact_res_fp}', got '{loaded_fp}'")
+                                    threshold_dict = {
+                                        "policy_id": pol.policy_id,
+                                        "error": "THRESHOLD_CONTEXT_ERROR: Fingerprint mismatch",
+                                        "status": "ERROR",
+                                    }
+                                else:
+                                    pol_hash = pol.compute_policy_hash() if hasattr(pol, "compute_policy_hash") else getattr(pol, "policy_hash", "")
+                                    threshold_dict = {
+                                        "policy_id": pol.policy_id,
+                                        "version": pol.version,
+                                        "metric": pol.metric.value if hasattr(pol.metric, "value") else str(pol.metric),
+                                        "strategy": pol.strategy.value if hasattr(pol.strategy, "value") else str(pol.strategy),
+                                        "policy_hash": pol_hash,
+                                        "resolution_fingerprint": loaded_fp,
+                                        "resolved_threshold": row["final_value"],
+                                        "resolution_status": row["status"],
+                                        "sample_count": row["sample_count"],
+                                    }
+                                thresholds_context.append(threshold_dict)
                             else:
-                                pol_hash = pol.compute_policy_hash() if hasattr(pol, "compute_policy_hash") else getattr(pol, "policy_hash", "")
                                 threshold_dict = {
                                     "policy_id": pol.policy_id,
-                                    "version": pol.version,
-                                    "metric": pol.metric.value if hasattr(pol.metric, "value") else str(pol.metric),
-                                    "strategy": pol.strategy.value if hasattr(pol.strategy, "value") else str(pol.strategy),
-                                    "policy_hash": pol_hash,
-                                    "resolution_fingerprint": loaded_fp,
-                                    "resolved_threshold": row["final_value"],
-                                    "resolution_status": row["status"],
-                                    "sample_count": row["sample_count"],
+                                    "status": "INCONCLUSIVE",
+                                    "reason": f"Exact threshold resolution '{exact_res_id}' not found in persistence.",
                                 }
-                            thresholds_context.append(threshold_dict)
+                                thresholds_context.append(threshold_dict)
                         else:
+                            # Both ID and fingerprint must be present; fail closed if either is missing
+                            missing_items = []
+                            if not exact_res_id:
+                                missing_items.append("threshold_resolution_id")
+                            if not exact_res_fp:
+                                missing_items.append("threshold_resolution_fingerprint")
                             threshold_dict = {
                                 "policy_id": pol.policy_id,
                                 "status": "INCONCLUSIVE",
-                                "reason": "Exact threshold resolution linkage unavailable.",
+                                "reason": f"Exact threshold resolution authority missing: {', '.join(missing_items)}.",
                             }
                             thresholds_context.append(threshold_dict)
             except Exception as exc:
                 logger.debug(f"Phase 8 policy resolution not found in persistence: {exc}")
         elif resolved_thresh:
-            threshold_dict = {
-                "policy_id": resolved_thresh.policy_id,
-                "version": getattr(resolved_thresh, "policy_version", "1.0.0"),
-                "metric": resolved_thresh.metric.value if hasattr(resolved_thresh.metric, "value") else str(resolved_thresh.metric),
-                "strategy": resolved_thresh.strategy.value if hasattr(resolved_thresh.strategy, "value") else str(resolved_thresh.strategy),
-                "resolution_fingerprint": resolved_thresh.fingerprint,
-                "resolved_threshold": resolved_thresh.final_value,
-                "resolution_status": resolved_thresh.status.value if hasattr(resolved_thresh.status, "value") else str(resolved_thresh.status),
-                "sample_count": resolved_thresh.sample_count,
-            }
+            if not resolved_thresh.resolution_id or not resolved_thresh.fingerprint:
+                threshold_dict = {
+                    "policy_id": resolved_thresh.policy_id,
+                    "status": "INCONCLUSIVE",
+                    "reason": "Direct threshold resolution missing resolution_id or fingerprint.",
+                }
+            else:
+                threshold_dict = {
+                    "policy_id": resolved_thresh.policy_id,
+                    "version": getattr(resolved_thresh, "policy_version", "1.0.0"),
+                    "metric": resolved_thresh.metric.value if hasattr(resolved_thresh.metric, "value") else str(resolved_thresh.metric),
+                    "strategy": resolved_thresh.strategy.value if hasattr(resolved_thresh.strategy, "value") else str(resolved_thresh.strategy),
+                    "resolution_fingerprint": resolved_thresh.fingerprint,
+                    "resolved_threshold": resolved_thresh.final_value,
+                    "resolution_status": resolved_thresh.status.value if hasattr(resolved_thresh.status, "value") else str(resolved_thresh.status),
+                    "sample_count": resolved_thresh.sample_count,
+                }
             thresholds_context.append(threshold_dict)
 
         # 6. Authoritative State & Workflow Evidence Analysis from Phase 3 Evidence Records
@@ -456,9 +480,29 @@ class ExplanationContextBuilder:
         redacted_diffs = redact_sensitive_data(differences_summary)
         redacted_rules = redact_sensitive_data(rules_context)
 
-        total_inputs = len(valid_input_ids) or (artifact.metrics.unique_input_count if artifact else 1)
-        matching_count = (artifact.metrics.matching_case_count if artifact else 0)
-        regression_count = len(differences_summary) or (artifact.metrics.regression_case_count if artifact else 0)
+        # Derive evaluation counts authoritatively from Phase 4 EvaluationResult if present
+        equiv_score = 0.0
+        if evaluation_result:
+            if hasattr(evaluation_result, "summary") and evaluation_result.summary and (getattr(evaluation_result.summary, "total_inputs", 0) > 0 or getattr(evaluation_result.summary, "evaluated_inputs", 0) > 0):
+                total_inputs = getattr(evaluation_result.summary, "evaluated_inputs", 0) or getattr(evaluation_result.summary, "total_inputs", 0)
+                matching_count = getattr(evaluation_result.summary, "equivalent_inputs", 0)
+                regression_count = getattr(evaluation_result.summary, "different_inputs", 0) or getattr(evaluation_result.summary, "total_differences", 0)
+            elif hasattr(evaluation_result, "input_results") and evaluation_result.input_results:
+                total_inputs = len(evaluation_result.input_results)
+                regression_count = len([ir for ir in evaluation_result.input_results if getattr(ir, "verdict", None) == EvaluationVerdict.DIFFERENT or getattr(ir, "differences", None)])
+                matching_count = total_inputs - regression_count
+            else:
+                regression_count = len(differences_summary)
+                total_inputs = len(valid_input_ids) or regression_count or (artifact.metrics.unique_input_count if artifact and artifact.metrics else 1)
+                matching_count = max(0, total_inputs - regression_count)
+
+            if total_inputs > 0:
+                equiv_score = float(matching_count) / float(total_inputs)
+        else:
+            total_inputs = len(valid_input_ids) or (artifact.metrics.unique_input_count if artifact and artifact.metrics else 1)
+            matching_count = (artifact.metrics.matching_case_count if artifact and artifact.metrics else 0)
+            regression_count = len(differences_summary) or (artifact.metrics.regression_case_count if artifact and artifact.metrics else 0)
+            equiv_score = artifact.score if artifact else 0.0
 
         # 9. Construct Context
         context = ExplanationContext(
@@ -467,7 +511,7 @@ class ExplanationContextBuilder:
             project_id=proj_id,
             session_id=actual_session_id,
             authoritative_verdict=verdict_str,
-            equivalence_score=artifact.score if artifact else 0.0,
+            equivalence_score=equiv_score,
             unique_inputs_count=total_inputs,
             matching_cases_count=matching_count,
             regression_cases_count=regression_count,

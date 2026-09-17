@@ -73,7 +73,7 @@ class AuthoritativeFact(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     fact_type: str
-    dimension: BehaviorDimension = BehaviorDimension.OUTPUT
+    dimension: Optional[BehaviorDimension] = None
     input_id: Optional[str] = None
     input_hash: Optional[str] = None
     role: Optional[str] = None
@@ -91,7 +91,7 @@ class ExplanationFinding(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     finding_id: str = ""
-    dimension: BehaviorDimension = BehaviorDimension.OUTPUT
+    dimension: Optional[BehaviorDimension] = None
     statement: str
     support: EvidenceSupportLevel = EvidenceSupportLevel.DETERMINISTIC_FACT
     evidence_ids: list[str] = Field(default_factory=list)

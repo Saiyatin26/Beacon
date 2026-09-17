@@ -95,6 +95,7 @@ class BehaviorDifference(BaseModel):
     target_value: Optional[Any] = None
     reference_evidence_id: Optional[str] = None
     target_evidence_id: Optional[str] = None
+    evidence_ids: list[str] = Field(default_factory=list)
     comparison_method: str = "exact"
     details: dict[str, Any] = Field(default_factory=dict)
     timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

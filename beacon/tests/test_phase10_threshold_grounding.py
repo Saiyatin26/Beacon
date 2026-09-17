@@ -55,6 +55,7 @@ def test_phase8_threshold_consumed_authoritatively():
         project_id="app_threshold_test",
         certification_policy_id=policy.policy_id,
         threshold_resolution_id="RES-PHASE8-TEST-001",
+        threshold_resolution_fingerprint=resolution.fingerprint,
         status=CertificationStatus.CERTIFIED,
         score=0.95,
         metrics=CertificationMetrics(

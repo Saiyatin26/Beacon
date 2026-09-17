@@ -947,3 +947,182 @@ def test_phase9_knowledge_cannot_override_empirical_evidence():
     # Verdict MUST remain DIFFERENT despite contradictory documentation
     assert exp.overall_verdict == "DIFFERENT"
     assert exp.is_authoritative_match is True
+
+
+def test_adversarial_e_fingerprint_only_lookup_fails_closed():
+    """Providing a fingerprint without an exact threshold_resolution_id fails closed."""
+    policy = ThresholdPolicy(
+        policy_id="POL-ADV-E", version="1.0.0", metric=DifferenceMetric.ABSOLUTE_DIFF,
+        strategy=ThresholdStrategy.FIXED, parameters={"value": 0.05}
+    )
+    threshold_persistence.save_policy(policy)
+
+    res = ThresholdResolution(
+        resolution_id="RES-ADV-E-001", policy_id="POL-ADV-E", policy_version="1.0.0",
+        metric=DifferenceMetric.ABSOLUTE_DIFF, strategy=ThresholdStrategy.FIXED,
+        status=ThresholdStatus.RESOLVED, final_value=0.05, sample_count=20, fingerprint="fp_adv_e"
+    )
+    threshold_persistence.save_resolution(res)
+
+    art = CertificationArtifact(
+        certification_id="CERT-ADV-E",
+        project_id="app_adv_e",
+        status=CertificationStatus.CERTIFIED,
+        score=0.98,
+        certification_policy_id="POL-ADV-E",
+        threshold_resolution_id=None,  # Missing ID!
+        threshold_resolution_fingerprint="fp_adv_e",
+        metrics=CertificationMetrics(unique_input_count=10, matching_case_count=10, regression_case_count=0),
+    )
+
+    ctx = explanation_context_builder.build_context("CERT-ADV-E", artifact=art, use_company_knowledge=False)
+    assert len(ctx.thresholds_context) == 1
+    assert ctx.thresholds_context[0]["status"] == "INCONCLUSIVE"
+    assert "threshold_resolution_id" in ctx.thresholds_context[0]["reason"]
+
+
+def test_adversarial_f_misleading_evidence_ids_role_honored():
+    """Misleading substring evidence IDs (e.g. 'modern_reference') respect EvidenceRecord.role exclusively."""
+    rec1 = EvidenceRecord(
+        evidence_id="legacy_target_01",
+        session_id="SESS-ADV-F",
+        role="reference",  # Role is reference despite 'target' in ID
+        input_id="INP-ADV-F",
+        evidence_type=EvidenceType.OUTPUT,
+        content_hash="h_adv_f1",
+        size_bytes=32,
+        capture_status="CAPTURED",
+    )
+    rec2 = EvidenceRecord(
+        evidence_id="modern_reference_02",
+        session_id="SESS-ADV-F",
+        role="target",  # Role is target despite 'reference' in ID
+        input_id="INP-ADV-F",
+        evidence_type=EvidenceType.OUTPUT,
+        content_hash="h_adv_f2",
+        size_bytes=32,
+        capture_status="CAPTURED",
+    )
+    evidence_store.save_record(rec1)
+    evidence_store.save_record(rec2)
+
+    diff = BehaviorDifference(
+        difference_id="DIFF-ADV-F",
+        dimension=BehaviorDimension.OUTPUT,
+        difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
+        input_id="INP-ADV-F",
+        reference_value="A",
+        target_value="B",
+        evidence_ids=["legacy_target_01", "modern_reference_02"],
+    )
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-ADV-F",
+        application_id="adv_f_service",
+        verdict=EvaluationVerdict.DIFFERENT,
+        status=EvaluationVerdict.DIFFERENT,
+        differences=[diff],
+    )
+
+    ctx = explanation_context_builder.build_context(
+        "CERT-ADV-F",
+        evidence_records=[rec1, rec2],
+        evaluation_result=eval_res,
+        use_company_knowledge=False,
+    )
+
+    diff_summary = ctx.differences_summary[0]
+    assert diff_summary["reference_evidence_id"] == "legacy_target_01"
+    assert diff_summary["target_evidence_id"] == "modern_reference_02"
+
+
+def test_adversarial_g_shuffled_evidence_records_order_independent():
+    """Shuffling evidence records list has zero impact on role assignment."""
+    rec_ref = EvidenceRecord(
+        evidence_id="EVID-SHUFFLE-REF",
+        session_id="SESS-G",
+        role="reference",
+        input_id="INP-G",
+        evidence_type=EvidenceType.OUTPUT,
+        content_hash="href_g",
+        size_bytes=10,
+        capture_status="CAPTURED",
+    )
+    rec_tgt = EvidenceRecord(
+        evidence_id="EVID-SHUFFLE-TGT",
+        session_id="SESS-G",
+        role="target",
+        input_id="INP-G",
+        evidence_type=EvidenceType.OUTPUT,
+        content_hash="htgt_g",
+        size_bytes=10,
+        capture_status="CAPTURED",
+    )
+    evidence_store.save_record(rec_ref)
+    evidence_store.save_record(rec_tgt)
+
+    diff = BehaviorDifference(
+        difference_id="DIFF-G",
+        dimension=BehaviorDimension.OUTPUT,
+        difference_type=DifferenceType.OUTPUT_VALUE_MISMATCH,
+        input_id="INP-G",
+        reference_value=1,
+        target_value=2,
+        evidence_ids=["EVID-SHUFFLE-REF", "EVID-SHUFFLE-TGT"],
+    )
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-G",
+        application_id="shuffle_service",
+        verdict=EvaluationVerdict.DIFFERENT,
+        status=EvaluationVerdict.DIFFERENT,
+        differences=[diff],
+    )
+
+    # Pass in reverse order: target first, reference second
+    ctx = explanation_context_builder.build_context(
+        "CERT-G",
+        evidence_records=[rec_tgt, rec_ref],
+        evaluation_result=eval_res,
+        use_company_knowledge=False,
+    )
+
+    diff_summary = ctx.differences_summary[0]
+    assert diff_summary["reference_evidence_id"] == "EVID-SHUFFLE-REF"
+    assert diff_summary["target_evidence_id"] == "EVID-SHUFFLE-TGT"
+
+
+def test_adversarial_k_artifact_evaluation_conflict_preserves_phase4():
+    """When CertificationArtifact claims NOT_CERTIFIED but EvaluationResult proves EQUIVALENT, Phase 4 truth is preserved."""
+    eval_res = EvaluationResult(
+        evaluation_id="EVAL-K-CONFLICT",
+        application_id="conflict_svc",
+        verdict=EvaluationVerdict.EQUIVALENT,
+        status=EvaluationVerdict.EQUIVALENT,
+        differences=[],
+        summary=EvaluationSummary(
+            total_inputs=10,
+            evaluated_inputs=10,
+            equivalent_inputs=10,
+            different_inputs=0,
+            inconclusive_inputs=0,
+        ),
+    )
+    art = CertificationArtifact(
+        certification_id="CERT-K-CONFLICT",
+        project_id="conflict_svc",
+        status=CertificationStatus.NOT_CERTIFIED,
+        score=0.2,
+        metrics=CertificationMetrics(unique_input_count=10, matching_case_count=2, regression_case_count=8),
+    )
+
+    ctx = explanation_context_builder.build_context(
+        "CERT-K-CONFLICT",
+        artifact=art,
+        evaluation_result=eval_res,
+        use_company_knowledge=False,
+    )
+
+    # Phase 4 is authoritative for behavioral evaluation facts
+    assert ctx.authoritative_verdict == "EQUIVALENT"
+    assert ctx.matching_cases_count == 10
+    assert ctx.regression_cases_count == 0
+
