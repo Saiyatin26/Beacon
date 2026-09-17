@@ -861,6 +861,7 @@ class CertificationEngine:
             input_set_hash=input_set_hash,
             certification_policy_id=cert_policy.policy_id,
             certification_policy_version=cert_policy.version,
+            certification_policy_hash=pol_hash,
             threshold_resolution_id=getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else getattr(final_context, "threshold_resolution_id", None),
             threshold_resolution_fingerprint=getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else getattr(final_context, "threshold_resolution_fingerprint", None),
             certification_engine_version="1.0.0",

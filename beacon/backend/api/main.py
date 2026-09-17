@@ -946,7 +946,7 @@ def run_certification_v1(
             model=act_mod,
             generation_method=gen_method,
             policy_id=request.policy.policy_id if request.policy else "POL-DEFAULT",
-            policy_hash="",
+            policy_hash=request.policy.compute_hash() if request.policy else CertificationPolicy().compute_hash(),
             provider_metadata={
                 "preferred_provider": pref_prov,
                 "actual_provider": act_prov,
@@ -1000,7 +1000,7 @@ def run_certification_v1(
 
     # 3. Construct Deterministic Request Identity (All Certification-Affecting Fields)
     pol_id = request.policy.policy_id if request.policy else "POL-DEFAULT"
-    pol_hash = request.policy.compute_hash() if request.policy else ""
+    pol_hash = request.policy.compute_hash() if request.policy else CertificationPolicy().compute_hash()
     leg_impl_hash = getattr(legacy_adp, "implementation_hash", "") or (context.legacy_implementation_hash if context else "")
     mod_impl_hash = getattr(modern_adp, "implementation_hash", "") or (context.modernized_implementation_hash if context else "")
     d_checksum = context.dataset_checksum if context else ""
