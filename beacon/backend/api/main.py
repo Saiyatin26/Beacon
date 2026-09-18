@@ -241,8 +241,41 @@ from api.intelligence_router import intelligence_router
 app.include_router(intelligence_router)
 
 # Phase 11 (V2) Production Readiness, Operationalization, and Canonical Workflow Routes
-from api.workflow_router import workflow_router
+from api.workflow_router import (
+    workflow_router,
+    analyze_repository_endpoint,
+    certify_repository_endpoint,
+    RepositoryAnalysisRequest,
+    RepositoryAnalysisResult,
+    RepositoryCertificationRequest,
+)
 app.include_router(workflow_router)
+
+# Repository-First Analysis & Certification Endpoints (Part 1 Contract)
+@app.post(
+    "/api/v2/repositories/analyze",
+    response_model=RepositoryAnalysisResult,
+    tags=["Repositories V2"],
+    summary="Safely analyze repositories, detect technology, resolve adapters, and discover legitimate inputs",
+)
+def api_v2_repositories_analyze(
+    req: RepositoryAnalysisRequest,
+    current_user: User = Depends(get_current_active_user),
+) -> RepositoryAnalysisResult:
+    return analyze_repository_endpoint(req, current_user)
+
+
+@app.post(
+    "/api/v2/repositories/certify",
+    tags=["Repositories V2"],
+    summary="Execute repository-first V2 certification workflow from source repositories",
+)
+def api_v2_repositories_certify(
+    req: RepositoryCertificationRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    return certify_repository_endpoint(req, current_user)
+
 
 
 

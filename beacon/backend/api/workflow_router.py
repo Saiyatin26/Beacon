@@ -31,8 +31,8 @@ logger = logging.getLogger("beacon.api.workflow")
 workflow_router = APIRouter(prefix="/api/v2/workflow", tags=["v2-production-workflow"])
 
 
-from typing import Any, Literal, Optional
-from pydantic import BaseModel, Field
+from typing import Any, Literal, Optional, Union
+from pydantic import BaseModel, ConfigDict, Field
 
 from application.repository_service import (
     RepositoryService,
@@ -62,11 +62,38 @@ from threshold.persistence import threshold_persistence
 from threshold.models import ThresholdPolicy, DifferenceMetric, ThresholdStrategy
 
 
+class RepositoryAnalysisRequest(BaseModel):
+    """Request payload for repository static analysis and discovery."""
+    legacy_repository: RepositorySourceSpec
+    modern_repository: RepositorySourceSpec
+    evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "CONTROLLED"
+
+
+class RepositoryAnalysisResult(BaseModel):
+    """Structured result of automated repository static analysis and discovery."""
+    model_config = ConfigDict(extra="ignore")
+
+    status: str = "READY"
+    evaluation_mode: str = "CONTROLLED"
+    application_id: str = ""
+    specification_fingerprint: str = ""
+    legacy: dict[str, Any] = Field(default_factory=dict)
+    modern: dict[str, Any] = Field(default_factory=dict)
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    inputs: list[dict[str, Any]] = Field(default_factory=list)
+    inputs_count: int = 0
+    input_provenance: dict[str, Any] = Field(default_factory=dict)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    diagnostic_message: str = ""
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class RepositoryCertificationRequest(BaseModel):
     """Primary request payload for repository-first V2 certification."""
     legacy_repository: RepositorySourceSpec
     modern_repository: RepositorySourceSpec
-    evaluation_mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED"
+    evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "CONTROLLED"
     policy_min_equivalence_score: float = 0.999
     policy_min_oracle_coverage: float = 0.0
     allow_warnings: bool = False
@@ -76,11 +103,10 @@ class RepositoryCertificationRequest(BaseModel):
     idempotency_key: Optional[str] = None
 
 
-def _run_repository_certification_pipeline(
-    req: RepositoryCertificationRequest,
-    current_user: User,
-) -> WorkflowResult:
-    """Executes full repository ingestion, analysis, adapter detection, input discovery, and canonical certification."""
+def _perform_repository_analysis(
+    req: Union[RepositoryAnalysisRequest, RepositoryCertificationRequest],
+) -> tuple[Any, Any, Any, Any, Any, Any, Any, RepositoryAnalysisResult]:
+    """Performs safe static ingestion, static analysis, adapter resolution, and input discovery."""
     # 1. Ingest repositories securely
     try:
         legacy_dir, legacy_prov = repository_service.ingest_repository(req.legacy_repository)
@@ -92,7 +118,7 @@ def _run_repository_certification_pipeline(
             detail=f"Repository ingestion failed: {str(exc)}",
         )
 
-    # 2. Automated repository analysis
+    # 2. Automated static repository analysis
     try:
         legacy_analysis = repository_service.analyze_repository(legacy_dir, legacy_prov)
         modern_analysis = repository_service.analyze_repository(modern_dir, modern_prov)
@@ -103,8 +129,132 @@ def _run_repository_certification_pipeline(
             detail=f"Repository static analysis failed: {str(exc)}",
         )
 
-    # 3. Automatic adapter resolution (fail-closed)
+    # 3. Static adapter resolution (fail-closed, no code execution)
     legacy_adapter_res = adapter_detector.resolve_adapter_for_repository(legacy_analysis, role="reference")
+    modern_adapter_res = adapter_detector.resolve_adapter_for_repository(modern_analysis, role="target")
+
+    # 4. Input & fixture discovery (no synthetic fallback, no keyword mapping)
+    input_discovery_res = input_discovery_engine.discover_inputs(legacy_analysis, modern_analysis)
+
+    app_id = f"APP-{legacy_prov.content_hash[:8]}-{modern_prov.content_hash[:8]}"
+
+    # Aggregate discovered rules & boundary invariants
+    discovered_rules = []
+    for idx, inv in enumerate(legacy_analysis.boundary_invariants + modern_analysis.boundary_invariants):
+        discovered_rules.append({
+            "rule_id": f"RULE-{idx+1:03d}",
+            "description": inv,
+            "source": "STATIC_AST_COMPARISON",
+        })
+
+    # Prepare inputs payload
+    discovered_inputs = [inp.values for inp in input_discovery_res.test_inputs]
+
+    # Calculate specification fingerprint
+    raw_fp_data = {
+        "legacy_content_hash": legacy_prov.content_hash,
+        "modern_content_hash": modern_prov.content_hash,
+        "legacy_adapter": legacy_adapter_res.adapter_name,
+        "modern_adapter": modern_adapter_res.adapter_name,
+        "legacy_entrypoint": legacy_adapter_res.resolved_entrypoint,
+        "modern_entrypoint": modern_adapter_res.resolved_entrypoint,
+        "input_set_hash": input_discovery_res.input_set_hash,
+        "evaluation_mode": req.evaluation_mode,
+    }
+    spec_fingerprint = hashlib.sha256(
+        json.dumps(raw_fp_data, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+    # Determine overall status
+    errors = []
+    warnings = []
+    analysis_status = "READY"
+
+    if legacy_adapter_res.status != AdapterResolutionStatus.RESOLVED:
+        analysis_status = legacy_adapter_res.status.value
+        errors.append(f"Legacy adapter: {legacy_adapter_res.diagnostic_message}")
+    if modern_adapter_res.status != AdapterResolutionStatus.RESOLVED:
+        if analysis_status == "READY":
+            analysis_status = modern_adapter_res.status.value
+        errors.append(f"Modern adapter: {modern_adapter_res.diagnostic_message}")
+    if input_discovery_res.status != InputDiscoveryStatus.SUCCESS:
+        if analysis_status == "READY":
+            analysis_status = "DISCOVERY_INSUFFICIENT"
+        errors.append(f"Inputs: {input_discovery_res.diagnostic_message}")
+
+    analysis_result = RepositoryAnalysisResult(
+        status=analysis_status,
+        evaluation_mode=req.evaluation_mode,
+        application_id=app_id,
+        specification_fingerprint=spec_fingerprint,
+        legacy={
+            "source_identity": (legacy_prov.identity.model_dump() if legacy_prov.identity else {}),
+            "repository_url": legacy_prov.source_url,
+            "resolved_revision": legacy_prov.resolved_revision,
+            "commit_sha": legacy_prov.commit_sha,
+            "content_hash": legacy_prov.content_hash,
+            "languages": legacy_analysis.languages,
+            "technologies": legacy_analysis.frameworks or legacy_analysis.languages,
+            "adapter": legacy_adapter_res.model_dump(exclude={"adapter_instance"}),
+            "entrypoints": [e.model_dump() for e in legacy_analysis.entrypoint_candidates],
+        },
+        modern={
+            "source_identity": (modern_prov.identity.model_dump() if modern_prov.identity else {}),
+            "repository_url": modern_prov.source_url,
+            "resolved_revision": modern_prov.resolved_revision,
+            "commit_sha": modern_prov.commit_sha,
+            "content_hash": modern_prov.content_hash,
+            "languages": modern_analysis.languages,
+            "technologies": modern_analysis.frameworks or modern_analysis.languages,
+            "adapter": modern_adapter_res.model_dump(exclude={"adapter_instance"}),
+            "entrypoints": [e.model_dump() for e in modern_analysis.entrypoint_candidates],
+        },
+        rules=discovered_rules,
+        inputs=discovered_inputs[:5],  # Sample for inspection
+        inputs_count=len(input_discovery_res.test_inputs),
+        input_provenance=input_discovery_res.provenance,
+        provenance={
+            "legacy_provenance": legacy_prov.model_dump(),
+            "modern_provenance": modern_prov.model_dump(),
+            "fingerprint": spec_fingerprint,
+        },
+        diagnostic_message=(
+            f"Successfully analyzed repositories ({len(input_discovery_res.test_inputs)} inputs, "
+            f"{len(discovered_rules)} invariants discovered)." if analysis_status == "READY"
+            else f"Repository analysis failed closed: {'; '.join(errors)}"
+        ),
+        errors=errors,
+        warnings=warnings,
+    )
+
+    return (
+        legacy_dir,
+        legacy_prov,
+        modern_dir,
+        modern_prov,
+        legacy_adapter_res,
+        modern_adapter_res,
+        input_discovery_res,
+        analysis_result,
+    )
+
+
+def _run_repository_certification_pipeline(
+    req: RepositoryCertificationRequest,
+    current_user: User,
+) -> WorkflowResult:
+    """Executes full repository ingestion, analysis, adapter detection, input discovery, and canonical certification."""
+    (
+        legacy_dir,
+        legacy_prov,
+        modern_dir,
+        modern_prov,
+        legacy_adapter_res,
+        modern_adapter_res,
+        input_discovery_res,
+        analysis_result,
+    ) = _perform_repository_analysis(req)
+
     if legacy_adapter_res.status != AdapterResolutionStatus.RESOLVED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -117,7 +267,6 @@ def _run_repository_certification_pipeline(
             },
         )
 
-    modern_adapter_res = adapter_detector.resolve_adapter_for_repository(modern_analysis, role="target")
     if modern_adapter_res.status != AdapterResolutionStatus.RESOLVED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -130,14 +279,11 @@ def _run_repository_certification_pipeline(
             },
         )
 
-    # 4. Input & benchmark asset discovery
-    input_discovery_res = None
     if req.custom_inputs and len(req.custom_inputs) > 0:
         test_inputs = req.custom_inputs
         input_source_desc = "User-supplied custom inputs"
         input_discovery_meta = {"source": input_source_desc, "count": len(test_inputs)}
     else:
-        input_discovery_res = input_discovery_engine.discover_inputs(legacy_analysis, modern_analysis)
         if input_discovery_res.status != InputDiscoveryStatus.SUCCESS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -151,12 +297,26 @@ def _run_repository_certification_pipeline(
         input_source_desc = input_discovery_res.discovery_source
         input_discovery_meta = input_discovery_res.provenance
 
-    # 5. Dynamically synthesize and persist ApplicationSpec
-    app_id = f"APP-{legacy_prov.content_hash[:8]}-{modern_prov.content_hash[:8]}"
+    # 5. Execution Authorization: Load executable callables ONLY NOW in the authorized execution stage
+    legacy_instance = adapter_detector.load_authorized_adapter(
+        file_path=Path(legacy_adapter_res.resolved_file),
+        fn_name=legacy_adapter_res.resolved_function,
+        adapter_name=legacy_adapter_res.adapter_name or "legacy_ref",
+        role="reference",
+        version=legacy_prov.resolved_revision or "1.0.0",
+    )
+    modern_instance = adapter_detector.load_authorized_adapter(
+        file_path=Path(modern_adapter_res.resolved_file),
+        fn_name=modern_adapter_res.resolved_function,
+        adapter_name=modern_adapter_res.adapter_name or "modern_tgt",
+        role="target",
+        version=modern_prov.resolved_revision or "1.0.0",
+    )
 
-    # Register adapters in adapter registry
-    adapter_registry.register_adapter(legacy_adapter_res.adapter_instance)
-    adapter_registry.register_adapter(modern_adapter_res.adapter_instance)
+    adapter_registry.register_adapter(legacy_instance)
+    adapter_registry.register_adapter(modern_instance)
+
+    app_id = analysis_result.application_id
 
     ref_target = ImplementationTarget(
         name=legacy_adapter_res.adapter_name or "legacy_ref",
@@ -193,24 +353,12 @@ def _run_repository_certification_pipeline(
             "modern_provenance": modern_prov.model_dump(),
             "input_discovery": input_discovery_meta,
             "evaluation_mode": req.evaluation_mode,
+            "specification_fingerprint": analysis_result.specification_fingerprint,
         },
     )
     application_repository.save_application(spec)
 
-    # 6. Ensure authoritative ThresholdPolicy is registered in persistence
-    pol_id = f"POL-{app_id}"
-    existing_pol = threshold_persistence.get_policy(pol_id)
-    if not existing_pol:
-        th_policy = ThresholdPolicy(
-            policy_id=pol_id,
-            description=f"Auto-resolved dynamic threshold policy for {app_id}",
-            metric=DifferenceMetric.ABSOLUTE_DIFF,
-            strategy=ThresholdStrategy.FIXED,
-            parameters={"value": 0.001},
-        )
-        threshold_persistence.save_policy(th_policy)
-
-    # 7. Execute canonical V2 workflow engine
+    # 6. Execute canonical V2 workflow engine (deterministic threshold engine handles resolution in Part 2)
     wf_req = WorkflowRunRequest(
         application_id=app_id,
         target_index=0,
@@ -220,7 +368,7 @@ def _run_repository_certification_pipeline(
         allow_warnings=req.allow_warnings,
         explain=req.explain,
         explanation_mode=req.explanation_mode,
-        enable_discovery=(req.evaluation_mode == "FULL_BEACON"),
+        enable_discovery=(req.evaluation_mode in ("FULL", "FULL_BEACON")),
         evaluation_mode=req.evaluation_mode,
         idempotency_key=req.idempotency_key,
         user_id=current_user.user_id,
@@ -228,14 +376,13 @@ def _run_repository_certification_pipeline(
 
     result = workflow_engine.execute_workflow(wf_req, spec_override=spec)
 
-    # 8. Enrich result metadata with repository facts
+    # 7. Enrich result metadata with repository facts
     result.metadata = result.metadata or {}
     result.metadata["repository_certification"] = True
     result.metadata["evaluation_mode"] = req.evaluation_mode
+    result.metadata["specification_fingerprint"] = analysis_result.specification_fingerprint
     result.metadata["legacy_provenance"] = legacy_prov.model_dump()
     result.metadata["modern_provenance"] = modern_prov.model_dump()
-    result.metadata["legacy_analysis"] = legacy_analysis.model_dump()
-    result.metadata["modern_analysis"] = modern_analysis.model_dump()
     result.metadata["legacy_adapter_resolution"] = legacy_adapter_res.model_dump(exclude={"adapter_instance"})
     result.metadata["modern_adapter_resolution"] = modern_adapter_res.model_dump(exclude={"adapter_instance"})
     result.metadata["input_discovery"] = (
@@ -244,6 +391,21 @@ def _run_repository_certification_pipeline(
     result.metadata["inputs_count"] = len(test_inputs)
 
     return result
+
+
+@workflow_router.post(
+    "/analyze-repository",
+    response_model=RepositoryAnalysisResult,
+    status_code=status.HTTP_200_OK,
+    summary="Safely analyze repositories, detect technology, resolve adapters, and discover legitimate inputs",
+)
+def analyze_repository_endpoint(
+    req: RepositoryAnalysisRequest,
+    current_user: User = Depends(get_current_active_user),
+) -> RepositoryAnalysisResult:
+    """Performs non-executing static analysis on legacy and modern repositories."""
+    _, _, _, _, _, _, _, analysis_result = _perform_repository_analysis(req)
+    return analysis_result
 
 
 @workflow_router.post(

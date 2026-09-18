@@ -210,3 +210,36 @@ class ApplicationSpec(BaseModel):
         """Computes and returns cryptographic hash of the specification."""
         dumped = self.model_dump(exclude={"spec_hash"}, mode="json") if hasattr(self, "model_dump") else {}
         return compute_application_spec_hash(dumped)
+
+
+class RepositoryExecutionSpec(BaseModel):
+    """Authoritative execution specification synthesized from real repository analysis."""
+    model_config = {"arbitrary_types_allowed": True}
+
+    specification_id: str = ""
+    legacy_source_identity: dict[str, Any] = Field(default_factory=dict)
+    modern_source_identity: dict[str, Any] = Field(default_factory=dict)
+    legacy_adapter: dict[str, Any] = Field(default_factory=dict)
+    modern_adapter: dict[str, Any] = Field(default_factory=dict)
+    legacy_entrypoint: str = ""
+    modern_entrypoint: str = ""
+    discovered_rules: list[dict[str, Any]] = Field(default_factory=list)
+    discovered_inputs: list[dict[str, Any]] = Field(default_factory=list)
+    evaluation_mode: str = "CONTROLLED"
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    specification_fingerprint: str = ""
+
+    def compute_fingerprint(self) -> str:
+        """Computes authoritative specification fingerprint binding sources, adapters, inputs, and mode."""
+        canonical_content = json.dumps({
+            "legacy_source": self.legacy_source_identity,
+            "modern_source": self.modern_source_identity,
+            "legacy_adapter": self.legacy_adapter,
+            "modern_adapter": self.modern_adapter,
+            "legacy_entrypoint": self.legacy_entrypoint,
+            "modern_entrypoint": self.modern_entrypoint,
+            "inputs_hash": hashlib.sha256(json.dumps(self.discovered_inputs, sort_keys=True).encode()).hexdigest(),
+            "evaluation_mode": self.evaluation_mode,
+        }, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(canonical_content.encode("utf-8")).hexdigest()
+

@@ -1,18 +1,16 @@
 /**
  * BEACON V2 — CertificationTab.jsx
  *
- * Repository-first behavioral equivalence certification entry point.
- * Implements the correct BEACON V2 architecture:
- *   1. User provides an ApplicationSpec (application_id, adapters, inputs)
- *   2. Frontend calls /api/v2/applications to register or select an existing app
- *   3. Frontend calls /api/v2/adapters/validate for pre-flight adapter readiness
- *   4. Frontend calls /api/v2/workflow/certify to run the canonical V2 engine
- *   5. The V2 engine automatically discovers oracles, resolves thresholds,
- *      evaluates, certifies, and persists the result — no human intervention.
- *   6. Results are displayed from the WorkflowResult payload.
+ * Repository-First Behavioral Equivalence Certification Entry Point.
+ * Implements the V2 Part 1 Architecture:
+ *   1. User provides Legacy Repository URL, Modern Repository URL, and Evaluation Mode (CONTROLLED | FULL).
+ *   2. Backend securely ingests repositories, resolves immutable commit SHAs and content hashes.
+ *   3. Safe static inspection (zero dynamic imports) resolves compatible adapters and entrypoints.
+ *   4. Behavioral invariants and legitimate inputs are discovered from repository evidence.
+ *   5. Backend builds a cryptographically bound RepositoryExecutionSpec.
+ *   6. User reviews the derived evidence and proceeds to authoritative certification.
  *
- * There are no benchmark dropdowns, no hardcoded adapter names, no loan-demo
- * references, and no hardcoded tolerance values in this component.
+ * Presets, hardcoded benchmarks, and synthetic input fallbacks have been removed from this flow.
  */
 import { useState, useEffect } from "react";
 
@@ -43,32 +41,6 @@ const WORKFLOW_STATE_COLORS = {
   INCONCLUSIVE: "#f97316",
 };
 
-// ─── Default ApplicationSpec template ─────────────────────────────────────────
-
-const DEFAULT_SPEC = {
-  application_id: "",
-  name: "",
-  domain: "",
-  description: "",
-  reference_implementations: [
-    {
-      adapter_id: "",
-      version: "1.0.0",
-      description: "Legacy reference implementation",
-    },
-  ],
-  target_implementations: [
-    {
-      adapter_id: "",
-      version: "2.0.0",
-      description: "Modernized target implementation",
-    },
-  ],
-  test_inputs: [],
-};
-
-// ─── Component ────────────────────────────────────────────────────────────────
-
 export default function CertificationTab({
   apiBase = "",
   authFetch,
@@ -76,136 +48,37 @@ export default function CertificationTab({
   cardStyle,
   statusBadgeStyles,
   userHasPermission,
-  onCertifyResult,   // callback so App.jsx dossier tab can pick up cert_id
+  onCertifyResult,
 }) {
-  // ── Registered Applications ──────────────────────────────────────────────
-  const [registeredApps, setRegisteredApps] = useState([]);
-  const [appsLoading, setAppsLoading] = useState(false);
-  const [appsError, setAppsError] = useState(null);
+  // ── Repository Form State (Empty Defaults, Pure Repo-First) ──────────────────
+  const [legacyRepoUrl, setLegacyRepoUrl] = useState("");
+  const [legacyRevision, setLegacyRevision] = useState("");
+  const [legacySubdir, setLegacySubdir] = useState("");
+  const [modernRepoUrl, setModernRepoUrl] = useState("");
+  const [modernRevision, setModernRevision] = useState("");
+  const [modernSubdir, setModernSubdir] = useState("");
+  const [evaluationMode, setEvaluationMode] = useState("CONTROLLED"); // CONTROLLED | FULL
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
-  // ── Application Spec Form State ──────────────────────────────────────────
-  const [appId, setAppId] = useState("");
-  const [appName, setAppName] = useState("");
-  const [appDomain, setAppDomain] = useState("");
-  const [appDescription, setAppDescription] = useState("");
-  const [refAdapterId, setRefAdapterId] = useState("");
-  const [refAdapterVersion, setRefAdapterVersion] = useState("1.0.0");
-  const [targetAdapterId, setTargetAdapterId] = useState("");
-  const [targetAdapterVersion, setTargetAdapterVersion] = useState("2.0.0");
-  const [targetIndex, setTargetIndex] = useState(0);
-  const [customInputsText, setCustomInputsText] = useState("");
-  const [customInputsError, setCustomInputsError] = useState(null);
+  // ── Repository Analysis State ───────────────────────────────────────────────
+  const [analysisBusy, setAnalysisBusy] = useState(false);
+  const [analysisError, setAnalysisError] = useState(null);
+  const [analysisResult, setAnalysisResult] = useState(null);
 
-  // ── Workflow Policy Overrides ────────────────────────────────────────────
-  const [policyMinScore, setPolicyMinScore] = useState("0.999");
-  const [policyMinCoverage, setPolicyMinCoverage] = useState("0.0");
-  const [allowWarnings, setAllowWarnings] = useState(false);
-  const [explainMode, setExplainMode] = useState("deterministic");
-  const [useCompanyKnowledge, setUseCompanyKnowledge] = useState(false);
-  const [forceRecompute, setForceRecompute] = useState(false);
-
-  // ── Registration / Pre-flight ────────────────────────────────────────────
-  const [registrationResult, setRegistrationResult] = useState(null);
-  const [preflightResult, setPreflightResult] = useState(null);
-  const [preflightBusy, setPreflightBusy] = useState(false);
-  const [preflightError, setPreflightError] = useState(null);
-  const [registrationBusy, setRegistrationBusy] = useState(false);
-  const [registrationError, setRegistrationError] = useState(null);
-
-  // ── Workflow Execution ───────────────────────────────────────────────────
+  // ── Workflow Execution State ───────────────────────────────────────────────
   const [certifyBusy, setCertifyBusy] = useState(false);
   const [certifyError, setCertifyError] = useState(null);
   const [workflowResult, setWorkflowResult] = useState(null);
   const [workflowRunId, setWorkflowRunId] = useState(null);
 
-  // ── Recent Workflow Runs ─────────────────────────────────────────────────
+  // ── Step Tracking ──────────────────────────────────────────────────────────
+  const [activeStep, setActiveStep] = useState("configure"); // configure | result
+
+  // ── Recent Workflow Runs ───────────────────────────────────────────────────
   const [recentRuns, setRecentRuns] = useState([]);
   const [runsLoading, setRunsLoading] = useState(false);
 
-  // ── Step tracking ────────────────────────────────────────────────────────
-  const [activeStep, setActiveStep] = useState("configure"); // configure | review | result
-
-  // ── Mode Switcher ────────────────────────────────────────────────────────
-  const [ingestionMode, setIngestionMode] = useState("repository"); // "repository" | "spec"
-
-  // ── Repository Form State ────────────────────────────────────────────────
-  const [legacyRepoUrl, setLegacyRepoUrl] = useState("./benchmarks/payroll_tax_calculator/legacy/payroll_calculator.py");
-  const [legacyRevision, setLegacyRevision] = useState("");
-  const [legacySubdir, setLegacySubdir] = useState("");
-  const [modernRepoUrl, setModernRepoUrl] = useState("./benchmarks/payroll_tax_calculator/modernized/payroll_calculator_v2.py");
-  const [modernRevision, setModernRevision] = useState("");
-  const [modernSubdir, setModernSubdir] = useState("");
-  const [evaluationMode, setEvaluationMode] = useState("CONTROLLED");
-  const [repoCertBusy, setRepoCertBusy] = useState(false);
-  const [repoCertError, setRepoCertError] = useState(null);
-  const [selectedPresetId, setSelectedPresetId] = useState("payroll_clean");
-
-  const REPO_PRESETS = [
-    {
-      id: "payroll_clean",
-      label: "💼 Payroll Tax: V1 vs V2 (Equivalent)",
-      desc: "Clean modernized payroll calculator. Expected: CERTIFIED 100%.",
-      legacy: "./benchmarks/payroll_tax_calculator/legacy/payroll_calculator.py",
-      modern: "./benchmarks/payroll_tax_calculator/modernized/payroll_calculator_v2.py",
-    },
-    {
-      id: "payroll_buggy",
-      label: "⚠️ Payroll Tax: Buggy Bracket Invariant",
-      desc: "Modernized version has tax bracket bug. Expected: NOT_CERTIFIED.",
-      legacy: "./benchmarks/payroll_tax_calculator/legacy/payroll_calculator.py",
-      modern: "./benchmarks/payroll_tax_calculator/modernized/payroll_calculator_v2_buggy_bracket.py",
-    },
-    {
-      id: "retail_clean",
-      label: "🏷️ Retail Pricing: Clean Refactored",
-      desc: "Clean refactored retail discount engine. Expected: CERTIFIED 100%.",
-      legacy: "./benchmarks/retail_discount_pricing/legacy/retail_pricing.py",
-      modern: "./benchmarks/retail_discount_pricing/modernized/retail_pricing_v2.py",
-    },
-    {
-      id: "retail_buggy",
-      label: "⚠️ Retail Pricing: Buggy Operator",
-      desc: "Refactored discount engine has inverted logic operator. Expected: NOT_CERTIFIED.",
-      legacy: "./benchmarks/retail_discount_pricing/legacy/retail_pricing.py",
-      modern: "./benchmarks/retail_discount_pricing/modernized/retail_pricing_v2_buggy_operator.py",
-    },
-    {
-      id: "medical_clean",
-      label: "🏥 Medical Triage: V1 vs V2",
-      desc: "Urgent care triage decision engine. Expected: CERTIFIED 100%.",
-      legacy: "./benchmarks/medical_triage/legacy/medical_triage.py",
-      modern: "./benchmarks/medical_triage/modernized/medical_triage_v2.py",
-    },
-    {
-      id: "medical_buggy",
-      label: "⚠️ Medical Triage: Buggy Variant",
-      desc: "Modern triage system has inverted priority rule. Expected: NOT_CERTIFIED.",
-      legacy: "./benchmarks/medical_triage/legacy/medical_triage.py",
-      modern: "./benchmarks/medical_triage/modernized/medical_triage_v2_buggy.py",
-    },
-  ];
-
-  // ─── Helpers ───────────────────────────────────────────────────────────────
-
   const _fetch = authFetch || window.fetch;
-
-  const loadRegisteredApps = async () => {
-    setAppsLoading(true);
-    setAppsError(null);
-    try {
-      const res = await _fetch(`${apiBase}/api/v2/applications`);
-      if (res.ok) {
-        const data = await res.json();
-        setRegisteredApps(Array.isArray(data) ? data : []);
-      } else {
-        setAppsError(`Failed to load applications (HTTP ${res.status})`);
-      }
-    } catch (e) {
-      setAppsError(`Network error: ${e.message}`);
-    } finally {
-      setAppsLoading(false);
-    }
-  };
 
   const loadRecentRuns = async () => {
     setRunsLoading(true);
@@ -223,207 +96,61 @@ export default function CertificationTab({
   };
 
   useEffect(() => {
-    loadRegisteredApps();
     loadRecentRuns();
   }, []);
 
-  const populateFromApp = (app) => {
-    setAppId(app.application_id);
-    setAppName(app.name || "");
-    setAppDomain(app.domain || "");
-    setAppDescription(app.description || "");
-    const ref = app.reference_implementations?.[0];
-    const tgt = app.target_implementations?.[0];
-    if (ref) {
-      setRefAdapterId(ref.adapter_id || "");
-      setRefAdapterVersion(ref.version || "1.0.0");
-    }
-    if (tgt) {
-      setTargetAdapterId(tgt.adapter_id || "");
-      setTargetAdapterVersion(tgt.version || "2.0.0");
-    }
-    setPreflightResult(null);
-    setRegistrationResult(null);
-    setWorkflowResult(null);
-    setCertifyError(null);
-    setActiveStep("configure");
-  };
-
-  const buildSpec = () => ({
-    application_id: appId.trim(),
-    name: appName.trim() || appId.trim(),
-    domain: appDomain.trim() || "general",
-    description: appDescription.trim() || `Application ${appId}`,
-    reference_implementations: [
-      {
-        adapter_id: refAdapterId.trim(),
-        version: refAdapterVersion.trim() || "1.0.0",
-        description: "Legacy reference implementation",
-      },
-    ],
-    target_implementations: [
-      {
-        adapter_id: targetAdapterId.trim(),
-        version: targetAdapterVersion.trim() || "2.0.0",
-        description: "Modernized target implementation",
-      },
-    ],
-    test_inputs: [],
-  });
-
-  const parseCustomInputs = () => {
-    setCustomInputsError(null);
-    if (!customInputsText.trim()) return null;
-    try {
-      const parsed = JSON.parse(customInputsText.trim());
-      if (!Array.isArray(parsed)) throw new Error("Custom inputs must be a JSON array.");
-      return parsed;
-    } catch (e) {
-      setCustomInputsError(`JSON parse error: ${e.message}`);
-      return undefined; // signals error
-    }
-  };
-
-  // ── Step 1: Register (or upsert) the ApplicationSpec ─────────────────────
-
-  const handleRegisterApp = async () => {
-    if (!appId.trim() || !refAdapterId.trim() || !targetAdapterId.trim()) {
-      setRegistrationError("Application ID, Legacy Adapter ID, and Modern Adapter ID are required.");
+  // ── Repository Analysis Handler ─────────────────────────────────────────────
+  const handleAnalyzeRepositories = async () => {
+    if (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) {
+      setAnalysisError("Both Legacy Reference and Modernized Target repository paths or URLs are required.");
       return;
     }
-    setRegistrationBusy(true);
-    setRegistrationError(null);
-    setPreflightResult(null);
-    try {
-      const spec = buildSpec();
-      const res = await _fetch(`${apiBase}/api/v2/applications`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(spec),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || `Registration failed (HTTP ${res.status})`);
-      }
-      setRegistrationResult(data);
-      // Refresh list
-      loadRegisteredApps();
-    } catch (e) {
-      setRegistrationError(e.message);
-    } finally {
-      setRegistrationBusy(false);
-    }
-  };
-
-  // ── Step 2: Pre-flight adapter readiness validation ───────────────────────
-
-  const handlePreflight = async () => {
-    if (!appId.trim() || !refAdapterId.trim() || !targetAdapterId.trim()) {
-      setPreflightError("Application ID, Legacy Adapter ID, and Modern Adapter ID are required.");
-      return;
-    }
-    setPreflightBusy(true);
-    setPreflightError(null);
-    try {
-      const spec = buildSpec();
-      const res = await _fetch(`${apiBase}/api/v2/adapters/validate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spec }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || `Pre-flight failed (HTTP ${res.status})`);
-      }
-      setPreflightResult(data);
-      if (data.is_ready) {
-        setActiveStep("review");
-      }
-    } catch (e) {
-      setPreflightError(e.message);
-    } finally {
-      setPreflightBusy(false);
-    }
-  };
-
-  // ── Step 3: Run canonical V2 certification workflow ───────────────────────
-
-  const handleCertify = async () => {
-    if (!appId.trim()) {
-      setCertifyError("Application ID is required.");
-      return;
-    }
-
-    const customInputs = parseCustomInputs();
-    if (customInputs === undefined) return; // parse error already shown
-
-    setCertifyBusy(true);
-    setCertifyError(null);
-    setWorkflowResult(null);
-    setWorkflowRunId(null);
+    setAnalysisBusy(true);
+    setAnalysisError(null);
+    setAnalysisResult(null);
 
     try {
       const payload = {
-        application_id: appId.trim(),
-        target_index: targetIndex,
-        custom_inputs: customInputs,
-        policy_min_equivalence_score: parseFloat(policyMinScore) || 0.999,
-        policy_min_oracle_coverage: parseFloat(policyMinCoverage) || 0.0,
-        allow_warnings: allowWarnings,
-        explain: true,
-        explanation_mode: explainMode,
-        use_company_knowledge: useCompanyKnowledge,
-        force_recompute: forceRecompute,
+        legacy_repository: {
+          repository_url: legacyRepoUrl.trim(),
+          revision: legacyRevision.trim() || null,
+          subdirectory: legacySubdir.trim() || null,
+        },
+        modern_repository: {
+          repository_url: modernRepoUrl.trim(),
+          revision: modernRevision.trim() || null,
+          subdirectory: modernSubdir.trim() || null,
+        },
+        evaluation_mode: evaluationMode,
       };
 
-      const res = await _fetch(`${apiBase}/api/v2/workflow/certify`, {
+      const res = await _fetch(`${apiBase}/api/v2/workflow/analyze-repository`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.detail || `Workflow execution failed (HTTP ${res.status})`);
+        const errMsg = data.detail?.message || data.detail || `Repository analysis failed (HTTP ${res.status})`;
+        throw new Error(typeof errMsg === "object" ? JSON.stringify(errMsg) : errMsg);
       }
-      setWorkflowResult(data);
-      setWorkflowRunId(data.workflow_run_id);
-      setActiveStep("result");
-
-      // Notify App.jsx so the Dossier tab can auto-populate
-      if (onCertifyResult && data.artifact_id) {
-        onCertifyResult(data);
-      }
-
-      // Refresh recent runs
-      loadRecentRuns();
+      setAnalysisResult(data);
     } catch (e) {
-      setCertifyError(e.message);
+      setAnalysisError(e.message);
     } finally {
-      setCertifyBusy(false);
+      setAnalysisBusy(false);
     }
   };
 
-  // ── Handle Repository Certification ───────────────────────────────────────
-
-  const handleSelectPreset = (preset) => {
-    setSelectedPresetId(preset.id);
-    setLegacyRepoUrl(preset.legacy);
-    setModernRepoUrl(preset.modern);
-    setLegacyRevision("");
-    setLegacySubdir("");
-    setModernRevision("");
-    setModernSubdir("");
-    setRepoCertError(null);
-    setWorkflowResult(null);
-  };
-
+  // ── Repository Certification Execution Handler ──────────────────────────────
   const handleCertifyRepository = async () => {
     if (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) {
-      setRepoCertError("Both Legacy Reference and Modernized Target repository paths/URLs are required.");
+      setCertifyError("Both Legacy Reference and Modernized Target repository paths or URLs are required.");
       return;
     }
-    setRepoCertBusy(true);
-    setRepoCertError(null);
+    setCertifyBusy(true);
+    setCertifyError(null);
     setWorkflowResult(null);
 
     try {
@@ -439,11 +166,11 @@ export default function CertificationTab({
           subdirectory: modernSubdir.trim() || null,
         },
         evaluation_mode: evaluationMode,
-        policy_min_equivalence_score: parseFloat(policyMinScore) || 0.999,
-        policy_min_oracle_coverage: parseFloat(policyMinCoverage) || 0.0,
-        allow_warnings: allowWarnings,
+        policy_min_equivalence_score: 0.999,
+        policy_min_oracle_coverage: 0.0,
+        allow_warnings: false,
         explain: true,
-        explanation_mode: explainMode,
+        explanation_mode: "deterministic",
       };
 
       const res = await _fetch(`${apiBase}/api/v2/workflow/certify-repository`, {
@@ -451,11 +178,13 @@ export default function CertificationTab({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
+
       const data = await res.json();
       if (!res.ok) {
         const errMsg = data.detail?.message || data.detail || `Repository certification failed (HTTP ${res.status})`;
         throw new Error(typeof errMsg === "object" ? JSON.stringify(errMsg) : errMsg);
       }
+
       setWorkflowResult(data);
       setWorkflowRunId(data.workflow_run_id);
       setActiveStep("result");
@@ -465,20 +194,18 @@ export default function CertificationTab({
       }
       loadRecentRuns();
     } catch (e) {
-      setRepoCertError(e.message);
+      setCertifyError(e.message);
     } finally {
-      setRepoCertBusy(false);
+      setCertifyBusy(false);
     }
   };
 
-  // ── Load a past run to inspect ────────────────────────────────────────────
-
+  // ── Load Past Run Helper ───────────────────────────────────────────────────
   const loadPastRun = async (runId) => {
     try {
       const res = await _fetch(`${apiBase}/api/v2/workflow/runs/${runId}`);
       if (res.ok) {
         const run = await res.json();
-        setAppId(run.application_id || "");
         setWorkflowRunId(run.workflow_run_id);
         setWorkflowResult({
           workflow_run_id: run.workflow_run_id,
@@ -501,14 +228,8 @@ export default function CertificationTab({
     }
   };
 
-  // ─── Derived ───────────────────────────────────────────────────────────────
-
-  const isFormReady = appId.trim() && refAdapterId.trim() && targetAdapterId.trim();
-  const isPreflightPassed = preflightResult?.is_ready === true;
   const certStatus = workflowResult?.status;
   const statusStyle = STATUS_STYLES[certStatus] || { bg: "#f8fafc", border: "#cbd5e1", color: "#0f172a", label: certStatus || "—" };
-
-  // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div>
@@ -527,12 +248,12 @@ export default function CertificationTab({
       >
         <div>
           <h2 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#0f172a" }}>
-            ⚡ Application Behavioral Equivalence Certification
+            ⚡ BEACON V2 — Repository-First Behavioral Equivalence Certification
           </h2>
           <p style={{ margin: "3px 0 0", fontSize: "13px", color: "#64748b" }}>
-            Register your legacy and modernized implementations. BEACON V2 automatically
-            discovers behavioral invariants, resolves thresholds, and certifies equivalence —
-            no manual tolerance configuration required.
+            Autonomous repository-first equivalence verification. Securely ingests source repositories,
+            resolves immutable content identities, safely inspects structure without dynamic module execution,
+            and discovers behavioral invariants and legitimate test cases.
           </p>
         </div>
         <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
@@ -566,73 +287,12 @@ export default function CertificationTab({
               border: "1px solid #86efac",
             }}
           >
-            Automatic Thresholds
+            Safe Static Discovery
           </span>
         </div>
       </div>
 
-      {/* ── Mode Switcher ── */}
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: "16px",
-          background: "#ffffff",
-          border: "1px solid #cbd5e1",
-          borderRadius: "8px",
-          padding: "10px 16px",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-          <span style={{ fontSize: "12px", fontWeight: "700", color: "#475569", textTransform: "uppercase", letterSpacing: "0.5px" }}>
-            Ingestion Flow:
-          </span>
-          <div style={{ display: "flex", gap: "4px", background: "#f1f5f9", padding: "3px", borderRadius: "6px" }}>
-            <button
-              onClick={() => { setIngestionMode("repository"); setActiveStep("configure"); }}
-              style={{
-                background: ingestionMode === "repository" ? "#2563eb" : "transparent",
-                color: ingestionMode === "repository" ? "#ffffff" : "#64748b",
-                border: "none",
-                borderRadius: "4px",
-                padding: "6px 14px",
-                fontSize: "12px",
-                fontWeight: "700",
-                cursor: "pointer",
-                boxShadow: ingestionMode === "repository" ? "0 1px 3px rgba(37,99,235,0.3)" : "none",
-                transition: "all 0.15s",
-              }}
-            >
-              ⚡ Repository Sources (Direct V2 Ingestion)
-            </button>
-            <button
-              onClick={() => { setIngestionMode("spec"); setActiveStep("configure"); }}
-              style={{
-                background: ingestionMode === "spec" ? "#2563eb" : "transparent",
-                color: ingestionMode === "spec" ? "#ffffff" : "#64748b",
-                border: "none",
-                borderRadius: "4px",
-                padding: "6px 14px",
-                fontSize: "12px",
-                fontWeight: "700",
-                cursor: "pointer",
-                boxShadow: ingestionMode === "spec" ? "0 1px 3px rgba(37,99,235,0.3)" : "none",
-                transition: "all 0.15s",
-              }}
-            >
-              📋 Application Registry & Spec Flow
-            </button>
-          </div>
-        </div>
-        <span style={{ fontSize: "12px", color: "#64748b" }}>
-          {ingestionMode === "repository"
-            ? "Autonomous: Specify repository URLs or local paths — BEACON infers AST invariants and certifies equivalence"
-            : "Advanced: Register application descriptors with explicit adapter bindings"}
-        </span>
-      </div>
-
-      {/* ── Step Pills ── */}
+      {/* ── Step Navigation Pills ── */}
       <div
         style={{
           display: "flex",
@@ -645,9 +305,8 @@ export default function CertificationTab({
         }}
       >
         {[
-          { id: "configure", label: "1. Configure Application" },
-          { id: "review", label: "2. Review & Validate" },
-          { id: "result", label: "3. Certification Result" },
+          { id: "configure", label: "1. Repository Analysis & Discovery" },
+          { id: "result", label: "2. Certification Result" },
         ].map((step) => (
           <button
             key={step.id}
@@ -671,1046 +330,650 @@ export default function CertificationTab({
       </div>
 
       {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {/* STEP 1: CONFIGURE APPLICATION                                          */}
+      {/* STEP 1: REPOSITORY ANALYSIS & DISCOVERY                                */}
       {/* ═══════════════════════════════════════════════════════════════════════ */}
       {activeStep === "configure" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: "20px", alignItems: "start" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: "20px", alignItems: "start" }}>
 
-          {/* ── Main Config Panel ── */}
+          {/* ── Left Column: Configuration & Discovery Results ── */}
           <div>
-            {ingestionMode === "repository" ? (
-              <div>
-                {/* Preset Domain Implementations */}
-                <section style={{ ...cardStyle, marginBottom: "16px" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                    <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
-                      📦 Domain Implementation Presets
-                    </h3>
-                    <span style={{ fontSize: "12px", color: "#64748b" }}>Quickly load verified canonical implementations</span>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" }}>
-                    {REPO_PRESETS.map((p) => {
-                      const isSel = selectedPresetId === p.id;
-                      return (
-                        <div
-                          key={p.id}
-                          onClick={() => handleSelectPreset(p)}
-                          style={{
-                            padding: "10px 12px",
-                            borderRadius: "8px",
-                            border: `2px solid ${isSel ? "#2563eb" : "#e2e8f0"}`,
-                            background: isSel ? "#eff6ff" : "#ffffff",
-                            cursor: "pointer",
-                            transition: "all 0.15s",
-                          }}
-                        >
-                          <div style={{ fontWeight: "700", fontSize: "13px", color: isSel ? "#1e40af" : "#1e293b", marginBottom: "3px" }}>
-                            {p.label}
-                          </div>
-                          <div style={{ fontSize: "11px", color: "#64748b", lineHeight: "1.4" }}>
-                            {p.desc}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
+            {/* Repository Input Form */}
+            <section style={{ ...cardStyle, marginBottom: "20px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "14px" }}>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
+                    Source Repositories & Evaluation Scope
+                  </h3>
+                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
+                    Provide legitimate legacy and modern repository paths or URLs. BEACON ingests and inspects them statically.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                  style={{
+                    background: "transparent",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "6px",
+                    padding: "4px 10px",
+                    fontSize: "11px",
+                    fontWeight: "600",
+                    color: "#475569",
+                    cursor: "pointer",
+                  }}
+                >
+                  {showAdvanced ? "Hide Advanced Settings ▲" : "Advanced Settings (Ref/Subdir) ▼"}
+                </button>
+              </div>
 
-                {/* Dual Repository Source Cards */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
-                  {/* Legacy Reference Repo */}
-                  <section style={cardStyle}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                      <h3 style={{ margin: 0, fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                        🏛️ Legacy Reference Source
-                      </h3>
-                      <span
-                        style={{
-                          fontSize: "10px",
-                          fontWeight: "700",
-                          padding: "2px 6px",
-                          borderRadius: "4px",
-                          background: legacyRepoUrl.startsWith("http") ? "#eff6ff" : "#f1f5f9",
-                          color: legacyRepoUrl.startsWith("http") ? "#1e40af" : "#475569",
-                        }}
-                      >
-                        {legacyRepoUrl.startsWith("http") ? "🌐 Remote Git" : "📁 Local / Workspace"}
-                      </span>
-                    </div>
-                    <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                      Repository URL or Relative File Path <span style={{ color: "#dc2626" }}>*</span>
+              {/* Dual Repository Source Inputs */}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+                {/* Legacy Repository */}
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                    <span style={{ fontSize: "14px" }}>🏛️</span>
+                    <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                      Legacy Reference Repository <span style={{ color: "#dc2626" }}>*</span>
                     </label>
-                    <input
-                      type="text"
-                      value={legacyRepoUrl}
-                      onChange={(e) => {
-                        setLegacyRepoUrl(e.target.value);
-                        setSelectedPresetId(null);
-                      }}
-                      placeholder="e.g. https://github.com/org/repo.git or ./benchmarks/..."
-                      style={{
-                        width: "100%",
-                        padding: "7px 9px",
-                        borderRadius: "6px",
-                        border: "1px solid #cbd5e1",
-                        fontSize: "12px",
-                        fontFamily: "monospace",
-                        boxSizing: "border-box",
-                        marginBottom: "8px",
-                      }}
-                    />
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                  </div>
+                  <input
+                    type="text"
+                    value={legacyRepoUrl}
+                    onChange={(e) => {
+                      setLegacyRepoUrl(e.target.value);
+                      setAnalysisResult(null);
+                      setAnalysisError(null);
+                    }}
+                    placeholder="https://github.com/example/legacy-system"
+                    style={{
+                      width: "100%",
+                      padding: "9px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid #cbd5e1",
+                      fontSize: "13px",
+                      boxSizing: "border-box",
+                      fontFamily: "monospace",
+                    }}
+                  />
+                  <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
+                    Remote Git URL or local repository path.
+                  </span>
+
+                  {showAdvanced && (
+                    <div style={{ marginTop: "10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                       <div>
-                        <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>
-                          Branch / Revision
+                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
+                          Branch / Revision Ref
                         </label>
                         <input
                           type="text"
                           value={legacyRevision}
                           onChange={(e) => setLegacyRevision(e.target.value)}
-                          placeholder="main / HEAD"
-                          style={{
-                            width: "100%",
-                            padding: "6px 8px",
-                            borderRadius: "6px",
-                            border: "1px solid #cbd5e1",
-                            fontSize: "11px",
-                            fontFamily: "monospace",
-                            boxSizing: "border-box",
-                          }}
+                          placeholder="e.g. main or commit SHA"
+                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", fontFamily: "monospace", boxSizing: "border-box" }}
                         />
                       </div>
                       <div>
-                        <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>
+                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
                           Subdirectory
                         </label>
                         <input
                           type="text"
                           value={legacySubdir}
                           onChange={(e) => setLegacySubdir(e.target.value)}
-                          placeholder="src/ (optional)"
-                          style={{
-                            width: "100%",
-                            padding: "6px 8px",
-                            borderRadius: "6px",
-                            border: "1px solid #cbd5e1",
-                            fontSize: "11px",
-                            fontFamily: "monospace",
-                            boxSizing: "border-box",
-                          }}
+                          placeholder="Optional subpath"
+                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", boxSizing: "border-box" }}
                         />
                       </div>
                     </div>
-                  </section>
+                  )}
+                </div>
 
-                  {/* Modernized Target Repo */}
-                  <section style={cardStyle}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                      <h3 style={{ margin: 0, fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                        🚀 Modernized Target Source
-                      </h3>
-                      <span
-                        style={{
-                          fontSize: "10px",
-                          fontWeight: "700",
-                          padding: "2px 6px",
-                          borderRadius: "4px",
-                          background: modernRepoUrl.startsWith("http") ? "#eff6ff" : "#f1f5f9",
-                          color: modernRepoUrl.startsWith("http") ? "#1e40af" : "#475569",
-                        }}
-                      >
-                        {modernRepoUrl.startsWith("http") ? "🌐 Remote Git" : "📁 Local / Workspace"}
-                      </span>
-                    </div>
-                    <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                      Repository URL or Relative File Path <span style={{ color: "#dc2626" }}>*</span>
+                {/* Modernized Target Repository */}
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                    <span style={{ fontSize: "14px" }}>🚀</span>
+                    <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                      Modernized Target Repository <span style={{ color: "#dc2626" }}>*</span>
                     </label>
-                    <input
-                      type="text"
-                      value={modernRepoUrl}
-                      onChange={(e) => {
-                        setModernRepoUrl(e.target.value);
-                        setSelectedPresetId(null);
-                      }}
-                      placeholder="e.g. https://github.com/org/repo-v2.git or ./benchmarks/..."
-                      style={{
-                        width: "100%",
-                        padding: "7px 9px",
-                        borderRadius: "6px",
-                        border: "1px solid #cbd5e1",
-                        fontSize: "12px",
-                        fontFamily: "monospace",
-                        boxSizing: "border-box",
-                        marginBottom: "8px",
-                      }}
-                    />
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                  </div>
+                  <input
+                    type="text"
+                    value={modernRepoUrl}
+                    onChange={(e) => {
+                      setModernRepoUrl(e.target.value);
+                      setAnalysisResult(null);
+                      setAnalysisError(null);
+                    }}
+                    placeholder="https://github.com/example/modern-system"
+                    style={{
+                      width: "100%",
+                      padding: "9px 12px",
+                      borderRadius: "6px",
+                      border: "1px solid #cbd5e1",
+                      fontSize: "13px",
+                      boxSizing: "border-box",
+                      fontFamily: "monospace",
+                    }}
+                  />
+                  <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
+                    Modernized target to certify against the legacy reference.
+                  </span>
+
+                  {showAdvanced && (
+                    <div style={{ marginTop: "10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
                       <div>
-                        <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>
-                          Branch / Revision
+                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
+                          Branch / Revision Ref
                         </label>
                         <input
                           type="text"
                           value={modernRevision}
                           onChange={(e) => setModernRevision(e.target.value)}
-                          placeholder="main / HEAD"
-                          style={{
-                            width: "100%",
-                            padding: "6px 8px",
-                            borderRadius: "6px",
-                            border: "1px solid #cbd5e1",
-                            fontSize: "11px",
-                            fontFamily: "monospace",
-                            boxSizing: "border-box",
-                          }}
+                          placeholder="e.g. main or commit SHA"
+                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", fontFamily: "monospace", boxSizing: "border-box" }}
                         />
                       </div>
                       <div>
-                        <label style={{ display: "block", fontSize: "11px", color: "#64748b", marginBottom: "2px" }}>
+                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
                           Subdirectory
                         </label>
                         <input
                           type="text"
                           value={modernSubdir}
                           onChange={(e) => setModernSubdir(e.target.value)}
-                          placeholder="src/ (optional)"
-                          style={{
-                            width: "100%",
-                            padding: "6px 8px",
-                            borderRadius: "6px",
-                            border: "1px solid #cbd5e1",
-                            fontSize: "11px",
-                            fontFamily: "monospace",
-                            boxSizing: "border-box",
-                          }}
+                          placeholder="Optional subpath"
+                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", boxSizing: "border-box" }}
                         />
                       </div>
                     </div>
-                  </section>
-                </div>
-
-                {/* Autonomous Invariant Callout */}
-                <div
-                  style={{
-                    background: "linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%)",
-                    border: "1px solid #bfdbfe",
-                    borderRadius: "8px",
-                    padding: "12px 16px",
-                    marginBottom: "16px",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
-                    <span style={{ fontSize: "16px" }}>📐</span>
-                    <h4 style={{ margin: 0, fontSize: "13px", fontWeight: "700", color: "#1e40af" }}>
-                      Autonomous Invariant Discovery & Dynamic Threshold Determination
-                    </h4>
-                  </div>
-                  <p style={{ margin: "0 0 4px", fontSize: "12px", color: "#334155", lineHeight: "1.5" }}>
-                    BEACON V2 statically analyzes the reference codebase AST, synthesizes canonical runtime adapters, and infers behavioral invariant bounds directly from baseline execution distributions.
-                  </p>
-                  <div style={{ fontSize: "11px", color: "#475569", display: "flex", gap: "16px", fontWeight: "600" }}>
-                    <span>✓ Zero manual tolerance guessing</span>
-                    <span>✓ Cryptographic SHA-256 provenance</span>
-                    <span>✓ Precise counterexample diagnostics</span>
-                  </div>
-                </div>
-
-                {/* Execution Options & Launch CTA */}
-                <section style={cardStyle}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px", marginBottom: "16px" }}>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                        Evaluation Mode
-                      </label>
-                      <select
-                        value={evaluationMode}
-                        onChange={(e) => setEvaluationMode(e.target.value)}
-                        style={{
-                          width: "100%",
-                          padding: "7px 10px",
-                          borderRadius: "6px",
-                          border: "1px solid #cbd5e1",
-                          fontSize: "12px",
-                          background: "#fff",
-                        }}
-                      >
-                        <option value="CONTROLLED">CONTROLLED (Canonical Invariants)</option>
-                        <option value="FULL_BEACON">FULL_BEACON (Exhaustive Fuzzing & Oracle)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                        Min Equivalence Score
-                      </label>
-                      <input
-                        type="number"
-                        step="0.001"
-                        min="0"
-                        max="1"
-                        value={policyMinScore}
-                        onChange={(e) => setPolicyMinScore(e.target.value)}
-                        style={{
-                          width: "100%",
-                          padding: "7px 10px",
-                          borderRadius: "6px",
-                          border: "1px solid #cbd5e1",
-                          fontSize: "12px",
-                          boxSizing: "border-box",
-                        }}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                        Explanation Mode
-                      </label>
-                      <select
-                        value={explainMode}
-                        onChange={(e) => setExplainMode(e.target.value)}
-                        style={{
-                          width: "100%",
-                          padding: "7px 10px",
-                          borderRadius: "6px",
-                          border: "1px solid #cbd5e1",
-                          fontSize: "12px",
-                          background: "#fff",
-                        }}
-                      >
-                        <option value="deterministic">Deterministic (Structured Rules)</option>
-                        <option value="llm">LLM (Natural Language)</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {repoCertError && (
-                    <div
-                      style={{
-                        background: "#fef2f2",
-                        border: "1px solid #fecaca",
-                        borderRadius: "6px",
-                        padding: "10px 14px",
-                        color: "#991b1b",
-                        fontSize: "13px",
-                        marginBottom: "14px",
-                      }}
-                    >
-                      ❌ {repoCertError}
-                    </div>
                   )}
+                </div>
+              </div>
 
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div style={{ fontSize: "12px", color: "#64748b" }}>
-                      Target: <span style={{ fontFamily: "monospace", color: "#0f172a", fontWeight: "600" }}>{modernRepoUrl.split("/").pop()}</span>
-                    </div>
-                    <button
-                      onClick={handleCertifyRepository}
-                      disabled={repoCertBusy || !userHasPermission("run_certification")}
-                      style={{
-                        background: repoCertBusy ? "#94a3b8" : "#2563eb",
-                        color: "#ffffff",
-                        border: "none",
-                        padding: "11px 24px",
-                        borderRadius: "8px",
-                        fontWeight: "700",
-                        fontSize: "13px",
-                        cursor: repoCertBusy ? "not-allowed" : "pointer",
-                        boxShadow: "0 2px 4px rgba(37,99,235,0.3)",
-                        transition: "all 0.15s",
-                      }}
-                    >
-                      {repoCertBusy ? "⚡ Certifying Repositories..." : "⚡ Certify Repository Behavioral Equivalence"}
-                    </button>
-                  </div>
-
-                  {repoCertBusy && (
-                    <div style={{ marginTop: "14px", padding: "12px", background: "#f8fafc", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: "12px", fontWeight: "700", color: "#1e40af", marginBottom: "8px" }}>
-                        ⚙️ Autonomous Workflow Pipeline Executing:
+              {/* Evaluation Mode Selector */}
+              <div style={{ marginBottom: "16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px 16px" }}>
+                <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>
+                  Evaluation Mode
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "10px",
+                      padding: "10px 12px",
+                      borderRadius: "6px",
+                      border: `1px solid ${evaluationMode === "CONTROLLED" ? "#2563eb" : "#cbd5e1"}`,
+                      background: evaluationMode === "CONTROLLED" ? "#eff6ff" : "#f8fafc",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="radio"
+                      name="evaluationMode"
+                      value="CONTROLLED"
+                      checked={evaluationMode === "CONTROLLED"}
+                      onChange={(e) => setEvaluationMode(e.target.value)}
+                      style={{ marginTop: "2px" }}
+                    />
+                    <div>
+                      <div style={{ fontSize: "13px", fontWeight: "700", color: evaluationMode === "CONTROLLED" ? "#1e40af" : "#1e293b" }}>
+                        ⚖️ CONTROLLED Mode
                       </div>
-                      <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", fontSize: "11px" }}>
-                        {[
-                          "1. Ingesting Sources",
-                          "2. Static AST Analysis",
-                          "3. Synthesizing Adapters",
-                          "4. Discovering Scenarios",
-                          "5. Resolving Invariants",
-                          "6. Equivalence Engine",
-                        ].map((stg, sIdx) => (
-                          <span
-                            key={sIdx}
-                            style={{
-                              background: "#ffffff",
-                              border: "1px solid #cbd5e1",
-                              borderRadius: "4px",
-                              padding: "3px 8px",
-                              color: "#334155",
-                              fontWeight: "600",
-                            }}
-                          >
-                            {stg}
-                          </span>
-                        ))}
+                      <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>
+                        Constrained, deterministic evaluation boundary over validated behavioral invariants and legitimate test cases.
                       </div>
                     </div>
-                  )}
-                </section>
-              </div>
-            ) : (
-              <div>
-                {/* Application Identity */}
-                <section style={cardStyle}>
-                  <h3 style={{ margin: "0 0 14px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
-                    Step 1 — Application Identity
-                  </h3>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                    Application ID <span style={{ color: "#dc2626" }}>*</span>
                   </label>
-                  <input
-                    type="text"
-                    value={appId}
-                    onChange={(e) => {
-                      setAppId(e.target.value);
-                      setPreflightResult(null);
-                      setRegistrationResult(null);
-                      setWorkflowResult(null);
-                    }}
-                    placeholder="e.g. loan_approval, payroll_tax_calc"
+
+                  <label
                     style={{
-                      width: "100%",
-                      padding: "8px 10px",
+                      display: "flex",
+                      alignItems: "flex-start",
+                      gap: "10px",
+                      padding: "10px 12px",
                       borderRadius: "6px",
-                      border: `1px solid ${appId ? "#94a3b8" : "#cbd5e1"}`,
-                      fontSize: "13px",
-                      boxSizing: "border-box",
-                      fontFamily: "monospace",
+                      border: `1px solid ${evaluationMode === "FULL" ? "#2563eb" : "#cbd5e1"}`,
+                      background: evaluationMode === "FULL" ? "#eff6ff" : "#f8fafc",
+                      cursor: "pointer",
                     }}
-                  />
-                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>
-                    Unique snake_case identifier for this application
-                  </span>
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                    Display Name
+                  >
+                    <input
+                      type="radio"
+                      name="evaluationMode"
+                      value="FULL"
+                      checked={evaluationMode === "FULL"}
+                      onChange={(e) => setEvaluationMode(e.target.value)}
+                      style={{ marginTop: "2px" }}
+                    />
+                    <div>
+                      <div style={{ fontSize: "13px", fontWeight: "700", color: evaluationMode === "FULL" ? "#1e40af" : "#1e293b" }}>
+                        🔍 FULL Mode
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>
+                        Broader BEACON-managed automatic discovery across all extracted AST paths and comprehensive evidence collection.
+                      </div>
+                    </div>
                   </label>
-                  <input
-                    type="text"
-                    value={appName}
-                    onChange={(e) => setAppName(e.target.value)}
-                    placeholder="e.g. Loan Approval Engine"
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                    Domain
-                  </label>
-                  <input
-                    type="text"
-                    value={appDomain}
-                    onChange={(e) => setAppDomain(e.target.value)}
-                    placeholder="e.g. financial_services, healthcare, retail"
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                    Description
-                  </label>
-                  <input
-                    type="text"
-                    value={appDescription}
-                    onChange={(e) => setAppDescription(e.target.value)}
-                    placeholder="Brief description of application"
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
-                  />
                 </div>
               </div>
 
-              {registrationError && (
-                <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "6px", padding: "8px 12px", color: "#991b1b", fontSize: "12px", marginBottom: "10px" }}>
-                  ⚠️ {registrationError}
-                </div>
-              )}
-
-              {registrationResult && (
-                <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: "6px", padding: "8px 12px", color: "#166534", fontSize: "12px", marginBottom: "10px" }}>
-                  ✅ Application <strong>{registrationResult.application_id}</strong> registered successfully.
-                </div>
-              )}
-
-              <button
-                onClick={handleRegisterApp}
-                disabled={registrationBusy || !isFormReady}
-                style={{
-                  background: isFormReady ? "#0f172a" : "#94a3b8",
-                  color: "#ffffff",
-                  border: "none",
-                  padding: "8px 18px",
-                  borderRadius: "6px",
-                  fontWeight: "600",
-                  fontSize: "13px",
-                  cursor: isFormReady && !registrationBusy ? "pointer" : "not-allowed",
-                }}
-              >
-                {registrationBusy ? "Registering..." : "📋 Register / Update Application"}
-              </button>
-            </section>
-
-            {/* Adapter Binding */}
-            <section style={cardStyle}>
-              <h3 style={{ margin: "0 0 14px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
-                Step 2 — Implementation Adapter Binding
-              </h3>
-              <p style={{ margin: "0 0 14px", fontSize: "12px", color: "#64748b" }}>
-                Specify the registered adapter IDs for both the legacy reference and the modernized
-                target implementations. Adapters must be pre-registered in the BEACON V2 adapter
-                registry before certification can run.
-              </p>
-              <div style={{ display: "grid", gridTemplateColumns: "1.5fr 0.5fr 1.5fr 0.5fr", gap: "12px", marginBottom: "16px" }}>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                    Legacy Adapter ID <span style={{ color: "#dc2626" }}>*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={refAdapterId}
-                    onChange={(e) => { setRefAdapterId(e.target.value); setPreflightResult(null); }}
-                    placeholder="e.g. loan_approval_legacy"
-                    style={{
-                      width: "100%",
-                      padding: "8px 10px",
-                      borderRadius: "6px",
-                      border: `1px solid ${refAdapterId ? "#94a3b8" : "#cbd5e1"}`,
-                      fontSize: "13px",
-                      boxSizing: "border-box",
-                      fontFamily: "monospace",
-                      background: "#fafafa",
-                    }}
-                  />
-                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>Reference / legacy system</span>
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Version</label>
-                  <input
-                    type="text"
-                    value={refAdapterVersion}
-                    onChange={(e) => setRefAdapterVersion(e.target.value)}
-                    placeholder="1.0.0"
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
-                  />
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                    Modern Adapter ID <span style={{ color: "#dc2626" }}>*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={targetAdapterId}
-                    onChange={(e) => { setTargetAdapterId(e.target.value); setPreflightResult(null); }}
-                    placeholder="e.g. loan_approval_modern_v2"
-                    style={{
-                      width: "100%",
-                      padding: "8px 10px",
-                      borderRadius: "6px",
-                      border: `1px solid ${targetAdapterId ? "#94a3b8" : "#cbd5e1"}`,
-                      fontSize: "13px",
-                      boxSizing: "border-box",
-                      fontFamily: "monospace",
-                      background: "#f0fdf4",
-                    }}
-                  />
-                  <span style={{ fontSize: "11px", color: "#94a3b8" }}>Modernized / target system</span>
-                </div>
-                <div>
-                  <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Version</label>
-                  <input
-                    type="text"
-                    value={targetAdapterVersion}
-                    onChange={(e) => setTargetAdapterVersion(e.target.value)}
-                    placeholder="2.0.0"
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
-                  />
-                </div>
-              </div>
-
-              {/* Target variant index (for multi-target apps) */}
-              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                <label style={{ fontSize: "12px", fontWeight: "600", color: "#475569" }}>Target Index:</label>
-                <input
-                  type="number"
-                  value={targetIndex}
-                  min={0}
-                  onChange={(e) => setTargetIndex(parseInt(e.target.value, 10) || 0)}
-                  style={{ width: "70px", padding: "6px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
-                />
-                <span style={{ fontSize: "11px", color: "#94a3b8" }}>
-                  Index into target_implementations array (0 = first modernized adapter)
+              {/* Analysis Action Button */}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: "12px", color: "#64748b" }}>
+                  Zero dynamic code execution: Inspection runs through pure static AST and manifest parsing.
                 </span>
-              </div>
-            </section>
-
-            {/* Optional Custom Inputs */}
-            <section style={cardStyle}>
-              <h3 style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
-                Step 3 — Custom Test Inputs <span style={{ fontSize: "12px", fontWeight: "400", color: "#94a3b8" }}>(Optional)</span>
-              </h3>
-              <p style={{ margin: "0 0 12px", fontSize: "12px", color: "#64748b" }}>
-                By default, BEACON V2 uses the inputs registered with the adapter. Optionally,
-                provide a JSON array of input objects to override with custom test cases.
-              </p>
-              <textarea
-                rows={5}
-                value={customInputsText}
-                onChange={(e) => { setCustomInputsText(e.target.value); setCustomInputsError(null); }}
-                placeholder='[{"credit_score": 750, "debt_ratio": 0.25}, {"credit_score": 580, "debt_ratio": 0.45}]'
-                style={{
-                  width: "100%",
-                  padding: "10px",
-                  borderRadius: "6px",
-                  border: `1px solid ${customInputsError ? "#fca5a5" : "#cbd5e1"}`,
-                  fontFamily: "monospace",
-                  fontSize: "12px",
-                  boxSizing: "border-box",
-                  resize: "vertical",
-                }}
-              />
-              {customInputsError && (
-                <div style={{ color: "#dc2626", fontSize: "11px", marginTop: "4px" }}>⚠️ {customInputsError}</div>
-              )}
-              <div style={{ fontSize: "11px", color: "#94a3b8", marginTop: "4px" }}>
-                Leave empty to use adapter-registered inputs. Provide JSON array to override.
-              </div>
-            </section>
-
-            {/* Pre-flight validation */}
-            <section style={cardStyle}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-                <div>
-                  <h3 style={{ margin: 0, fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
-                    Step 4 — Pre-flight Adapter Validation
-                  </h3>
-                  <p style={{ margin: "3px 0 0", fontSize: "12px", color: "#64748b" }}>
-                    Verify adapter readiness before executing the full workflow.
-                  </p>
-                </div>
                 <button
-                  onClick={handlePreflight}
-                  disabled={preflightBusy || !isFormReady}
+                  type="button"
+                  onClick={handleAnalyzeRepositories}
+                  disabled={analysisBusy || !legacyRepoUrl.trim() || !modernRepoUrl.trim()}
                   style={{
-                    background: isFormReady ? "#f1f5f9" : "#e2e8f0",
-                    color: "#334155",
-                    border: "1px solid #cbd5e1",
-                    padding: "8px 16px",
+                    background: analysisBusy || !legacyRepoUrl.trim() || !modernRepoUrl.trim() ? "#94a3b8" : "#2563eb",
+                    color: "#ffffff",
+                    border: "none",
+                    padding: "10px 22px",
                     borderRadius: "6px",
-                    fontWeight: "600",
+                    fontWeight: "700",
                     fontSize: "13px",
-                    cursor: isFormReady && !preflightBusy ? "pointer" : "not-allowed",
+                    cursor: analysisBusy || !legacyRepoUrl.trim() || !modernRepoUrl.trim() ? "not-allowed" : "pointer",
+                    boxShadow: "0 2px 4px rgba(37,99,235,0.25)",
+                    transition: "all 0.15s",
                   }}
                 >
-                  {preflightBusy ? "Validating..." : "🔍 Run Pre-flight Check"}
+                  {analysisBusy ? "🔍 Analyzing Repositories..." : "🔍 Analyze Repositories"}
                 </button>
               </div>
 
-              {preflightError && (
-                <div style={{ background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: "6px", padding: "8px 12px", color: "#991b1b", fontSize: "12px", marginBottom: "10px" }}>
-                  ⚠️ {preflightError}
-                </div>
-              )}
-
-              {preflightResult && (
+              {analysisError && (
                 <div
                   style={{
-                    background: preflightResult.is_ready ? "#f0fdf4" : "#fef2f2",
-                    border: `1px solid ${preflightResult.is_ready ? "#86efac" : "#fca5a5"}`,
-                    borderRadius: "8px",
-                    padding: "12px 16px",
+                    marginTop: "14px",
+                    background: "#fef2f2",
+                    border: "1px solid #fecaca",
+                    borderRadius: "6px",
+                    padding: "10px 14px",
+                    color: "#991b1b",
+                    fontSize: "13px",
                   }}
                 >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
-                    <span style={{ fontWeight: "700", fontSize: "13px", color: preflightResult.is_ready ? "#166534" : "#991b1b" }}>
-                      {preflightResult.is_ready ? "✅ Pre-flight Passed — Adapters Ready" : "❌ Pre-flight Failed — Adapter Errors Detected"}
+                  ❌ {analysisError}
+                </div>
+              )}
+            </section>
+
+            {/* In-Flight Analysis Progress State */}
+            {analysisBusy && (
+              <section style={{ ...cardStyle, marginBottom: "20px", background: "#f8fafc" }}>
+                <div style={{ fontSize: "13px", fontWeight: "700", color: "#1e40af", marginBottom: "10px" }}>
+                  ⚙️ Repository-First Inspection & Evidence Pipeline Executing:
+                </div>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", fontSize: "12px" }}>
+                  {[
+                    "1. Safe Repository Retrieval",
+                    "2. Resolving Commit SHAs & Content Hashes",
+                    "3. Static AST & Structure Inspection",
+                    "4. Fail-Closed Adapter Resolution",
+                    "5. Invariant & Rule Extraction",
+                    "6. Genuine Input Discovery",
+                  ].map((stepText, idx) => (
+                    <span
+                      key={idx}
+                      style={{
+                        background: "#ffffff",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: "4px",
+                        padding: "4px 10px",
+                        color: "#334155",
+                        fontWeight: "600",
+                      }}
+                    >
+                      {stepText}
                     </span>
-                    {preflightResult.is_ready && (
-                      <button
-                        onClick={() => setActiveStep("review")}
-                        style={{ background: "#2563eb", color: "#fff", border: "none", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontWeight: "600" }}
-                      >
-                        Continue →
-                      </button>
-                    )}
-                  </div>
-                  {preflightResult.errors?.length > 0 && (
-                    <ul style={{ margin: "6px 0 0", padding: "0 0 0 16px", fontSize: "12px", color: "#991b1b" }}>
-                      {preflightResult.errors.map((e, i) => <li key={i}>{e}</li>)}
-                    </ul>
-                  )}
-                  {preflightResult.warnings?.length > 0 && (
-                    <ul style={{ margin: "6px 0 0", padding: "0 0 0 16px", fontSize: "12px", color: "#92400e" }}>
-                      {preflightResult.warnings.map((w, i) => <li key={i}>⚠️ {w}</li>)}
-                    </ul>
-                  )}
+                  ))}
                 </div>
-              )}
-            </section>
-          </div>
-        )}
-      </div>
+              </section>
+            )}
 
-          {/* ── Right Sidebar: Registered Apps & Recent Runs ── */}
-          <div>
-
-            {/* Registered Applications Picker */}
-            <section style={{ ...cardStyle, marginBottom: "16px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                <h4 style={{ margin: 0, fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                  Registered Applications
-                </h4>
-                <button
-                  onClick={loadRegisteredApps}
-                  style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "14px", color: "#64748b" }}
-                  title="Refresh"
-                >
-                  🔄
-                </button>
-              </div>
-
-              {appsLoading && (
-                <div style={{ fontSize: "12px", color: "#94a3b8" }}>Loading...</div>
-              )}
-              {appsError && (
-                <div style={{ fontSize: "12px", color: "#dc2626" }}>⚠️ {appsError}</div>
-              )}
-              {!appsLoading && !appsError && registeredApps.length === 0 && (
-                <div style={{ fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>
-                  No applications registered yet. Fill in the form and register one.
-                </div>
-              )}
-              {registeredApps.map((app) => (
+            {/* Analysis Results Display */}
+            {analysisResult && (
+              <div>
+                {/* Status Banner */}
                 <div
-                  key={app.application_id}
-                  onClick={() => populateFromApp(app)}
                   style={{
-                    padding: "8px 10px",
-                    borderRadius: "6px",
-                    border: `1px solid ${appId === app.application_id ? "#2563eb" : "#e2e8f0"}`,
-                    background: appId === app.application_id ? "#eff6ff" : "#f8fafc",
-                    cursor: "pointer",
-                    marginBottom: "6px",
-                    transition: "border-color 0.15s",
-                  }}
-                >
-                  <div style={{ fontWeight: "700", fontSize: "12px", color: "#0f172a", fontFamily: "monospace" }}>
-                    {app.application_id}
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#64748b" }}>
-                    {app.name} · {app.domain || "—"}
-                  </div>
-                </div>
-              ))}
-            </section>
-
-            {/* Recent Workflow Runs */}
-            <section style={cardStyle}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
-                <h4 style={{ margin: 0, fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                  Recent Runs
-                </h4>
-                <button
-                  onClick={loadRecentRuns}
-                  style={{ background: "transparent", border: "none", cursor: "pointer", fontSize: "14px", color: "#64748b" }}
-                  title="Refresh"
-                >
-                  🔄
-                </button>
-              </div>
-              {runsLoading && <div style={{ fontSize: "12px", color: "#94a3b8" }}>Loading...</div>}
-              {!runsLoading && recentRuns.length === 0 && (
-                <div style={{ fontSize: "12px", color: "#94a3b8", fontStyle: "italic" }}>No recent runs.</div>
-              )}
-              {recentRuns.map((run) => (
-                <div
-                  key={run.workflow_run_id}
-                  onClick={() => loadPastRun(run.workflow_run_id)}
-                  style={{
-                    padding: "8px 10px",
-                    borderRadius: "6px",
-                    border: "1px solid #e2e8f0",
-                    background: "#f8fafc",
-                    cursor: "pointer",
-                    marginBottom: "6px",
+                    padding: "14px 18px",
+                    borderRadius: "8px",
+                    marginBottom: "16px",
+                    border: `1px solid ${
+                      analysisResult.status === "READY"
+                        ? "#86efac"
+                        : analysisResult.status === "DISCOVERY_INSUFFICIENT"
+                        ? "#fcd34d"
+                        : "#fca5a5"
+                    }`,
+                    background:
+                      analysisResult.status === "READY"
+                        ? "#f0fdf4"
+                        : analysisResult.status === "DISCOVERY_INSUFFICIENT"
+                        ? "#fffbeb"
+                        : "#fef2f2",
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center",
                   }}
                 >
                   <div>
-                    <div style={{ fontSize: "11px", fontFamily: "monospace", color: "#2563eb" }}>
-                      {run.workflow_run_id?.slice(0, 18)}...
+                    <div
+                      style={{
+                        fontWeight: "700",
+                        fontSize: "14px",
+                        color:
+                          analysisResult.status === "READY"
+                            ? "#166534"
+                            : analysisResult.status === "DISCOVERY_INSUFFICIENT"
+                            ? "#92400e"
+                            : "#991b1b",
+                      }}
+                    >
+                      {analysisResult.status === "READY" && "✅ Analysis Complete — Repositories Validated & Ready for Certification"}
+                      {analysisResult.status === "DISCOVERY_INSUFFICIENT" && "⚠️ Discovery Insufficient — Incomplete Input Evidence"}
+                      {analysisResult.status === "FAILED" && "❌ Repository Analysis Failed"}
                     </div>
-                    <div style={{ fontSize: "11px", color: "#475569" }}>{run.application_id}</div>
+                    <div style={{ fontSize: "12px", color: "#475569", marginTop: "2px" }}>
+                      Mode: <strong>{analysisResult.evaluation_mode}</strong> • Discovered Rules: <strong>{analysisResult.discovered_rules?.length || 0}</strong> • Validated Inputs: <strong>{analysisResult.discovered_inputs?.length || 0}</strong>
+                    </div>
                   </div>
                   <span
                     style={{
-                      fontSize: "10px",
+                      fontFamily: "monospace",
+                      fontSize: "12px",
                       fontWeight: "700",
-                      color: WORKFLOW_STATE_COLORS[run.state] || "#94a3b8",
-                      background: "#f1f5f9",
-                      padding: "2px 6px",
+                      padding: "3px 8px",
                       borderRadius: "4px",
+                      background: "#ffffff",
+                      border: "1px solid #cbd5e1",
+                      color: "#0f172a",
                     }}
                   >
-                    {run.state}
+                    {analysisResult.status}
                   </span>
                 </div>
-              ))}
-            </section>
-          </div>
-        </div>
-      )}
 
-      {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {/* STEP 2: REVIEW & EXECUTE                                               */}
-      {/* ═══════════════════════════════════════════════════════════════════════ */}
-      {activeStep === "review" && (
-        <div>
-          {/* Configuration Summary */}
-          <section style={cardStyle}>
-            <h3 style={{ margin: "0 0 14px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
-              Configuration Summary
-            </h3>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "repeat(3, 1fr)",
-                gap: "12px",
-                marginBottom: "16px",
-                fontSize: "13px",
-              }}
-            >
-              {[
-                { label: "Application ID", val: appId, mono: true },
-                { label: "Display Name", val: appName || appId },
-                { label: "Domain", val: appDomain || "—" },
-                { label: "Legacy Adapter", val: refAdapterId, mono: true },
-                { label: "Legacy Version", val: refAdapterVersion },
-                { label: "Modern Adapter", val: targetAdapterId, mono: true },
-                { label: "Modern Version", val: targetAdapterVersion },
-                { label: "Target Index", val: targetIndex },
-                { label: "Custom Inputs", val: customInputsText.trim() ? `${customInputsText.split("{").length - 1} records` : "None (adapter default)" },
-              ].map(({ label, val, mono }) => (
-                <div key={label} style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
-                  <div style={{ fontSize: "10px", fontWeight: "600", color: "#94a3b8", textTransform: "uppercase", marginBottom: "3px" }}>
-                    {label}
-                  </div>
-                  <div style={{ fontWeight: "600", color: "#0f172a", fontFamily: mono ? "monospace" : "inherit" }}>
-                    {String(val)}
-                  </div>
+                {/* Dual Repository Provenance Cards */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+                  {/* Legacy Source Identity */}
+                  <section style={{ ...cardStyle, padding: "14px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                      <h4 style={{ margin: 0, fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                        🏛️ Legacy Repository Identity
+                      </h4>
+                      <span style={{ fontSize: "11px", color: "#15803d", fontWeight: "600" }}>Validated</span>
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#334155", lineHeight: "1.6" }}>
+                      <div><strong>Canonical URL:</strong> <span style={{ fontFamily: "monospace", color: "#0f172a" }}>{analysisResult.legacy?.source_identity?.canonical_url || analysisResult.legacy?.repository_url || "—"}</span></div>
+                      <div><strong>Resolved Commit:</strong> <span style={{ fontFamily: "monospace", color: "#1e40af", background: "#eff6ff", padding: "1px 4px", borderRadius: "3px" }}>{analysisResult.legacy?.source_identity?.commit_sha ? analysisResult.legacy.source_identity.commit_sha.slice(0, 12) : "HEAD"}</span></div>
+                      <div><strong>Content Hash:</strong> <span style={{ fontFamily: "monospace", color: "#475569" }}>{analysisResult.legacy?.source_identity?.content_hash ? analysisResult.legacy.source_identity.content_hash.slice(0, 16) + "..." : "—"}</span></div>
+                      <div><strong>Technologies:</strong> {analysisResult.legacy?.technologies?.length > 0 ? analysisResult.legacy.technologies.join(", ") : "Standard Python/Module"}</div>
+                      <div><strong>Resolved Adapter:</strong> <span style={{ fontFamily: "monospace", fontWeight: "600", color: "#0f172a" }}>{analysisResult.legacy?.adapter?.adapter_id || "—"}</span> ({analysisResult.legacy?.adapter?.status || "RESOLVED"})</div>
+                      <div><strong>Discovered Entrypoint:</strong> <span style={{ fontFamily: "monospace", color: "#0f172a" }}>{analysisResult.legacy?.entrypoint_file || analysisResult.legacy?.adapter?.entrypoint_file || "—"}</span></div>
+                    </div>
+                  </section>
+
+                  {/* Modernized Source Identity */}
+                  <section style={{ ...cardStyle, padding: "14px" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                      <h4 style={{ margin: 0, fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                        🚀 Modernized Target Identity
+                      </h4>
+                      <span style={{ fontSize: "11px", color: "#15803d", fontWeight: "600" }}>Validated</span>
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#334155", lineHeight: "1.6" }}>
+                      <div><strong>Canonical URL:</strong> <span style={{ fontFamily: "monospace", color: "#0f172a" }}>{analysisResult.modern?.source_identity?.canonical_url || analysisResult.modern?.repository_url || "—"}</span></div>
+                      <div><strong>Resolved Commit:</strong> <span style={{ fontFamily: "monospace", color: "#1e40af", background: "#eff6ff", padding: "1px 4px", borderRadius: "3px" }}>{analysisResult.modern?.source_identity?.commit_sha ? analysisResult.modern.source_identity.commit_sha.slice(0, 12) : "HEAD"}</span></div>
+                      <div><strong>Content Hash:</strong> <span style={{ fontFamily: "monospace", color: "#475569" }}>{analysisResult.modern?.source_identity?.content_hash ? analysisResult.modern.source_identity.content_hash.slice(0, 16) + "..." : "—"}</span></div>
+                      <div><strong>Technologies:</strong> {analysisResult.modern?.technologies?.length > 0 ? analysisResult.modern.technologies.join(", ") : "Standard Python/Module"}</div>
+                      <div><strong>Resolved Adapter:</strong> <span style={{ fontFamily: "monospace", fontWeight: "600", color: "#0f172a" }}>{analysisResult.modern?.adapter?.adapter_id || "—"}</span> ({analysisResult.modern?.adapter?.status || "RESOLVED"})</div>
+                      <div><strong>Discovered Entrypoint:</strong> <span style={{ fontFamily: "monospace", color: "#0f172a" }}>{analysisResult.modern?.entrypoint_file || analysisResult.modern?.adapter?.entrypoint_file || "—"}</span></div>
+                    </div>
+                  </section>
                 </div>
-              ))}
-            </div>
 
-            {preflightResult?.is_ready && (
-              <div
-                style={{
-                  background: "#f0fdf4",
-                  border: "1px solid #86efac",
-                  borderRadius: "6px",
-                  padding: "8px 12px",
-                  fontSize: "12px",
-                  color: "#166534",
-                  marginBottom: "16px",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                }}
-              >
-                ✅ Pre-flight validation passed. Adapters are ready for certification.
-              </div>
-            )}
-          </section>
+                {/* Discovered Behavioral Rules & Invariants */}
+                <section style={{ ...cardStyle, marginBottom: "16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                    <h4 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
+                      📜 Discovered Behavioral Rules & Invariants ({analysisResult.discovered_rules?.length || 0})
+                    </h4>
+                    <span style={{ fontSize: "11px", color: "#64748b" }}>AST Branch & Expression Inference</span>
+                  </div>
+                  {analysisResult.discovered_rules && analysisResult.discovered_rules.length > 0 ? (
+                    <div style={{ maxHeight: "180px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "6px" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
+                        <thead>
+                          <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Rule ID</th>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Description / Invariant</th>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Location</th>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Method</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {analysisResult.discovered_rules.map((rule, rIdx) => (
+                            <tr key={rIdx} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                              <td style={{ padding: "6px 10px", fontFamily: "monospace", fontWeight: "600", color: "#1e40af" }}>
+                                {rule.rule_id || `rule_${rIdx + 1}`}
+                              </td>
+                              <td style={{ padding: "6px 10px", color: "#1e293b" }}>
+                                {rule.description || rule.name || "—"}
+                              </td>
+                              <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#64748b" }}>
+                                {rule.source_file ? `${rule.source_file}:${rule.source_location || 1}` : "—"}
+                              </td>
+                              <td style={{ padding: "6px 10px", color: "#475569" }}>
+                                {rule.discovery_method || "AST_ANALYSIS"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "6px", fontSize: "12px", color: "#64748b" }}>
+                      No explicit AST invariants extracted. Equivalence certification will evaluate complete entrypoint signatures.
+                    </div>
+                  )}
+                </section>
 
-          {/* Policy Overrides */}
-          <section style={cardStyle}>
-            <h3 style={{ margin: "0 0 6px", fontSize: "15px", fontWeight: "700", color: "#0f172a" }}>
-              Certification Policy Configuration
-            </h3>
-            <p style={{ margin: "0 0 14px", fontSize: "12px", color: "#64748b" }}>
-              BEACON V2 automatically resolves the tolerance threshold from evidence — no manual
-              value is required. Adjust policy bounds only if your domain requires specific guarantees.
-            </p>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "14px", marginBottom: "16px" }}>
-              <div>
-                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                  Min Equivalence Score (0–1)
-                </label>
-                <input
-                  type="number"
-                  value={policyMinScore}
-                  min={0}
-                  max={1}
-                  step={0.001}
-                  onChange={(e) => setPolicyMinScore(e.target.value)}
-                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
-                />
-                <span style={{ fontSize: "11px", color: "#94a3b8" }}>Default: 0.999 (99.9%)</span>
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                  Min Oracle Coverage (0–1)
-                </label>
-                <input
-                  type="number"
-                  value={policyMinCoverage}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  onChange={(e) => setPolicyMinCoverage(e.target.value)}
-                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", boxSizing: "border-box" }}
-                />
-                <span style={{ fontSize: "11px", color: "#94a3b8" }}>Default: 0.0 (disabled)</span>
-              </div>
-              <div>
-                <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>
-                  Explanation Mode
-                </label>
-                <select
-                  value={explainMode}
-                  onChange={(e) => setExplainMode(e.target.value)}
-                  style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#fff", boxSizing: "border-box" }}
-                >
-                  <option value="deterministic">deterministic (offline)</option>
-                  <option value="auto">auto (fallback chain)</option>
-                  <option value="llm">llm (cloud-assisted)</option>
-                </select>
-              </div>
-            </div>
+                {/* Discovered Legitimate Inputs */}
+                <section style={{ ...cardStyle, marginBottom: "16px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                    <h4 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
+                      🧪 Discovered Legitimate Inputs ({analysisResult.discovered_inputs?.length || 0} cases)
+                    </h4>
+                    <span style={{ fontSize: "11px", color: "#166534", fontWeight: "600" }}>
+                      Provenance-Backed & Validated
+                    </span>
+                  </div>
 
-            {/* Boolean Flags */}
-            <div style={{ display: "flex", gap: "24px", marginBottom: "16px", flexWrap: "wrap" }}>
-              {[
-                { state: allowWarnings, set: setAllowWarnings, label: "Allow Warnings", desc: "Permit CERTIFIED_WITH_WARNINGS as a pass outcome" },
-                { state: useCompanyKnowledge, set: setUseCompanyKnowledge, label: "Use Company Knowledge", desc: "Incorporate RAG-augmented knowledge base in explanations" },
-                { state: forceRecompute, set: setForceRecompute, label: "Force Recompute", desc: "Bypass idempotency cache — run fresh certification" },
-              ].map(({ state, set, label, desc }) => (
-                <label key={label} style={{ display: "flex", alignItems: "flex-start", gap: "8px", cursor: "pointer", fontSize: "13px" }}>
-                  <input
-                    type="checkbox"
-                    checked={state}
-                    onChange={(e) => set(e.target.checked)}
-                    style={{ marginTop: "2px" }}
-                  />
+                  {analysisResult.discovered_inputs && analysisResult.discovered_inputs.length > 0 ? (
+                    <div>
+                      <div style={{ fontSize: "12px", color: "#475569", marginBottom: "8px" }}>
+                        Input Provenance: <strong>{analysisResult.input_provenance?.source || "Repository Fixtures / Validated Evidence"}</strong>
+                      </div>
+                      <div style={{ maxHeight: "150px", overflowY: "auto", background: "#f8fafc", borderRadius: "6px", border: "1px solid #e2e8f0", padding: "8px" }}>
+                        <pre style={{ margin: 0, fontSize: "11px", fontFamily: "monospace", color: "#0f172a" }}>
+                          {JSON.stringify(analysisResult.discovered_inputs.slice(0, 5), null, 2)}
+                          {analysisResult.discovered_inputs.length > 5 && `
+... and ${analysisResult.discovered_inputs.length - 5} more validated cases`}
+                        </pre>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ padding: "12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "6px", fontSize: "12px", color: "#92400e" }}>
+                      ⚠️ No legitimate test fixtures or manifests discovered in repositories. Certification cannot proceed without genuine input evidence (fail-closed).
+                    </div>
+                  )}
+                </section>
+
+                {/* Specification Fingerprint Card */}
+                {analysisResult.execution_spec && (
+                  <div style={{ background: "#f1f5f9", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "10px 14px", marginBottom: "16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: "12px", color: "#334155" }}>
+                      <strong>Cryptographic Specification Fingerprint:</strong>
+                    </div>
+                    <span style={{ fontFamily: "monospace", fontSize: "11px", color: "#1e40af", background: "#ffffff", padding: "2px 8px", borderRadius: "4px", border: "1px solid #cbd5e1" }}>
+                      {analysisResult.execution_spec.specification_fingerprint || "—"}
+                    </span>
+                  </div>
+                )}
+
+                {/* Final Certification Action Bar */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "14px 18px" }}>
                   <div>
-                    <div style={{ fontWeight: "600", color: "#334155" }}>{label}</div>
-                    <div style={{ fontSize: "11px", color: "#94a3b8" }}>{desc}</div>
+                    <div style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                      Ready for Behavioral Equivalence Certification
+                    </div>
+                    <div style={{ fontSize: "12px", color: "#64748b" }}>
+                      Executes authorized adapters in sandboxed runtime, calculates equivalence score, and registers immutable proof.
+                    </div>
                   </div>
-                </label>
-              ))}
-            </div>
+                  <button
+                    type="button"
+                    onClick={handleCertifyRepository}
+                    disabled={certifyBusy || analysisResult.status !== "READY" || !userHasPermission("run_certification")}
+                    style={{
+                      background: certifyBusy || analysisResult.status !== "READY" ? "#94a3b8" : "#16a34a",
+                      color: "#ffffff",
+                      border: "none",
+                      padding: "11px 24px",
+                      borderRadius: "6px",
+                      fontWeight: "700",
+                      fontSize: "13px",
+                      cursor: certifyBusy || analysisResult.status !== "READY" ? "not-allowed" : "pointer",
+                      boxShadow: "0 2px 4px rgba(22,163,74,0.3)",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {certifyBusy ? "⚡ Certifying Repositories..." : "⚡ Certify Behavioral Equivalence"}
+                  </button>
+                </div>
 
-            {certifyError && (
-              <div
-                style={{
-                  background: "#fef2f2",
-                  border: "1px solid #fca5a5",
-                  borderRadius: "6px",
-                  padding: "10px 14px",
-                  color: "#991b1b",
-                  fontSize: "13px",
-                  marginBottom: "12px",
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-              >
-                <span>⚠️ {certifyError}</span>
-                <button
-                  onClick={() => setCertifyError(null)}
-                  style={{ background: "transparent", border: "none", cursor: "pointer", fontWeight: "700", color: "#991b1b" }}
-                >
-                  ✕
-                </button>
+                {certifyError && (
+                  <div
+                    style={{
+                      marginTop: "14px",
+                      background: "#fef2f2",
+                      border: "1px solid #fecaca",
+                      borderRadius: "6px",
+                      padding: "10px 14px",
+                      color: "#991b1b",
+                      fontSize: "13px",
+                    }}
+                  >
+                    ❌ {certifyError}
+                  </div>
+                )}
               </div>
             )}
+          </div>
 
-            {/* Certify Button */}
-            <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
-              <button
-                onClick={handleCertify}
-                disabled={certifyBusy || !appId.trim()}
-                style={{
-                  background: !certifyBusy && appId.trim() ? "#2563eb" : "#94a3b8",
-                  color: "#ffffff",
-                  border: "none",
-                  padding: "10px 28px",
-                  borderRadius: "6px",
-                  fontWeight: "700",
-                  fontSize: "14px",
-                  cursor: !certifyBusy && appId.trim() ? "pointer" : "not-allowed",
-                  boxShadow: !certifyBusy && appId.trim() ? "0 2px 4px rgba(37,99,235,0.25)" : "none",
-                }}
-              >
-                {certifyBusy ? "⚙️ Running Canonical V2 Workflow..." : "⚡ Run Equivalence Certification"}
-              </button>
-
-              {certifyBusy && (
-                <div style={{ fontSize: "12px", color: "#64748b" }}>
-                  BEACON V2 is automatically discovering invariants, resolving thresholds,
-                  executing evaluation, and certifying...
+          {/* ── Right Column: Architecture Guardrails & Recent Runs ── */}
+          <div>
+            {/* V2 Guardrails Card */}
+            <section style={{ ...cardStyle, marginBottom: "16px" }}>
+              <h3 style={{ margin: "0 0 10px", fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
+                🛡️ V2 Architectural Guardrails
+              </h3>
+              <div style={{ fontSize: "12px", color: "#475569", lineHeight: "1.5" }}>
+                <div style={{ marginBottom: "8px" }}>
+                  <strong>🔒 Zero Dynamic Import Detection:</strong>
+                  <div style={{ color: "#64748b" }}>Untrusted repository code is never executed during inspection or adapter detection.</div>
                 </div>
-              )}
-            </div>
-
-            {certifyBusy && (
-              <div
-                style={{
-                  marginTop: "16px",
-                  background: "#f0f9ff",
-                  border: "1px solid #bae6fd",
-                  borderRadius: "8px",
-                  padding: "14px 18px",
-                }}
-              >
-                <div style={{ fontSize: "12px", fontWeight: "600", color: "#0369a1", marginBottom: "8px" }}>
-                  ⚙️ V2 Workflow Stages Running Automatically:
+                <div style={{ marginBottom: "8px" }}>
+                  <strong>⚖️ Fail-Closed Adapter Resolution:</strong>
+                  <div style={{ color: "#64748b" }}>Ambiguous technology or missing adapters immediately fail closed. No guessing.</div>
                 </div>
-                <div
+                <div style={{ marginBottom: "8px" }}>
+                  <strong>🧪 Genuine Input Evidence:</strong>
+                  <div style={{ color: "#64748b" }}>Test cases are discovered from legitimate repository fixtures. Synthetic [0,1,5,10] fallbacks are disabled.</div>
+                </div>
+                <div>
+                  <strong>📜 Immutable Identity:</strong>
+                  <div style={{ color: "#64748b" }}>All runs bind canonical repository URLs, resolved commit SHAs, and content hashes.</div>
+                </div>
+              </div>
+            </section>
+
+            {/* Recent Workflow Runs */}
+            <section style={cardStyle}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
+                <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
+                  Recent Runs
+                </h3>
+                <button
+                  onClick={loadRecentRuns}
                   style={{
-                    display: "flex",
-                    gap: "8px",
-                    flexWrap: "wrap",
-                    fontSize: "11px",
+                    background: "transparent",
+                    border: "none",
+                    fontSize: "12px",
+                    color: "#2563eb",
+                    cursor: "pointer",
+                    fontWeight: "600",
                   }}
                 >
-                  {[
-                    "VALIDATING",
-                    "CAPTURING_EVIDENCE",
-                    "EVALUATING",
-                    "RESOLVING_ORACLES",
-                    "RESOLVING_THRESHOLDS",
-                    "CERTIFYING",
-                    "EXPLAINING",
-                    "PERSISTING",
-                  ].map((stage) => (
-                    <span
-                      key={stage}
+                  Refresh
+                </button>
+              </div>
+
+              {runsLoading ? (
+                <div style={{ fontSize: "13px", color: "#94a3b8", textAlign: "center", padding: "12px 0" }}>
+                  Loading runs...
+                </div>
+              ) : recentRuns.length === 0 ? (
+                <div style={{ fontSize: "12px", color: "#94a3b8", textAlign: "center", padding: "16px 0" }}>
+                  No recent runs recorded yet.
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                  {recentRuns.map((run) => (
+                    <div
+                      key={run.workflow_run_id}
+                      onClick={() => loadPastRun(run.workflow_run_id)}
                       style={{
-                        background: "#e0f2fe",
-                        color: "#0369a1",
-                        padding: "3px 8px",
-                        borderRadius: "4px",
-                        fontFamily: "monospace",
-                        fontWeight: "600",
+                        padding: "10px 12px",
+                        background: "#f8fafc",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        transition: "all 0.15s",
                       }}
                     >
-                      {stage}
-                    </span>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
+                        <span style={{ fontSize: "12px", fontWeight: "700", color: "#0f172a", fontFamily: "monospace" }}>
+                          {run.workflow_run_id.slice(0, 8)}...
+                        </span>
+                        <span
+                          style={{
+                            fontSize: "10px",
+                            fontWeight: "700",
+                            padding: "2px 6px",
+                            borderRadius: "4px",
+                            background: run.certification_status === "CERTIFIED" ? "#dcfce7" : "#fee2e2",
+                            color: run.certification_status === "CERTIFIED" ? "#15803d" : "#b91c1c",
+                          }}
+                        >
+                          {run.certification_status || run.state}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>
+                        Score: <strong>{run.certification_score != null ? `${(run.certification_score * 100).toFixed(1)}%` : "—"}</strong>
+                      </div>
+                    </div>
                   ))}
                 </div>
-              </div>
-            )}
-          </section>
+              )}
+            </section>
+          </div>
         </div>
       )}
 

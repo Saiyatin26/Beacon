@@ -57,108 +57,93 @@ class InputDiscoveryEngine:
         source_desc = ""
         method_desc = "REPOSITORY_FIXTURES"
 
-        # 1. Check if either repository provides explicit JSON input assets
+        # 1. Check if either repository provides explicit input assets (JSON/CSV in repo fixtures/tests/data)
         all_input_assets = legacy_analysis.input_candidates + modern_analysis.input_candidates
         for asset in all_input_assets:
             if asset.sample_values and len(asset.sample_values) > 0:
-                # Load full file
                 try:
                     f_path = Path(asset.file_path)
                     if f_path.exists():
                         raw_data = json.loads(f_path.read_text(encoding="utf-8", errors="ignore"))
+                        file_cases = []
                         if isinstance(raw_data, list):
-                            discovered_cases.extend([item for item in raw_data if isinstance(item, dict)])
+                            file_cases = [item for item in raw_data if isinstance(item, dict)]
                         elif isinstance(raw_data, dict):
-                            for k in ("cases", "inputs", "data"):
+                            for k in ("cases", "test_cases", "inputs", "data", "scenarios"):
                                 if k in raw_data and isinstance(raw_data[k], list):
-                                    discovered_cases.extend(raw_data[k])
+                                    file_cases = [item for item in raw_data[k] if isinstance(item, dict)]
                                     break
-                            if not discovered_cases:
-                                discovered_cases.append(raw_data)
-                        if discovered_cases:
+                            if not file_cases:
+                                file_cases = [raw_data]
+                        if file_cases:
+                            discovered_cases.extend(file_cases)
                             source_desc = f"Repository fixture '{asset.relative_path}'"
-                            method_desc = "REPOSITORY_JSON_FIXTURE"
+                            method_desc = "REPOSITORY_FIXTURE_DISCOVERY"
                             break
                 except Exception:
                     pass
 
-        # 2. Check for legitimate benchmark dataset assets matching repository identity
+        # 2. Check for explicit dataset/manifest inside repository roots
         if not discovered_cases:
-            combined_text = (
-                legacy_analysis.provenance.source_url
-                + " " + modern_analysis.provenance.source_url
-                + " " + " ".join(legacy_analysis.project_structure)
-                + " " + " ".join([e.name for e in legacy_analysis.entrypoint_candidates])
-            ).lower()
-
-            # Check loan approval match
-            if "loan" in combined_text:
-                trace_log = self.beacon_root / "legacy_sample" / "trace_log.json"
-                if trace_log.exists():
+            for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
+                if not repo_p_str:
+                    continue
+                repo_p = Path(repo_p_str)
+                # Check for explicit benchmark/project manifest
+                manifest_file = repo_p / "benchmark_manifest.json"
+                if not manifest_file.exists():
+                    manifest_file = repo_p / "beacon_manifest.json"
+                if manifest_file.exists():
                     try:
-                        traces = json.loads(trace_log.read_text(encoding="utf-8"))
-                        for t in traces:
-                            if "inputs" in t and isinstance(t["inputs"], dict):
-                                discovered_cases.append(t["inputs"])
-                        if discovered_cases:
-                            source_desc = "Legitimate benchmark trace asset 'legacy_sample/trace_log.json'"
-                            method_desc = "BENCHMARK_ASSET_DISCOVERY"
+                        manifest_data = json.loads(manifest_file.read_text(encoding="utf-8", errors="ignore"))
+                        ds_rel = manifest_data.get("dataset_path") or manifest_data.get("dataset_file")
+                        if ds_rel:
+                            ds_file = (repo_p / ds_rel).resolve()
+                            if ds_file.exists() and ds_file.is_file() and ds_file.suffix == ".json":
+                                ds_raw = json.loads(ds_file.read_text(encoding="utf-8", errors="ignore"))
+                                if isinstance(ds_raw, list):
+                                    discovered_cases.extend([d for d in ds_raw if isinstance(d, dict)])
+                                elif isinstance(ds_raw, dict):
+                                    for k in ("test_cases", "cases", "inputs", "data"):
+                                        if k in ds_raw and isinstance(ds_raw[k], list):
+                                            discovered_cases.extend([d for d in ds_raw[k] if isinstance(d, dict)])
+                                            break
+                                if discovered_cases:
+                                    source_desc = f"Explicit repository manifest '{manifest_file.name}' -> '{ds_rel}'"
+                                    method_desc = "EXPLICIT_MANIFEST_DISCOVERY"
+                                    break
                     except Exception:
                         pass
 
-            # Check benchmark datasets in beacon_root / benchmarks
-            match_bench = None
-            if "tax" in combined_text or "payroll" in combined_text:
-                match_bench = self.beacon_root / "benchmarks" / "payroll_tax_calculator"
-            elif "retail" in combined_text or "discount" in combined_text or "pricing" in combined_text:
-                match_bench = self.beacon_root / "benchmarks" / "retail_discount_pricing"
-            elif "triage" in combined_text or "medical" in combined_text:
-                match_bench = self.beacon_root / "benchmarks" / "medical_triage"
-
-            if match_bench and match_bench.exists():
-                ds_dir = match_bench / "dataset"
-                if ds_dir.exists():
-                    for jf in ds_dir.glob("*.json"):
-                        if jf.stem == "validation":
+                # Check legitimate repo dataset subdirectory (e.g. repo/dataset/*.json)
+                ds_dir = repo_p / "dataset"
+                if not discovered_cases and ds_dir.exists() and ds_dir.is_dir():
+                    for jf in sorted(ds_dir.glob("*.json")):
+                        if jf.stem.lower() == "validation":
                             continue
                         try:
-                            data = json.loads(jf.read_text(encoding="utf-8"))
-                            if isinstance(data, list):
-                                discovered_cases.extend([d for d in data if isinstance(d, dict)])
-                            elif isinstance(data, dict):
+                            ds_raw = json.loads(jf.read_text(encoding="utf-8", errors="ignore"))
+                            cases = []
+                            if isinstance(ds_raw, list):
+                                cases = [d for d in ds_raw if isinstance(d, dict)]
+                            elif isinstance(ds_raw, dict):
                                 for k in ("test_cases", "scenarios", "cases", "data", "inputs"):
-                                    if k in data and isinstance(data[k], list):
-                                        discovered_cases.extend(data[k])
+                                    if k in ds_raw and isinstance(ds_raw[k], list):
+                                        cases = [d for d in ds_raw[k] if isinstance(d, dict)]
                                         break
-                                if not discovered_cases:
-                                    discovered_cases.append(data)
-                            if discovered_cases:
-                                source_desc = f"Legitimate benchmark dataset '{jf.relative_to(self.beacon_root)}'"
-                                method_desc = "BENCHMARK_ASSET_DISCOVERY"
+                                if not cases:
+                                    cases = [ds_raw]
+                            if cases:
+                                discovered_cases.extend(cases)
+                                source_desc = f"Repository dataset directory '{jf.name}'"
+                                method_desc = "REPOSITORY_DATASET_DISCOVERY"
                                 break
                         except Exception:
                             pass
+                if discovered_cases:
+                    break
 
-        # 3. Check for parameter-informed discovery if entrypoints have known parameter names
-        if not discovered_cases and legacy_analysis.entrypoint_candidates:
-            primary_ep = legacy_analysis.entrypoint_candidates[0]
-            params = primary_ep.parameters
-            if params:
-                method_desc = "SIGNATURE_INFERRED_DISCOVERY"
-                source_desc = f"AST parameter signature inference for '{primary_ep.name}' ({params})"
-                # Generate a diverse deterministic matrix for discovered parameters
-                # without hardcoded business assumptions
-                import itertools
-                test_values = [0, 1, 5, 10, 50, 100, 500, 1000]
-                combos = list(itertools.product(test_values[:4], repeat=min(len(params), 3)))
-                for idx, combo in enumerate(combos[:max_cases]):
-                    case_val = {}
-                    for p_idx, p_name in enumerate(params):
-                        val = combo[p_idx] if p_idx < len(combo) else 0
-                        case_val[p_name] = val
-                    discovered_cases.append(case_val)
-
-        # Fail closed if still zero inputs
+        # 3. Fail closed if zero legitimate inputs found — NEVER manufacture synthetic data!
         if not discovered_cases:
             return InputDiscoveryResult(
                 status=InputDiscoveryStatus.INSUFFICIENT_COVERAGE,
@@ -167,11 +152,45 @@ class InputDiscoveryEngine:
                 discovery_source="",
                 discovery_method="FAILED",
                 diagnostic_message=(
-                    "Input discovery failed: No legitimate test cases, fixtures, or matching benchmark "
-                    "assets could be discovered for the provided repositories. "
-                    "Failing closed with INSUFFICIENT_COVERAGE without fabricating synthetic outputs."
+                    "Input discovery failed: No legitimate test cases or fixtures could be discovered "
+                    "in the provided repositories. Synthetic fallback is strictly disabled in BEACON V2. "
+                    "Failing closed with INSUFFICIENT_COVERAGE."
                 ),
             )
+
+        # 4. Input Validation: Validate cases against discovered entrypoint parameters
+        expected_params = []
+        if legacy_analysis.entrypoint_candidates:
+            expected_params = legacy_analysis.entrypoint_candidates[0].parameters
+
+        validated_cases: list[dict[str, Any]] = []
+        for case in discovered_cases:
+            if not isinstance(case, dict):
+                continue
+            # If expected parameters exist, verify at least one matches or case has fields
+            if expected_params and len(expected_params) > 0:
+                if any(p in case for p in expected_params):
+                    validated_cases.append(case)
+                elif len(case) > 0:
+                    # Pass through if non-empty dictionary
+                    validated_cases.append(case)
+            else:
+                validated_cases.append(case)
+
+        if not validated_cases:
+            return InputDiscoveryResult(
+                status=InputDiscoveryStatus.INSUFFICIENT_COVERAGE,
+                inputs_count=0,
+                test_inputs=[],
+                discovery_source=source_desc,
+                discovery_method="VALIDATION_FAILED",
+                diagnostic_message=(
+                    f"Input discovery failed: Discovered inputs from '{source_desc}' failed validation "
+                    f"against entrypoint parameters {expected_params}."
+                ),
+            )
+
+        discovered_cases = validated_cases
 
         # Slice to max_cases
         selected_cases = discovered_cases[:max_cases]

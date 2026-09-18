@@ -25,6 +25,24 @@ from ingestion.static_analyzer import PythonAnalyzer
 logger = logging.getLogger("beacon.application.repository_service")
 
 
+def redact_url_credentials(url: str) -> str:
+    """Removes sensitive credentials (passwords, tokens) from Git/HTTP URLs."""
+    if "@" in url and "://" in url:
+        return re.sub(r"://[^@]+@", "://***@", url)
+    return url
+
+
+def validate_path_containment(child_path: Path, root_path: Path) -> Path:
+    """Ensures child_path does not escape root_path through directory traversal or symlinks."""
+    resolved_root = root_path.resolve()
+    resolved_child = child_path.resolve()
+    try:
+        resolved_child.relative_to(resolved_root)
+    except ValueError:
+        raise RepositoryIngestionError(f"Path traversal detected: '{child_path}' escapes root '{root_path}'")
+    return resolved_child
+
+
 class RepositorySourceType(str, Enum):
     """Supported source types for repository ingestion."""
     GIT = "git"
@@ -32,6 +50,16 @@ class RepositorySourceType(str, Enum):
     LOCAL_PATH = "local_path"
     DIRECTORY = "directory"
     FILE = "file"
+
+
+class RepositoryIdentity(BaseModel):
+    """Immutable, content-addressed identity of a repository source."""
+    model_config = ConfigDict(extra="ignore")
+
+    canonical_url: str
+    resolved_revision: str
+    commit_sha: Optional[str] = None
+    content_hash: str
 
 
 class RepositorySourceSpec(BaseModel):
@@ -70,6 +98,7 @@ class RepositoryProvenance(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     source_url: str
+    canonical_source_url: str = ""
     source_type: str
     resolved_revision: str
     commit_sha: Optional[str] = None
@@ -77,6 +106,7 @@ class RepositoryProvenance(BaseModel):
     retrieval_timestamp: str
     local_path: str
     status: str = "INGESTED"
+    identity: Optional[RepositoryIdentity] = None
 
 
 class DiscoveredEntrypoint(BaseModel):
@@ -107,6 +137,7 @@ class RepositoryAnalysisReport(BaseModel):
 
     repository_id: str
     provenance: RepositoryProvenance
+    identity: Optional[RepositoryIdentity] = None
     languages: list[str] = Field(default_factory=lambda: ["python"])
     frameworks: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
@@ -138,6 +169,7 @@ class RepositoryService:
         """Safely ingests, resolves, and hashes an external or local repository."""
         clean_spec = spec.sanitize()
         url = clean_spec.repository_url
+        canonical_url = redact_url_credentials(url)
 
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -155,9 +187,11 @@ class RepositoryService:
 
             target_dir = local_p
             if clean_spec.subdirectory:
-                sub_p = local_p / clean_spec.subdirectory
+                sub_p = validate_path_containment(local_p / clean_spec.subdirectory, local_p)
                 if sub_p.exists():
                     target_dir = sub_p
+                else:
+                    raise RepositoryIngestionError(f"Subdirectory '{clean_spec.subdirectory}' not found in '{local_p}'")
 
             commit_sha = None
             resolved_rev = clean_spec.revision or "local_head"
@@ -173,7 +207,7 @@ class RepositoryService:
                 )
                 if git_proc.returncode == 0:
                     commit_sha = git_proc.stdout.strip()
-                    resolved_rev = clean_spec.revision or commit_sha
+                    resolved_rev = commit_sha
             except Exception:
                 pass
 
@@ -182,20 +216,29 @@ class RepositoryService:
             except Exception as exc:
                 raise RepositoryIngestionError(f"Failed to compute content hash for local path '{target_dir}': {exc}")
 
+            identity = RepositoryIdentity(
+                canonical_url=canonical_url,
+                resolved_revision=commit_sha or resolved_rev,
+                commit_sha=commit_sha,
+                content_hash=content_hash,
+            )
+
             prov = RepositoryProvenance(
-                source_url=str(local_p),
+                source_url=canonical_url,
+                canonical_source_url=canonical_url,
                 source_type="local_path",
-                resolved_revision=resolved_rev,
+                resolved_revision=commit_sha or resolved_rev,
                 commit_sha=commit_sha,
                 content_hash=content_hash,
                 retrieval_timestamp=now_iso,
                 local_path=str(target_dir),
                 status="INGESTED",
+                identity=identity,
             )
             return target_dir, prov
 
         # Handle remote Git repository
-        url_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+        url_hash = hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()[:16]
         dest_repo_dir = self.cache_dir / f"repo_{url_hash}"
 
         if not dest_repo_dir.exists():
@@ -210,11 +253,11 @@ class RepositoryService:
                     check=False,
                 )
                 if proc.returncode != 0:
-                    raise RepositoryIngestionError(f"Git clone failed for '{url}': {proc.stderr.strip()}")
+                    raise RepositoryIngestionError(f"Git clone failed for '{canonical_url}': {proc.stderr.strip()}")
             except subprocess.TimeoutExpired:
-                raise RepositoryIngestionError(f"Git clone timed out after 60 seconds for '{url}'")
+                raise RepositoryIngestionError(f"Git clone timed out after 60 seconds for '{canonical_url}'")
             except Exception as exc:
-                raise RepositoryIngestionError(f"Git clone execution error for '{url}': {exc}")
+                raise RepositoryIngestionError(f"Git clone execution error for '{canonical_url}': {exc}")
         else:
             # Update existing clone
             try:
@@ -228,7 +271,7 @@ class RepositoryService:
             checkout_cmd = ["git", "checkout", clean_spec.revision]
             proc = subprocess.run(checkout_cmd, cwd=str(dest_repo_dir), capture_output=True, text=True, timeout=15, check=False)
             if proc.returncode != 0:
-                raise RepositoryIngestionError(f"Failed to checkout revision '{clean_spec.revision}' in '{url}': {proc.stderr.strip()}")
+                raise RepositoryIngestionError(f"Failed to checkout revision '{clean_spec.revision}' in '{canonical_url}': {proc.stderr.strip()}")
 
         try:
             rev_proc = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(dest_repo_dir), capture_output=True, text=True, timeout=5, check=False)
@@ -239,25 +282,35 @@ class RepositoryService:
 
         target_dir = dest_repo_dir
         if clean_spec.subdirectory:
-            sub_p = dest_repo_dir / clean_spec.subdirectory
+            sub_p = validate_path_containment(dest_repo_dir / clean_spec.subdirectory, dest_repo_dir)
             if not sub_p.exists():
-                raise RepositoryIngestionError(f"Subdirectory '{clean_spec.subdirectory}' not found in '{url}'")
+                raise RepositoryIngestionError(f"Subdirectory '{clean_spec.subdirectory}' not found in '{canonical_url}'")
             target_dir = sub_p
 
         try:
             content_hash = compute_implementation_hash(target_dir)
         except Exception as exc:
-            raise RepositoryIngestionError(f"Failed to compute content hash for repository '{url}': {exc}")
+            raise RepositoryIngestionError(f"Failed to compute content hash for repository '{canonical_url}': {exc}")
+
+        effective_revision = commit_sha or clean_spec.revision or "HEAD"
+        identity = RepositoryIdentity(
+            canonical_url=canonical_url,
+            resolved_revision=effective_revision,
+            commit_sha=commit_sha,
+            content_hash=content_hash,
+        )
 
         prov = RepositoryProvenance(
-            source_url=url,
+            source_url=canonical_url,
+            canonical_source_url=canonical_url,
             source_type="git",
-            resolved_revision=clean_spec.revision or (commit_sha or "HEAD"),
+            resolved_revision=effective_revision,
             commit_sha=commit_sha,
             content_hash=content_hash,
             retrieval_timestamp=now_iso,
             local_path=str(target_dir),
             status="INGESTED",
+            identity=identity,
         )
         return target_dir, prov
 
@@ -389,6 +442,7 @@ class RepositoryService:
         return RepositoryAnalysisReport(
             repository_id=repo_id,
             provenance=provenance,
+            identity=provenance.identity,
             languages=sorted(list(languages)) or ["python"],
             frameworks=sorted(list(frameworks)),
             dependencies=dependencies,

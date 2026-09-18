@@ -25,6 +25,8 @@ class AdapterResolutionStatus(str, Enum):
     RESOLVED = "RESOLVED"
     ADAPTER_AMBIGUOUS = "ADAPTER_AMBIGUOUS"
     ADAPTER_UNRESOLVED = "ADAPTER_UNRESOLVED"
+    ADAPTER_UNSUPPORTED = "ADAPTER_UNSUPPORTED"
+    FAILED = "FAILED"
 
 
 class AdapterResolutionResult(BaseModel):
@@ -32,10 +34,12 @@ class AdapterResolutionResult(BaseModel):
     model_config = ConfigDict(extra="ignore", arbitrary_types_allowed=True)
 
     status: AdapterResolutionStatus
-    method: str = "AUTOMATIC"
+    method: str = "AUTOMATIC_STATIC"
     role: str = "target"
     adapter_name: Optional[str] = None
     resolved_entrypoint: Optional[str] = None
+    resolved_file: Optional[str] = None
+    resolved_function: Optional[str] = None
     adapter_instance: Optional[Any] = None
     detection_evidence: dict[str, Any] = Field(default_factory=dict)
     candidates_count: int = 0
@@ -44,11 +48,21 @@ class AdapterResolutionResult(BaseModel):
 
 
 class AdapterDetector:
-    """Deterministic, evidence-backed adapter detector and resolver."""
+    """Deterministic, evidence-backed adapter detector and resolver.
+    
+    Operates strictly via static inspection during the detection phase.
+    Code loading/execution is decoupled and only authorized during runtime execution.
+    """
 
     @staticmethod
-    def _load_callable_from_file(file_path: Path, fn_name: str) -> Any:
-        """Dynamically and safely imports a Python callable from an isolated file path."""
+    def load_authorized_adapter(
+        file_path: Path,
+        fn_name: str,
+        adapter_name: str,
+        role: Union[AdapterRole, str],
+        version: str = "1.0.0",
+    ) -> ImplementationAdapter:
+        """Loads and binds a Python callable ONLY when execution is explicitly authorized."""
         module_name = f"beacon_dyn_{file_path.stem}_{hash(str(file_path)) & 0xFFFFFFFF}"
         spec = importlib.util.spec_from_file_location(module_name, str(file_path))
         if not spec or not spec.loader:
@@ -58,22 +72,47 @@ class AdapterDetector:
         spec.loader.exec_module(module)
         if not hasattr(module, fn_name):
             raise AttributeError(f"Module in '{file_path}' does not contain function '{fn_name}'")
-        return getattr(module, fn_name)
+        target_fn = getattr(module, fn_name)
+
+        return FunctionAdapter(
+            target_fn=target_fn,
+            name=adapter_name,
+            version=version,
+            role=role,
+            output_normalizer=PreserveCaseNormalizer(),
+        )
 
     def resolve_adapter_for_repository(
         self,
         analysis: RepositoryAnalysisReport,
         role: Union[AdapterRole, str] = AdapterRole.TARGET,
     ) -> AdapterResolutionResult:
-        """Deterministically resolves an ImplementationAdapter from repository analysis facts."""
+        """Deterministically resolves an ImplementationAdapter strictly from static repository analysis facts.
+        
+        CRITICAL SECURITY INVARIANT:
+        This method DOES NOT import or execute repository code.
+        """
         role_str = role.value if hasattr(role, "value") else str(role)
+
+        # Check language support
+        if not any(lang.lower() == "python" for lang in analysis.languages):
+            return AdapterResolutionResult(
+                status=AdapterResolutionStatus.ADAPTER_UNSUPPORTED,
+                method="AUTOMATIC_STATIC",
+                role=role_str,
+                diagnostic_message=(
+                    f"Automatic adapter detection unsupported for non-Python repository languages: {analysis.languages}"
+                ),
+                detection_evidence={"languages": analysis.languages},
+            )
+
         candidates = analysis.entrypoint_candidates
         candidate_names = [f"{c.relative_path}:{c.name}" for c in candidates]
 
         if not candidates:
             return AdapterResolutionResult(
                 status=AdapterResolutionStatus.ADAPTER_UNRESOLVED,
-                method="AUTOMATIC",
+                method="AUTOMATIC_STATIC",
                 role=role_str,
                 candidates_count=0,
                 candidate_names=[],
@@ -87,7 +126,7 @@ class AdapterDetector:
                 },
             )
 
-        # Filtering / ranking heuristics:
+        # Static Filtering / ranking heuristics:
         # 1. Look for entrypoints with arguments (not 0-arg helpers or main runners)
         valid_candidates = [c for c in candidates if len(c.parameters) > 0 or c.has_type_hints]
         if not valid_candidates:
@@ -109,7 +148,7 @@ class AdapterDetector:
                 # Ambiguous: multiple candidates, none uniquely prioritized
                 return AdapterResolutionResult(
                     status=AdapterResolutionStatus.ADAPTER_AMBIGUOUS,
-                    method="AUTOMATIC",
+                    method="AUTOMATIC_STATIC",
                     role=role_str,
                     candidates_count=len(valid_candidates),
                     candidate_names=[f"{c.relative_path}:{c.name}" for c in valid_candidates],
@@ -126,24 +165,18 @@ class AdapterDetector:
                     },
                 )
 
-        # Build FunctionAdapter with verified callable
-        target_fn = self._load_callable_from_file(Path(primary_match.file_path), primary_match.name)
+        # Static resolution succeeded WITHOUT loading or executing the module
         adapter_name = f"{primary_match.name}_{role_str}"
-        adapter = FunctionAdapter(
-            target_fn=target_fn,
-            name=adapter_name,
-            version=analysis.provenance.resolved_revision or "1.0.0",
-            role=role,
-            output_normalizer=PreserveCaseNormalizer(),
-        )
 
         return AdapterResolutionResult(
             status=AdapterResolutionStatus.RESOLVED,
-            method="AUTOMATIC",
+            method="AUTOMATIC_STATIC",
             role=role_str,
             adapter_name=adapter_name,
             resolved_entrypoint=f"{primary_match.relative_path}:{primary_match.name}",
-            adapter_instance=adapter,
+            resolved_file=primary_match.file_path,
+            resolved_function=primary_match.name,
+            adapter_instance=None,  # Intentionally None during static detection phase
             candidates_count=len(candidates),
             candidate_names=candidate_names,
             diagnostic_message=f"Deterministically resolved adapter '{adapter_name}' from '{primary_match.relative_path}'.",
