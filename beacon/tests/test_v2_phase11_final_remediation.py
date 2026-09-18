@@ -307,6 +307,7 @@ def test_11_recovery_transition_validation():
         workflow_run_id="WRUN-T11",
         application_id="loan_test_app",
         request_fingerprint="fp_t11",
+        execution_fingerprint="exec_fp_t11",
         state=WorkflowState.PERSISTING,
         certification_id="CERT-T11",
         threshold_resolution_id="RES-T11",
@@ -698,3 +699,218 @@ def test_37_input_ids_are_used_rather_than_positional_assumptions():
     input_ids = [c.input_id for c in cases]
     assert len(input_ids) == len(set(input_ids))
     assert all(len(inp_id) > 0 for inp_id in input_ids)
+
+
+# ============================================================================
+# 11. AUTHORITATIVE STAGE-B IDEMPOTENCY & OWNERSHIP RECOVERY (Tests 38 - 46)
+# ============================================================================
+
+def test_38_changed_implementation_source_hash_prevents_completed_run_reuse():
+    """Same Stage-A request with changed implementation source hash MUST NOT reuse old run."""
+    req = WorkflowRunRequest(application_id="loan_test_app", target_index=0)
+    res1 = workflow_engine.execute_workflow(req)
+    assert res1.state == WorkflowState.COMPLETED
+
+    run1 = workflow_persistence.get_run(res1.workflow_run_id)
+    assert run1 is not None
+    exec_fp_1 = run1.execution_fingerprint
+
+    # Modify the target implementation's source hash on the registered app spec
+    spec = application_registry.get_application("loan_test_app")
+    orig_hash = spec.target_implementations[0].source_hash
+    spec.target_implementations[0].source_hash = "modified_target_hash_v2_9999"
+
+    try:
+        # Second run with same Stage-A request
+        res2 = workflow_engine.execute_workflow(req)
+        assert res2.state == WorkflowState.COMPLETED
+
+        run2 = workflow_persistence.get_run(res2.workflow_run_id)
+        assert run2 is not None
+        exec_fp_2 = run2.execution_fingerprint
+
+        # Invariants: distinct execution identity and no old result reuse
+        assert exec_fp_1 != exec_fp_2
+        assert res1.workflow_run_id != res2.workflow_run_id
+    finally:
+        spec.target_implementations[0].source_hash = orig_hash
+
+
+def test_39_changed_input_set_prevents_completed_run_reuse():
+    """Same application with different custom inputs produces distinct Stage-B identity and no reuse."""
+    req1 = WorkflowRunRequest(application_id="loan_test_app", target_index=0)
+    res1 = workflow_engine.execute_workflow(req1)
+    assert res1.state == WorkflowState.COMPLETED
+
+    run1 = workflow_persistence.get_run(res1.workflow_run_id)
+    assert run1 is not None
+
+    custom_inputs_2 = [
+        {"credit_score": 900, "debt_ratio": 0.05, "annual_income": 300000, "loan_amount": 10000},
+    ]
+    req2 = WorkflowRunRequest(application_id="loan_test_app", target_index=0, custom_inputs=custom_inputs_2)
+    res2 = workflow_engine.execute_workflow(req2)
+    assert res2.state == WorkflowState.COMPLETED
+
+    run2 = workflow_persistence.get_run(res2.workflow_run_id)
+    assert run2 is not None
+
+    assert run1.execution_fingerprint != run2.execution_fingerprint
+    assert res1.workflow_run_id != res2.workflow_run_id
+
+
+def test_40_exact_same_concrete_execution_reuses_verified_completed_run():
+    """Exact same concrete execution inputs reuse the verified completed run."""
+    req = WorkflowRunRequest(application_id="loan_test_app", target_index=0)
+    res1 = workflow_engine.execute_workflow(req)
+    assert res1.state == WorkflowState.COMPLETED
+
+    res2 = workflow_engine.execute_workflow(req)
+    assert res2.state == WorkflowState.COMPLETED
+    assert res1.workflow_run_id == res2.workflow_run_id
+    assert res1.artifact_id == res2.artifact_id
+
+
+def test_41_persistence_reload_survives_process_restart():
+    """Stage-B identity fields survive database reload across store instances."""
+    store1 = WorkflowPersistenceStore()
+    run = WorkflowRun(
+        workflow_run_id="WRUN-SURVIVE-01",
+        application_id="loan_test_app",
+        request_fingerprint="req_fp_survive",
+        execution_fingerprint="exec_fp_survive_12345",
+        input_set_id="INPSET-loan_test_app-abcdef",
+        input_set_hash="input_hash_survive",
+        evidence_bundle_id="BUNDLE-survive",
+        state=WorkflowState.COMPLETED,
+        certification_id="CERT-SURVIVE-01",
+        threshold_resolution_id="RES-SURVIVE-01",
+    )
+    store1.save_run(run)
+
+    # Reconstruct store simulating fresh process restart
+    store2 = WorkflowPersistenceStore()
+    reloaded = store2.get_run("WRUN-SURVIVE-01")
+    assert reloaded is not None
+    assert reloaded.execution_fingerprint == "exec_fp_survive_12345"
+    assert reloaded.input_set_id == "INPSET-loan_test_app-abcdef"
+    assert reloaded.input_set_hash == "input_hash_survive"
+    assert reloaded.evidence_bundle_id == "BUNDLE-survive"
+    assert reloaded.state == WorkflowState.COMPLETED
+
+
+def test_42_atomic_stage_b_binding_conflict_detection():
+    """Only one worker may claim/bind an in-progress Stage-B execution identity."""
+    store1 = WorkflowPersistenceStore()
+    store2 = WorkflowPersistenceStore()
+
+    req_fp_1 = "req_fp_worker_1"
+    req_fp_2 = "req_fp_worker_2"
+    exec_fp_shared = "exec_fp_shared_conflict_test"
+
+    ok1, _, _ = store1.acquire_persistent_reservation(req_fp_1, "RUN-WORKER-1")
+    assert ok1 is True
+    ok2, _, _ = store2.acquire_persistent_reservation(req_fp_2, "RUN-WORKER-2")
+    assert ok2 is True
+
+    # Worker 1 binds Stage-B identity
+    bound1, owner1, st1 = store1.bind_execution_identity(req_fp_1, exec_fp_shared, "RUN-WORKER-1")
+    assert bound1 is True
+    assert owner1 == "RUN-WORKER-1"
+
+    # Worker 2 attempts to bind the same Stage-B identity while Worker 1 is in progress
+    bound2, owner2, st2 = store2.bind_execution_identity(req_fp_2, exec_fp_shared, "RUN-WORKER-2")
+    assert bound2 is False
+    assert owner2 == "RUN-WORKER-1"
+    assert st2 == "IN_PROGRESS"
+
+
+def test_43_ownership_safe_finalization_prevents_overwrite():
+    """Attempting to finalize an existing reservation from a different owner raises a conflict."""
+    store1 = WorkflowPersistenceStore()
+    store2 = WorkflowPersistenceStore()
+
+    fp = "fp_ownership_test_123"
+    store1.acquire_persistent_reservation(fp, "RUN-OWNER-A")
+    store1.finalize_persistent_reservation(fp, "RUN-OWNER-A", status="COMPLETED")
+
+    from workflow.persistence import WorkflowPersistenceConflictError
+    with pytest.raises(WorkflowPersistenceConflictError):
+        store2.finalize_persistent_reservation(fp, "RUN-IMPOSTER-B", status="COMPLETED")
+
+
+def test_44_crash_recovery_repeated_convergence():
+    """Running recovery repeatedly converges deterministically to the same valid state."""
+    req = WorkflowRunRequest(application_id="loan_test_app", target_index=0)
+    res = workflow_engine.execute_workflow(req)
+    assert res.state == WorkflowState.COMPLETED
+
+    run = workflow_persistence.get_run(res.workflow_run_id)
+    run.state = WorkflowState.PERSISTING
+    workflow_persistence.save_run(run)
+
+    # Run recovery multiple times
+    rec1 = workflow_recovery.recover_interrupted_workflows()
+    rec2 = workflow_recovery.recover_interrupted_workflows()
+    rec3 = workflow_recovery.recover_interrupted_workflows()
+
+    assert len(rec1) == 1
+    assert rec1[0].state == WorkflowState.COMPLETED
+    assert len(rec2) == 0  # Already recovered, no remaining interrupted runs
+    assert len(rec3) == 0
+
+    final_run = workflow_persistence.get_run(res.workflow_run_id)
+    assert final_run.state == WorkflowState.COMPLETED
+
+
+def test_45_authority_tampering_rejection_matrix():
+    """Every authority in the chain is individually validated; tampering causes lookup/recovery rejection."""
+    req = WorkflowRunRequest(application_id="loan_test_app", target_index=0)
+    res = workflow_engine.execute_workflow(req)
+    assert res.state == WorkflowState.COMPLETED
+
+    run = workflow_persistence.get_run(res.workflow_run_id)
+
+    # 1. Missing Stage-B execution identity
+    orig_exec_fp = run.execution_fingerprint
+    run.execution_fingerprint = None
+    assert workflow_engine._verify_and_build_existing_run(run) is None
+    valid, _ = workflow_recovery.verify_authority_chain(run)
+    assert valid is False
+    run.execution_fingerprint = orig_exec_fp
+
+    # 2. Corrupted EvaluationResult
+    if run.evaluation_id:
+        eval_res = workflow_engine.eval_persistence.get_evaluation_result(run.evaluation_id)
+        if eval_res:
+            orig_eval_app = eval_res.application_id
+            eval_res.application_id = "tampered_app"
+            workflow_engine.eval_persistence.save_evaluation_result(eval_res)
+            assert workflow_engine._verify_and_build_existing_run(run) is None
+            eval_res.application_id = orig_eval_app
+            workflow_engine.eval_persistence.save_evaluation_result(eval_res)
+
+    # 3. Corrupted Threshold Resolution Fingerprint
+    if run.threshold_resolution_id:
+        orig_fp = run.threshold_resolution_fingerprint
+        run.threshold_resolution_fingerprint = "tampered_thresh_fp"
+        assert workflow_engine._verify_and_build_existing_run(run) is None
+        run.threshold_resolution_fingerprint = orig_fp
+
+
+def test_46_recovery_state_machine_strict_transition_enforcement():
+    """Recovery mode strictly forbids transitioning early uncertified states directly to COMPLETED."""
+    run_early = WorkflowRun(
+        workflow_run_id="WRUN-EARLY-01",
+        application_id="loan_test_app",
+        request_fingerprint="fp_early",
+        state=WorkflowState.INITIALIZED,
+    )
+    # Attempting recovery directly from INITIALIZED to COMPLETED must raise WorkflowStateTransitionError
+    with pytest.raises(WorkflowStateTransitionError):
+        transition_workflow_state(run_early, WorkflowState.COMPLETED, is_recovery=True)
+
+    # But transitioning to FAILED in recovery mode from any state is permitted
+    transition_workflow_state(run_early, WorkflowState.FAILED, reason="Crash recovery fail-closed", is_recovery=True)
+    assert run_early.state == WorkflowState.FAILED
+

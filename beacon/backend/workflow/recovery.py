@@ -63,7 +63,12 @@ class WorkflowRecoveryService:
                     reason="Recovered after full cryptographic authority verification",
                     is_recovery=True,
                 )
-                workflow_idempotency.finalize_run(run.request_fingerprint, run.workflow_run_id, status="COMPLETED")
+                workflow_idempotency.finalize_run(
+                    run.request_fingerprint,
+                    run.workflow_run_id,
+                    status="COMPLETED",
+                    execution_fingerprint=run.execution_fingerprint,
+                )
                 logger.info(f"Recovered workflow run '{run.workflow_run_id}' as COMPLETED (status: {status_str}).")
             else:
                 # Incomplete or broken authority chain: mark as FAILED (Fail-Closed)
@@ -75,7 +80,12 @@ class WorkflowRecoveryService:
                     reason=f"Recovery failed-closed: {failure_reason}",
                     is_recovery=True,
                 )
-                workflow_idempotency.finalize_run(run.request_fingerprint, run.workflow_run_id, status="FAILED")
+                workflow_idempotency.finalize_run(
+                    run.request_fingerprint,
+                    run.workflow_run_id,
+                    status="FAILED",
+                    execution_fingerprint=run.execution_fingerprint,
+                )
                 logger.warning(f"Marked incomplete workflow run '{run.workflow_run_id}' as FAILED: {failure_reason}")
 
             updated = self.persistence.save_run(run)
@@ -85,11 +95,15 @@ class WorkflowRecoveryService:
 
     def verify_authority_chain(self, run: WorkflowRun) -> tuple[bool, str]:
         """Verifies the complete unbroken cryptographic authority chain for a workflow run."""
-        # 1. Certification ID must be present
+        # 1. Stage-B Execution Identity must be present
+        if not run.execution_fingerprint:
+            return False, "Missing Stage-B execution_fingerprint in workflow run."
+
+        # 2. Certification ID must be present
         if not run.certification_id:
             return False, "Missing certification_id (workflow interrupted before certification)."
 
-        # 2. Certification Artifact must exist in repository
+        # 3. Certification Artifact must exist in repository
         try:
             art = self.cert_repo.get_artifact(run.certification_id)
         except Exception as exc:

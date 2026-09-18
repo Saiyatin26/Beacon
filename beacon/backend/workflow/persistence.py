@@ -18,6 +18,11 @@ from .models import WorkflowErrorCode, WorkflowRun, WorkflowState
 logger = logging.getLogger("beacon.workflow.persistence")
 
 
+class WorkflowPersistenceConflictError(RuntimeError):
+    """Raised when an ownership or reservation conflict occurs during workflow persistence."""
+    pass
+
+
 class WorkflowPersistenceStore:
     """Atomic SQLite persistence for canonical V2 workflow executions."""
 
@@ -50,6 +55,10 @@ class WorkflowPersistenceStore:
                     workflow_run_id TEXT PRIMARY KEY,
                     application_id TEXT NOT NULL,
                     request_fingerprint TEXT NOT NULL,
+                    execution_fingerprint TEXT,
+                    input_set_id TEXT,
+                    input_set_hash TEXT,
+                    evidence_bundle_id TEXT,
                     state TEXT NOT NULL,
                     error_code TEXT,
                     error_message TEXT,
@@ -75,6 +84,7 @@ class WorkflowPersistenceStore:
                 """
                 CREATE TABLE IF NOT EXISTS v2_workflow_idempotency (
                     request_fingerprint TEXT PRIMARY KEY,
+                    execution_fingerprint TEXT,
                     workflow_run_id TEXT NOT NULL,
                     status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
@@ -82,6 +92,22 @@ class WorkflowPersistenceStore:
                 );
                 """
             )
+
+            # Safe column migrations if existing tables lack Stage-B fields
+            cols_runs = {col["name"] for col in conn.execute("PRAGMA table_info(v2_workflow_runs);").fetchall()}
+            if "execution_fingerprint" not in cols_runs:
+                conn.execute("ALTER TABLE v2_workflow_runs ADD COLUMN execution_fingerprint TEXT;")
+            if "input_set_id" not in cols_runs:
+                conn.execute("ALTER TABLE v2_workflow_runs ADD COLUMN input_set_id TEXT;")
+            if "input_set_hash" not in cols_runs:
+                conn.execute("ALTER TABLE v2_workflow_runs ADD COLUMN input_set_hash TEXT;")
+            if "evidence_bundle_id" not in cols_runs:
+                conn.execute("ALTER TABLE v2_workflow_runs ADD COLUMN evidence_bundle_id TEXT;")
+
+            cols_idemp = {col["name"] for col in conn.execute("PRAGMA table_info(v2_workflow_idempotency);").fetchall()}
+            if "execution_fingerprint" not in cols_idemp:
+                conn.execute("ALTER TABLE v2_workflow_idempotency ADD COLUMN execution_fingerprint TEXT;")
+
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_wrun_app ON v2_workflow_runs(application_id);"
             )
@@ -89,10 +115,16 @@ class WorkflowPersistenceStore:
                 "CREATE INDEX IF NOT EXISTS idx_v2_wrun_fp ON v2_workflow_runs(request_fingerprint);"
             )
             conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_v2_wrun_exec_fp ON v2_workflow_runs(execution_fingerprint);"
+            )
+            conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_wrun_state ON v2_workflow_runs(state);"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_idemp_wrun ON v2_workflow_idempotency(workflow_run_id);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_v2_idemp_exec_fp ON v2_workflow_idempotency(execution_fingerprint);"
             )
             conn.commit()
 
@@ -101,7 +133,7 @@ class WorkflowPersistenceStore:
         request_fingerprint: str,
         workflow_run_id: str,
     ) -> tuple[bool, Optional[str], str]:
-        """Atomically reserves or checks persistent idempotency for a request fingerprint across processes.
+        """Atomically reserves or checks persistent idempotency for a Stage-A request fingerprint across processes.
         
         Uses BEGIN IMMEDIATE transaction to guarantee database-atomic cross-process serialization.
         """
@@ -116,9 +148,6 @@ class WorkflowPersistenceStore:
             if row:
                 existing_run_id = row["workflow_run_id"]
                 existing_status = row["status"]
-                if existing_status == "COMPLETED":
-                    conn.commit()
-                    return False, existing_run_id, "COMPLETED"
                 if existing_status == "IN_PROGRESS" and existing_run_id != workflow_run_id:
                     # Active concurrent execution by another process/worker
                     conn.commit()
@@ -138,26 +167,90 @@ class WorkflowPersistenceStore:
             conn.commit()
             return True, workflow_run_id, "IN_PROGRESS"
 
+    def bind_execution_identity(
+        self,
+        request_fingerprint: str,
+        execution_fingerprint: str,
+        workflow_run_id: str,
+    ) -> tuple[bool, Optional[str], str]:
+        """Atomically binds Stage-B execution identity to an in-progress Stage-A reservation.
+        
+        Guarantees that only one authoritative execution owns a given Stage-B execution fingerprint.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        with self._lock, self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+
+            # Check if another completed run already matches this execution_fingerprint
+            row_completed = conn.execute(
+                "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE execution_fingerprint = ? AND status = 'COMPLETED'",
+                (execution_fingerprint,),
+            ).fetchone()
+            if row_completed:
+                conn.commit()
+                return False, row_completed["workflow_run_id"], "COMPLETED"
+
+            # Check if another active in-progress run is currently executing this execution_fingerprint
+            row_in_prog = conn.execute(
+                "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE execution_fingerprint = ? AND status = 'IN_PROGRESS' AND workflow_run_id != ?",
+                (execution_fingerprint, workflow_run_id),
+            ).fetchone()
+            if row_in_prog:
+                conn.commit()
+                return False, row_in_prog["workflow_run_id"], "IN_PROGRESS"
+
+            # Update current run's idempotency record to bind execution_fingerprint
+            conn.execute(
+                """
+                UPDATE v2_workflow_idempotency
+                SET execution_fingerprint = ?, updated_at = ?
+                WHERE request_fingerprint = ? AND workflow_run_id = ?;
+                """,
+                (execution_fingerprint, now, request_fingerprint, workflow_run_id),
+            )
+            conn.commit()
+            return True, workflow_run_id, "IN_PROGRESS"
+
     def finalize_persistent_reservation(
         self,
         request_fingerprint: str,
         workflow_run_id: str,
         status: str = "COMPLETED",
+        execution_fingerprint: Optional[str] = None,
     ) -> None:
-        """Updates persistent idempotency record upon completion or failure."""
+        """Updates persistent idempotency record upon completion or failure, enforcing ownership safety."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
+            row = conn.execute(
+                "SELECT workflow_run_id, status, execution_fingerprint FROM v2_workflow_idempotency WHERE request_fingerprint = ?",
+                (request_fingerprint,),
+            ).fetchone()
+
+            if row:
+                existing_owner = row["workflow_run_id"]
+                existing_status = row["status"]
+                # Ownership check: if already finalized by another owner and not failed, prevent overwrite
+                if existing_owner != workflow_run_id and existing_status == "COMPLETED":
+                    conn.commit()
+                    raise WorkflowPersistenceConflictError(
+                        f"Cannot finalize reservation for '{request_fingerprint[:12]}': owned by run '{existing_owner}'"
+                    )
+                exec_fp = execution_fingerprint or row["execution_fingerprint"]
+            else:
+                exec_fp = execution_fingerprint
+
             conn.execute(
                 """
-                INSERT INTO v2_workflow_idempotency (request_fingerprint, workflow_run_id, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO v2_workflow_idempotency (request_fingerprint, execution_fingerprint, workflow_run_id, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(request_fingerprint) DO UPDATE SET
+                    execution_fingerprint = COALESCE(excluded.execution_fingerprint, v2_workflow_idempotency.execution_fingerprint),
                     workflow_run_id = excluded.workflow_run_id,
                     status = excluded.status,
                     updated_at = excluded.updated_at;
                 """,
-                (request_fingerprint, workflow_run_id, status, now, now),
+                (request_fingerprint, exec_fp, workflow_run_id, status, now, now),
             )
             conn.commit()
 
@@ -183,7 +276,7 @@ class WorkflowPersistenceStore:
             conn.commit()
 
     def save_run(self, run: WorkflowRun) -> WorkflowRun:
-        """Atomically upserts a WorkflowRun record."""
+        """Atomically upserts a WorkflowRun record with complete Stage-B identity fields."""
         run.updated_at = datetime.now(timezone.utc).isoformat()
         timings_str = json.dumps(run.stage_timings_ms, sort_keys=True)
         meta_str = json.dumps(run.metadata, sort_keys=True)
@@ -192,16 +285,21 @@ class WorkflowPersistenceStore:
             conn.execute(
                 """
                 INSERT INTO v2_workflow_runs (
-                    workflow_run_id, application_id, request_fingerprint, state,
+                    workflow_run_id, application_id, request_fingerprint, execution_fingerprint,
+                    input_set_id, input_set_hash, evidence_bundle_id, state,
                     error_code, error_message, created_at, updated_at, completed_at,
                     evidence_session_id, evaluation_id, oracle_set_id, oracle_set_hash,
                     threshold_resolution_id, threshold_resolution_fingerprint,
                     certification_id, certification_status, certification_score,
                     explanation_id, stage_timings_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(workflow_run_id) DO UPDATE SET
                     application_id = excluded.application_id,
                     request_fingerprint = excluded.request_fingerprint,
+                    execution_fingerprint = excluded.execution_fingerprint,
+                    input_set_id = excluded.input_set_id,
+                    input_set_hash = excluded.input_set_hash,
+                    evidence_bundle_id = excluded.evidence_bundle_id,
                     state = excluded.state,
                     error_code = excluded.error_code,
                     error_message = excluded.error_message,
@@ -224,6 +322,10 @@ class WorkflowPersistenceStore:
                     run.workflow_run_id,
                     run.application_id,
                     run.request_fingerprint,
+                    run.execution_fingerprint,
+                    run.input_set_id,
+                    run.input_set_hash,
+                    run.evidence_bundle_id,
                     run.state.value if hasattr(run.state, "value") else str(run.state),
                     run.error_code.value if hasattr(run.error_code, "value") else (str(run.error_code) if run.error_code else None),
                     run.error_message,
@@ -261,11 +363,27 @@ class WorkflowPersistenceStore:
             return self._row_to_model(row)
 
     def find_run_by_fingerprint(self, fingerprint: str, completed_only: bool = True) -> Optional[WorkflowRun]:
-        """Finds the most recent WorkflowRun matching an exact request fingerprint."""
+        """Finds the most recent WorkflowRun matching an exact request fingerprint (Candidate Discovery only)."""
         if not fingerprint:
             return None
         query = "SELECT * FROM v2_workflow_runs WHERE request_fingerprint = ?"
         params = [fingerprint]
+        if completed_only:
+            query += " AND state = 'COMPLETED'"
+        query += " ORDER BY created_at DESC LIMIT 1"
+
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute(query, params).fetchone()
+            if not row:
+                return None
+            return self._row_to_model(row)
+
+    def find_run_by_execution_fingerprint(self, execution_fingerprint: str, completed_only: bool = True) -> Optional[WorkflowRun]:
+        """Finds the most recent WorkflowRun matching an exact authoritative Stage-B execution fingerprint."""
+        if not execution_fingerprint:
+            return None
+        query = "SELECT * FROM v2_workflow_runs WHERE execution_fingerprint = ?"
+        params = [execution_fingerprint]
         if completed_only:
             query += " AND state = 'COMPLETED'"
         query += " ORDER BY created_at DESC LIMIT 1"
@@ -320,6 +438,7 @@ class WorkflowPersistenceStore:
             conn.commit()
 
     def _row_to_model(self, row: sqlite3.Row) -> WorkflowRun:
+        keys = row.keys()
         timings = {}
         if row["stage_timings_json"]:
             try:
@@ -352,6 +471,10 @@ class WorkflowPersistenceStore:
             workflow_run_id=row["workflow_run_id"],
             application_id=row["application_id"],
             request_fingerprint=row["request_fingerprint"],
+            execution_fingerprint=row["execution_fingerprint"] if "execution_fingerprint" in keys else None,
+            input_set_id=row["input_set_id"] if "input_set_id" in keys else None,
+            input_set_hash=row["input_set_hash"] if "input_set_hash" in keys else None,
+            evidence_bundle_id=row["evidence_bundle_id"] if "evidence_bundle_id" in keys else None,
             state=state_enum,
             error_code=err_enum,
             error_message=row["error_message"],

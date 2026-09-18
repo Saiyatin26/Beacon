@@ -180,30 +180,15 @@ class CanonicalV2WorkflowEngine:
         request: WorkflowRunRequest,
         spec_override: Optional[ApplicationSpec] = None,
     ) -> WorkflowResult:
-        """Executes the complete canonical V2 certification pipeline end-to-end."""
-        # 1. Determine Stage A request identity
-        fp = self.idempotency_mgr.get_request_fingerprint(request)
+        """Executes the complete canonical V2 certification pipeline end-to-end with authoritative Stage-B idempotency."""
+        # 1. Determine Stage A request identity (used for request deduplication and candidate discovery only)
+        stage_a_fp = self.idempotency_mgr.get_request_fingerprint(request)
 
-        # Check for an existing completed authoritative run
-        if not request.force_recompute:
-            existing_run = self.idempotency_mgr.check_existing_completed_run(request)
-            if existing_run:
-                verified_res = self._verify_and_build_existing_run(existing_run)
-                if verified_res:
-                    logger.info(f"Returning verified completed workflow run '{existing_run.workflow_run_id}'.")
-                    return verified_res
-
-        # 2. Create Candidate Run ID & Acquire Persistent Reservation
+        # 2. Create Candidate Run ID & Acquire Initial Stage-A Reservation
         run_id = f"WRUN-{uuid.uuid4().hex[:12]}"
 
-        with self.idempotency_mgr.acquire_execution_lock(fp, run_id=run_id) as (res_ok, existing_owner_id, existing_status):
+        with self.idempotency_mgr.acquire_execution_lock(stage_a_fp, run_id=run_id) as (res_ok, existing_owner_id, existing_status):
             if not res_ok:
-                if existing_status == "COMPLETED" and not request.force_recompute:
-                    existing_run = self.persistence.get_run(existing_owner_id)
-                    if existing_run:
-                        verified_res = self._verify_and_build_existing_run(existing_run)
-                        if verified_res:
-                            return verified_res
                 if existing_status == "IN_PROGRESS":
                     log_operational_event(
                         event="workflow_concurrency_conflict",
@@ -230,7 +215,7 @@ class CanonicalV2WorkflowEngine:
             run = WorkflowRun(
                 workflow_run_id=run_id,
                 application_id=request.application_id,
-                request_fingerprint=fp,
+                request_fingerprint=stage_a_fp,
                 state=WorkflowState.INITIALIZED,
                 metadata={"user_id": request.user_id, "idempotency_key": request.idempotency_key},
             )
@@ -251,12 +236,61 @@ class CanonicalV2WorkflowEngine:
             try:
                 self.persistence.save_run(run)
 
-                # 3. Stage 1: Validation & Resolution
+                # 3. Stage 1: Validation & Resolution (Resolves concrete execution inputs and computes Stage-B fingerprint)
                 self.transition_state(run, WorkflowState.VALIDATING, "Validating request and resolving application targets")
                 init_res = self._stage_validate_and_init(request, spec_override, run, timings)
                 if isinstance(init_res, WorkflowResult):
                     return init_res
                 spec, ref_adapter, target_adapter, test_inputs = init_res
+
+                # 3.1 Stage-A -> Stage-B Atomic Binding
+                bound_ok, bound_owner, bound_status = self.idempotency_mgr.bind_execution_identity(
+                    request_fingerprint=stage_a_fp,
+                    execution_fingerprint=run.execution_fingerprint,
+                    workflow_run_id=run.workflow_run_id,
+                )
+                if not bound_ok:
+                    if bound_status == "COMPLETED" and not request.force_recompute:
+                        existing_run = self.persistence.get_run(bound_owner)
+                        if existing_run and existing_run.execution_fingerprint == run.execution_fingerprint:
+                            verified_res = self._verify_and_build_existing_run(existing_run)
+                            if verified_res:
+                                logger.info(f"Reusing verified completed run '{existing_run.workflow_run_id}' for Stage-B execution identity.")
+                                return verified_res
+                    if bound_status == "IN_PROGRESS":
+                        log_operational_event(
+                            event="workflow_concurrency_conflict",
+                            logger_name="beacon.workflow",
+                            operation="CERTIFICATION_WORKFLOW",
+                            step="STAGE_B_BINDING",
+                            workflow_run_id=run_id,
+                            application_id=request.application_id,
+                            error_code=WorkflowErrorCode.CONCURRENCY_CONFLICT.value,
+                            message=f"Concurrent execution in progress for execution fingerprint '{run.execution_fingerprint[:12]}' by run '{bound_owner}'.",
+                        )
+                        return self._fail_run(
+                            run,
+                            WorkflowErrorCode.CONCURRENCY_CONFLICT,
+                            f"Concurrent execution in progress for execution fingerprint '{run.execution_fingerprint[:12]}' by run '{bound_owner}'.",
+                        )
+
+                # 3.2 Authoritative Stage-B Idempotency Check (Completed Run Reuse)
+                if not request.force_recompute:
+                    existing_completed = self.idempotency_mgr.find_completed_execution(run.execution_fingerprint)
+                    if existing_completed:
+                        verified_res = self._verify_and_build_existing_run(existing_completed)
+                        if verified_res:
+                            logger.info(
+                                f"Reusing verified completed run '{existing_completed.workflow_run_id}' "
+                                f"matching Stage-B execution identity '{run.execution_fingerprint[:12]}'."
+                            )
+                            self.idempotency_mgr.finalize_run(
+                                fingerprint=run.request_fingerprint,
+                                run_id=run.workflow_run_id,
+                                status="COMPLETED",
+                                execution_fingerprint=run.execution_fingerprint,
+                            )
+                            return verified_res
 
                 # 4. Stage 2: Phase 3 Evidence Collection & Bundle Assembly
                 self.transition_state(run, WorkflowState.CAPTURING_EVIDENCE, "Capturing execution evidence and generating EvidenceManifest")
@@ -439,15 +473,18 @@ class CanonicalV2WorkflowEngine:
         tgt_targets = spec.get_target_candidates() if (spec and hasattr(spec, "get_target_candidates")) else []
         tgt_target = tgt_targets[request.target_index] if (request.target_index < len(tgt_targets)) else None
 
+        ref_s_hash = (getattr(ref_target, "source_hash", "") or getattr(ref_adapter, "implementation_hash", "") or "") if ref_target else getattr(ref_adapter, "implementation_hash", "")
+        tgt_s_hash = (getattr(tgt_target, "source_hash", "") or getattr(target_adapter, "implementation_hash", "") or "") if tgt_target else getattr(target_adapter, "implementation_hash", "")
+
         input_set_canonical_hash = compute_input_set_canonical_hash(test_inputs)
         exec_fp = compute_execution_fingerprint(
             application_id=spec.application_id,
             ref_target_id=getattr(ref_target, "target_id", "ref_default") if ref_target else getattr(ref_adapter, "name", "ref_default"),
             ref_version=getattr(ref_target, "version", "1.0.0") if ref_target else "1.0.0",
-            ref_source_hash=getattr(ref_target, "source_hash", getattr(ref_adapter, "implementation_hash", "")) if ref_target else getattr(ref_adapter, "implementation_hash", ""),
+            ref_source_hash=ref_s_hash,
             target_id=getattr(tgt_target, "target_id", "tgt_default") if tgt_target else getattr(target_adapter, "name", "tgt_default"),
             target_version=getattr(tgt_target, "version", "1.0.0") if tgt_target else "1.0.0",
-            target_source_hash=getattr(tgt_target, "source_hash", getattr(target_adapter, "implementation_hash", "")) if tgt_target else getattr(target_adapter, "implementation_hash", ""),
+            target_source_hash=tgt_s_hash,
             input_set_hash=input_set_canonical_hash,
             input_count=len(test_inputs),
             policy_id=f"POL-{spec.application_id}",
@@ -1243,7 +1280,12 @@ class CanonicalV2WorkflowEngine:
             )
 
         # 7. Finalize persistent reservation and mark workflow COMPLETED via state machine
-        self.idempotency_mgr.finalize_run(run.request_fingerprint, run.workflow_run_id, status="COMPLETED")
+        self.idempotency_mgr.finalize_run(
+            fingerprint=run.request_fingerprint,
+            run_id=run.workflow_run_id,
+            status="COMPLETED",
+            execution_fingerprint=run.execution_fingerprint,
+        )
         self.transition_state(
             run,
             WorkflowState.COMPLETED,
@@ -1279,7 +1321,12 @@ class CanonicalV2WorkflowEngine:
                 pass
 
         try:
-            self.idempotency_mgr.finalize_run(run.request_fingerprint, run.workflow_run_id, status="FAILED")
+            self.idempotency_mgr.finalize_run(
+                fingerprint=run.request_fingerprint,
+                run_id=run.workflow_run_id,
+                status="FAILED",
+                execution_fingerprint=run.execution_fingerprint,
+            )
         except Exception:
             pass
 
@@ -1314,6 +1361,9 @@ class CanonicalV2WorkflowEngine:
         if not run.certification_id:
             return None
 
+        if not run.execution_fingerprint:
+            return None
+
         try:
             artifact = self.cert_repo.get_artifact(run.certification_id)
             if not artifact:
@@ -1325,10 +1375,10 @@ class CanonicalV2WorkflowEngine:
 
             # Verify cases exist
             cases = self.cert_repo.get_cases(run.certification_id)
-            if not cases:
+            if not cases or len(cases) == 0:
                 return None
 
-            # Verify EvaluationResult from persistence
+            # Verify EvaluationResult from persistence and cross-bindings
             if run.evaluation_id:
                 eval_res = self.eval_persistence.get_evaluation_result(run.evaluation_id)
                 if not eval_res or not verify_evaluation_result_integrity(eval_res):
@@ -1336,7 +1386,7 @@ class CanonicalV2WorkflowEngine:
                 if eval_res.application_id and eval_res.application_id != run.application_id:
                     return None
 
-            # Verify OracleSet from persistence
+            # Verify OracleSet from persistence and cross-bindings
             if run.oracle_set_id:
                 oset = self.rec_persistence.get_oracle_set(run.oracle_set_id)
                 if not oset:
@@ -1345,18 +1395,26 @@ class CanonicalV2WorkflowEngine:
                     return None
                 if oset.application_id and oset.application_id != run.application_id:
                     return None
+                rules_count = len(getattr(oset, "rules", [])) + len(getattr(oset, "oracles", []))
+                if rules_count == 0:
+                    return None
+                if artifact.oracle_set_id and artifact.oracle_set_id != run.oracle_set_id:
+                    return None
 
             # Verify threshold resolution if recorded
             if run.threshold_resolution_id:
                 res = self.thresh_persistence.get_resolution(run.threshold_resolution_id)
                 if not res:
                     return None
-                if run.threshold_resolution_fingerprint and res.fingerprint != run.threshold_resolution_fingerprint:
+                if run.threshold_resolution_fingerprint and res.compute_fingerprint() != run.threshold_resolution_fingerprint:
+                    return None
+                art_thresh_id = artifact.threshold_resolution_id or (artifact.context.threshold_resolution_id if artifact.context else None)
+                if art_thresh_id and art_thresh_id != run.threshold_resolution_id:
                     return None
 
             # Verify mandatory audit record exists
             audit_events = audit_logger.list_events(certification_id=run.certification_id)
-            if not audit_events:
+            if not audit_events or len(audit_events) == 0:
                 return None
 
             return WorkflowResult(

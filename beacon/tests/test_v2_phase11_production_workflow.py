@@ -749,11 +749,13 @@ class TestPhase11CrashRecovery:
         # Run real workflow to get a real valid artifact
         req = WorkflowRunRequest(application_id="loan_test_app", force_recompute=True)
         res = workflow_engine.execute_workflow(req)
+        completed_run = store.get_run(res.workflow_run_id)
 
         simulated_run = WorkflowRun(
             workflow_run_id="wfr-crashed-case-4",
             application_id="loan_test_app",
             request_fingerprint="fp_crashed_4",
+            execution_fingerprint=completed_run.execution_fingerprint,
             state=WorkflowState.EXPLAINING,
             certification_id=res.artifact_id,
             threshold_resolution_id=res.threshold_resolution_id,
@@ -775,6 +777,7 @@ class TestPhase11CrashRecovery:
 
         req = WorkflowRunRequest(application_id="loan_test_app", force_recompute=True)
         res = workflow_engine.execute_workflow(req)
+        completed_run = store.get_run(res.workflow_run_id)
 
         # Monkeypatch list_certification_cases to return empty list
         monkeypatch.setattr(certification_repository, "list_certification_cases", lambda *args, **kwargs: [])
@@ -783,6 +786,7 @@ class TestPhase11CrashRecovery:
             workflow_run_id="wfr-crashed-case-5",
             application_id="loan_test_app",
             request_fingerprint="fp_crashed_5",
+            execution_fingerprint=completed_run.execution_fingerprint,
             state=WorkflowState.EXPLAINING,
             certification_id=res.artifact_id,
             threshold_resolution_id=res.threshold_resolution_id,
@@ -811,6 +815,7 @@ class TestPhase11CrashRecovery:
             workflow_run_id="wfr-crashed-case-6",
             application_id="loan_test_app",
             request_fingerprint="fp_crashed_6",
+            execution_fingerprint=completed_run.execution_fingerprint,
             state=WorkflowState.EXPLAINING,
             certification_id=res.artifact_id,
             threshold_resolution_id=res.threshold_resolution_id,
@@ -834,6 +839,7 @@ class TestPhase11CrashRecovery:
 
         req = WorkflowRunRequest(application_id="loan_test_app", force_recompute=True)
         res = workflow_engine.execute_workflow(req)
+        completed_run = store.get_run(res.workflow_run_id)
         art = certification_repository.get_artifact(res.artifact_id)
 
         # Create tampered copy of artifact
@@ -844,6 +850,7 @@ class TestPhase11CrashRecovery:
             workflow_run_id="wfr-crashed-tampered",
             application_id="loan_test_app",
             request_fingerprint="fp_crashed_tampered",
+            execution_fingerprint=completed_run.execution_fingerprint,
             state=WorkflowState.EXPLAINING,
             certification_id=res.artifact_id,
             threshold_resolution_id=res.threshold_resolution_id,

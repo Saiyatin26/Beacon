@@ -54,8 +54,11 @@ def is_valid_state_transition(current: WorkflowState, target: WorkflowState, is_
     if current == target:
         return True
     if is_recovery:
-        # In recovery, an uncompleted in-flight run may transition strictly to COMPLETED, FAILED, or INCONCLUSIVE
-        return target in (WorkflowState.COMPLETED, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE)
+        # In recovery, an uncompleted in-flight run may transition strictly to COMPLETED, FAILED, or INCONCLUSIVE.
+        # However, COMPLETED is strictly forbidden from early uncertified stages (must have reached CERTIFYING, EXPLAINING, or PERSISTING).
+        if target == WorkflowState.COMPLETED:
+            return current in (WorkflowState.CERTIFYING, WorkflowState.EXPLAINING, WorkflowState.PERSISTING)
+        return target in (WorkflowState.FAILED, WorkflowState.INCONCLUSIVE)
     allowed = VALID_WORKFLOW_STATE_TRANSITIONS.get(current, set())
     return target in allowed
 
@@ -84,6 +87,8 @@ def transition_workflow_state(
             raise WorkflowStateTransitionError("Cannot transition to COMPLETED without valid certification_id.")
         if not run.threshold_resolution_id:
             raise WorkflowStateTransitionError("Cannot transition to COMPLETED without threshold_resolution_id.")
+        if not run.execution_fingerprint:
+            raise WorkflowStateTransitionError("Cannot transition to COMPLETED without Stage-B execution_fingerprint.")
         if not is_recovery and current_state != WorkflowState.PERSISTING:
             raise WorkflowStateTransitionError(f"Cannot transition to COMPLETED directly from '{current_state.value}'.")
         if not run.metadata.get("audit_persisted") and not is_recovery:
