@@ -570,6 +570,14 @@ class CertificationRepository:
             logger.debug(f"SQLite list certification_cases notice: {exc}")
         return results
 
+    def get_cases(self, run_id: str) -> list[CertificationCase]:
+        """Convenience alias for list_certification_cases."""
+        return self.list_certification_cases(run_id=run_id, limit=100000)
+
+    def list_cases(self, run_id: str) -> list[CertificationCase]:
+        """Convenience alias for list_certification_cases."""
+        return self.list_certification_cases(run_id=run_id, limit=100000)
+
     def list_cases_for_input_set(
         self,
         input_set_id: str,

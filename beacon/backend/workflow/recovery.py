@@ -10,7 +10,9 @@ from typing import Optional
 
 from certification.models import verify_artifact_integrity
 from certification.repository import CertificationRepository, certification_repository
-from .models import WorkflowErrorCode, WorkflowRun, WorkflowState
+from ingestion.audit import AuditAction, audit_logger
+from .idempotency import workflow_idempotency
+from .models import WorkflowErrorCode, WorkflowRun, WorkflowState, transition_workflow_state
 from .persistence import WorkflowPersistenceStore, workflow_persistence
 
 logger = logging.getLogger("beacon.workflow.recovery")
@@ -41,18 +43,29 @@ class WorkflowRecoveryService:
                 # Valid unbroken authoritative chain exists; safely finalize run
                 art = self.cert_repo.get_artifact(run.certification_id)
                 status_str = art.status.value if hasattr(art.status, "value") else str(art.status)
-                run.state = WorkflowState.COMPLETED
                 run.certification_status = status_str
                 run.certification_score = art.score
-                run.completed_at = datetime.now(timezone.utc).isoformat()
-                run.metadata["recovery_note"] = "Recovered after full cryptographic authority chain verification."
+                run.metadata["audit_persisted"] = True
+                run.metadata["recovery_note"] = "Recovered after full cryptographic authority chain and audit verification."
+                transition_workflow_state(
+                    run,
+                    WorkflowState.COMPLETED,
+                    reason="Recovered after full cryptographic authority verification",
+                    is_recovery=True,
+                )
+                workflow_idempotency.finalize_run(run.request_fingerprint, run.workflow_run_id, status="COMPLETED")
                 logger.info(f"Recovered workflow run '{run.workflow_run_id}' as COMPLETED (status: {status_str}).")
             else:
                 # Incomplete or broken authority chain: mark as FAILED (Fail-Closed)
-                run.state = WorkflowState.FAILED
                 run.error_code = WorkflowErrorCode.RECOVERY_FAILED
                 run.error_message = f"Recovery failed-closed: {failure_reason}"
-                run.completed_at = datetime.now(timezone.utc).isoformat()
+                transition_workflow_state(
+                    run,
+                    WorkflowState.FAILED,
+                    reason=f"Recovery failed-closed: {failure_reason}",
+                    is_recovery=True,
+                )
+                workflow_idempotency.finalize_run(run.request_fingerprint, run.workflow_run_id, status="FAILED")
                 logger.warning(f"Marked incomplete workflow run '{run.workflow_run_id}' as FAILED: {failure_reason}")
 
             updated = self.persistence.save_run(run)
@@ -107,6 +120,14 @@ class WorkflowRecoveryService:
                 return False, f"No persisted CertificationCase records found for certificate '{run.certification_id}'."
         except Exception as exc:
             return False, f"Failed to verify persisted CertificationCase records: {str(exc)}"
+
+        # 8. Mandatory audit trail verification
+        try:
+            audit_events = audit_logger.list_events(certification_id=run.certification_id)
+            if not audit_events or len(audit_events) == 0:
+                return False, f"No persisted audit trail records found for certificate '{run.certification_id}'."
+        except Exception as exc:
+            return False, f"Failed to query audit trail: {str(exc)}"
 
         return True, "Authority chain verified."
 

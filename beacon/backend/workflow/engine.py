@@ -50,6 +50,7 @@ from certification.models import (
     CertificationTestInput,
     compute_artifact_content_hash,
     compute_input_set_canonical_hash,
+    verify_artifact_integrity,
 )
 from certification.repository import CertificationRepository, certification_repository
 from discovery.engine import RuleDiscoveryEngine
@@ -107,6 +108,9 @@ from .models import (
     WorkflowRun,
     WorkflowRunRequest,
     WorkflowState,
+    WorkflowStateTransitionError,
+    compute_execution_fingerprint,
+    transition_workflow_state,
 )
 from .persistence import WorkflowPersistenceStore, workflow_persistence
 
@@ -154,27 +158,76 @@ class CanonicalV2WorkflowEngine:
         self.persistence = persistence or workflow_persistence
         self.idempotency_mgr = idempotency_mgr or workflow_idempotency
 
+    def transition_state(
+        self,
+        run: WorkflowRun,
+        target_state: WorkflowState,
+        reason: str = "",
+        metadata: Optional[dict[str, Any]] = None,
+        is_recovery: bool = False,
+    ) -> WorkflowRun:
+        """Central authoritative state transition method."""
+        transition_workflow_state(run, target_state, reason=reason, metadata=metadata, is_recovery=is_recovery)
+        self.persistence.save_run(run)
+        return run
+
     def execute_workflow(
         self,
         request: WorkflowRunRequest,
         spec_override: Optional[ApplicationSpec] = None,
     ) -> WorkflowResult:
         """Executes the complete canonical V2 certification pipeline end-to-end."""
+        # 1. Determine Stage A request identity
         fp = self.idempotency_mgr.get_request_fingerprint(request)
 
-        # 1. Idempotency Check & Concurrency Lock
-        with self.idempotency_mgr.acquire_execution_lock(fp):
+        # Check for an existing completed authoritative run
+        if not request.force_recompute:
             existing_run = self.idempotency_mgr.check_existing_completed_run(request)
-            if existing_run and not request.force_recompute:
-                logger.info(f"Returning idempotent completed workflow run '{existing_run.workflow_run_id}'.")
-                return self._build_result_from_existing_run(existing_run)
+            if existing_run:
+                verified_res = self._verify_and_build_existing_run(existing_run)
+                if verified_res:
+                    logger.info(f"Returning verified completed workflow run '{existing_run.workflow_run_id}'.")
+                    return verified_res
 
-            run_id = f"WRUN-{uuid.uuid4().hex[:12]}"
+        # 2. Create Candidate Run ID & Acquire Persistent Reservation
+        run_id = f"WRUN-{uuid.uuid4().hex[:12]}"
+
+        with self.idempotency_mgr.acquire_execution_lock(fp, run_id=run_id) as (res_ok, existing_owner_id, existing_status):
+            if not res_ok:
+                if existing_status == "COMPLETED" and not request.force_recompute:
+                    existing_run = self.persistence.get_run(existing_owner_id)
+                    if existing_run:
+                        verified_res = self._verify_and_build_existing_run(existing_run)
+                        if verified_res:
+                            return verified_res
+                if existing_status == "IN_PROGRESS":
+                    log_operational_event(
+                        event="workflow_concurrency_conflict",
+                        logger_name="beacon.workflow",
+                        operation="CERTIFICATION_WORKFLOW",
+                        step="LOCK",
+                        workflow_run_id=run_id,
+                        application_id=request.application_id,
+                        error_code=WorkflowErrorCode.CONCURRENCY_CONFLICT.value,
+                        message=f"Concurrent execution in progress by run '{existing_owner_id}'.",
+                    )
+                    return WorkflowResult(
+                        workflow_run_id=run_id,
+                        application_id=request.application_id,
+                        state=WorkflowState.FAILED,
+                        status="FAILED",
+                        certified=False,
+                        equivalence_score=None,
+                        error_code=WorkflowErrorCode.CONCURRENCY_CONFLICT,
+                        error_message=f"Concurrent execution in progress by run '{existing_owner_id}'.",
+                        audit_status="FAILED",
+                    )
+
             run = WorkflowRun(
                 workflow_run_id=run_id,
                 application_id=request.application_id,
                 request_fingerprint=fp,
-                state=WorkflowState.VALIDATING,
+                state=WorkflowState.INITIALIZED,
                 metadata={"user_id": request.user_id, "idempotency_key": request.idempotency_key},
             )
 
@@ -194,50 +247,56 @@ class CanonicalV2WorkflowEngine:
             try:
                 self.persistence.save_run(run)
 
-                # 2. Stage 1: Validation & Resolution
+                # 3. Stage 1: Validation & Resolution
+                self.transition_state(run, WorkflowState.VALIDATING, "Validating request and resolving application targets")
                 init_res = self._stage_validate_and_init(request, spec_override, run, timings)
                 if isinstance(init_res, WorkflowResult):
                     return init_res
                 spec, ref_adapter, target_adapter, test_inputs = init_res
 
-                # 3. Stage 2: Phase 3 Evidence Collection & Bundle Assembly
+                # 4. Stage 2: Phase 3 Evidence Collection & Bundle Assembly
+                self.transition_state(run, WorkflowState.CAPTURING_EVIDENCE, "Capturing execution evidence and generating EvidenceManifest")
                 ev_res = self._stage_capture_evidence(spec, ref_adapter, target_adapter, test_inputs, run, timings)
                 if isinstance(ev_res, WorkflowResult):
                     return ev_res
                 bundle, all_evidence_records, evaluated_input_cases = ev_res
 
-                # 4. Stage 3: Phase 4 Authoritative Behavioral Evaluation
+                # 5. Stage 3: Phase 4 Authoritative Behavioral Evaluation
+                self.transition_state(run, WorkflowState.EVALUATING, "Executing Phase 4 BehavioralEvaluationEngine")
                 eval_result = self._stage_evaluate_behavior(spec, bundle, test_inputs, run, timings)
                 if isinstance(eval_result, WorkflowResult):
                     return eval_result
                 if not eval_result:
                     return self._fail_run(run, WorkflowErrorCode.EVALUATION_FAILED, "EvaluationResult missing.")
 
-                # 5. Stage 4: Phase 5 Controlled Mode Assessment (when applicable)
+                # 6. Stage 4: Phase 5 Controlled Mode Assessment (when applicable)
                 user_rules, ctrl_result = self._stage_evaluate_controlled_mode(spec, bundle, eval_result, run, timings)
                 if isinstance(ctrl_result, WorkflowResult):
                     return ctrl_result
 
-                # 6. Stage 5: Phase 6 Invariant Discovery (when applicable)
+                # 7. Stage 5: Phase 6 Invariant Discovery (when applicable)
                 disc_result = self._stage_discover_rules(spec, bundle, eval_result, request, run, timings)
                 if isinstance(disc_result, WorkflowResult):
                     return disc_result
 
-                # 7. Stage 6: Phase 7 OracleSet Reconciliation
+                # 8. Stage 6: Phase 7 OracleSet Reconciliation
+                self.transition_state(run, WorkflowState.RESOLVING_ORACLES, "Reconciling authoritative OracleSet via Phase 7")
                 oracle_set = self._stage_reconcile_oracles(spec, user_rules, disc_result, bundle, run, timings)
                 if isinstance(oracle_set, WorkflowResult):
                     return oracle_set
                 if not oracle_set:
                     return self._fail_run(run, WorkflowErrorCode.ORACLE_AUTHORITY_MISSING, "OracleSet resolution missing.")
 
-                # 8. Stage 7: Phase 8 Exact Threshold Resolution
+                # 9. Stage 7: Phase 8 Exact Threshold Resolution
+                self.transition_state(run, WorkflowState.RESOLVING_THRESHOLDS, "Resolving and verifying Phase 8 ThresholdResolution")
                 threshold_res = self._stage_resolve_thresholds(spec, run, timings)
                 if isinstance(threshold_res, WorkflowResult):
                     return threshold_res
                 if not threshold_res:
                     return self._fail_run(run, WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING, "ThresholdResolution missing.")
 
-                # 9. Stage 8: Certification Engine Execution
+                # 10. Stage 8: Certification Engine Execution
+                self.transition_state(run, WorkflowState.CERTIFYING, "Executing deterministic CertificationEngine")
                 artifact = self._stage_execute_certification(
                     spec=spec,
                     ref_adapter=ref_adapter,
@@ -253,18 +312,22 @@ class CanonicalV2WorkflowEngine:
                 if isinstance(artifact, WorkflowResult):
                     return artifact
 
-                # 10. Stage 9: Phase 10 Grounded Explanation (Optional)
-                explanation_dict = self._stage_generate_explanation(
-                    artifact=artifact,
-                    eval_result=eval_result,
-                    oracle_set=oracle_set,
-                    threshold_res=threshold_res,
-                    all_evidence_records=all_evidence_records,
-                    request=request,
-                    run=run,
-                )
+                # 11. Stage 9: Phase 10 Grounded Explanation (Optional)
+                explanation_dict = None
+                if request.explain:
+                    self.transition_state(run, WorkflowState.EXPLAINING, "Generating grounded explanation")
+                    explanation_dict = self._stage_generate_explanation(
+                        artifact=artifact,
+                        eval_result=eval_result,
+                        oracle_set=oracle_set,
+                        threshold_res=threshold_res,
+                        all_evidence_records=all_evidence_records,
+                        request=request,
+                        run=run,
+                    )
 
-                # 11. Stage 10: Atomic Persistence & Audit
+                # 12. Stage 10: Atomic Persistence & Audit
+                self.transition_state(run, WorkflowState.PERSISTING, "Persisting certification data and mandatory audit")
                 audit_status_str = self._stage_persist_and_audit(
                     artifact=artifact,
                     test_inputs=test_inputs,
@@ -589,9 +652,17 @@ class CanonicalV2WorkflowEngine:
             )
 
         # Verify evaluation belongs to current application and inputs
-        if eval_result.summary.total_inputs != len(test_inputs):
-            logger.warning(
-                f"Evaluation total inputs ({eval_result.summary.total_inputs}) != test inputs count ({len(test_inputs)})"
+        if getattr(eval_result, "application_id", None) and eval_result.application_id != spec.application_id:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.EVALUATION_FAILED,
+                f"EvaluationResult application_id '{eval_result.application_id}' does not match workflow '{spec.application_id}'.",
+            )
+        if len(getattr(eval_result, "input_results", [])) != len(test_inputs):
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.EVALUATION_FAILED,
+                f"Evaluation total inputs ({len(getattr(eval_result, 'input_results', []))}) != test inputs count ({len(test_inputs)}).",
             )
 
         run.evaluation_id = eval_result.evaluation_id
@@ -843,6 +914,13 @@ class CanonicalV2WorkflowEngine:
                 f"OracleSet authority is missing required identity or cryptographic hash.",
             )
 
+        if getattr(oracle_set, "application_id", None) and oracle_set.application_id != spec.application_id:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
+                f"OracleSet application_id '{oracle_set.application_id}' does not match workflow '{spec.application_id}'.",
+            )
+
         # Verify no empty OracleSet is treated as valid certification authority
         rules_count = len(getattr(oracle_set, "rules", [])) + len(getattr(oracle_set, "oracles", []))
         if rules_count == 0:
@@ -883,7 +961,7 @@ class CanonicalV2WorkflowEngine:
             metric=th_policy.metric,
             policy=th_policy,
         )
-        if not threshold_res:
+        if not threshold_res or not getattr(threshold_res, "resolution_id", None):
             return self._fail_run(
                 run,
                 WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
@@ -1043,8 +1121,8 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        run.state = WorkflowState.PERSISTING
-        self.persistence.save_run(run)
+        t_stage = time.perf_counter()
+        self.transition_state(run, WorkflowState.PERSISTING, reason="Persisting certification artifacts and audit trail")
 
         # 1. Build canonical CertificationInputSet
         input_set_id = f"INPSET-{artifact.certification_id}"
@@ -1058,7 +1136,7 @@ class CanonicalV2WorkflowEngine:
             created_at=datetime.now(timezone.utc).isoformat(),
         )
 
-        # 2. Derive CertificationCases strictly from authoritative EvaluationResult & Artifact
+        # 2. Derive CertificationCases strictly from authoritative EvaluationResult & Artifact using input_id mapping
         input_data_map = {c["input_id"]: c for c in evaluated_input_cases}
         cases_to_save: list[CertificationCase] = []
 
@@ -1099,9 +1177,23 @@ class CanonicalV2WorkflowEngine:
             artifact=artifact,
         )
 
-        # 4. Record structured audit log
+        # 4. Verify persisted artifact and cases
+        persisted_art = self.cert_repo.get_artifact(artifact.certification_id)
+        if not persisted_art or persisted_art.artifact_hash != artifact.artifact_hash:
+            raise WorkflowExecutionError(
+                WorkflowErrorCode.PERSISTENCE_FAILED,
+                f"Persisted artifact verification failed for '{artifact.certification_id}'."
+            )
+        persisted_cases = self.cert_repo.get_cases(artifact.certification_id)
+        if len(persisted_cases) != len(cases_to_save):
+            raise WorkflowExecutionError(
+                WorkflowErrorCode.PERSISTENCE_FAILED,
+                f"Persisted cases count mismatch: expected {len(cases_to_save)}, found {len(persisted_cases)}."
+            )
+
+        # 5. Record structured audit log
         status_str = artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status)
-        audit_ok = audit_logger.log(
+        logged_event = audit_logger.log(
             project_id=spec.application_id,
             action=AuditAction.CERTIFICATION_COMPLETE,
             status="SUCCESS" if artifact.certified else "INFO",
@@ -1115,14 +1207,35 @@ class CanonicalV2WorkflowEngine:
                 "evaluation_id": eval_result.evaluation_id,
             },
         )
-        audit_status_str = "PERSISTED" if audit_ok else "FAILED"
+        if not logged_event:
+            raise WorkflowExecutionError(
+                WorkflowErrorCode.PERSISTENCE_FAILED,
+                f"Mandatory audit logging failed for certification '{artifact.certification_id}'."
+            )
+        event_id = getattr(logged_event, "event_id", str(logged_event))
 
-        # 5. Finalize persistent reservation and mark workflow COMPLETED
+        # 6. Verify audit persistence from storage
+        audit_events = audit_logger.list_events(certification_id=artifact.certification_id)
+        audit_verified = any(
+            (getattr(e, "event_id", None) == event_id or getattr(e, "certification_id", None) == artifact.certification_id)
+            for e in audit_events
+        )
+        if not audit_verified:
+            raise WorkflowExecutionError(
+                WorkflowErrorCode.PERSISTENCE_FAILED,
+                f"Mandatory audit verification failed for certification '{artifact.certification_id}'."
+            )
+
+        # 7. Finalize persistent reservation and mark workflow COMPLETED via state machine
         self.idempotency_mgr.finalize_run(run.request_fingerprint, run.workflow_run_id, status="COMPLETED")
-        run.state = WorkflowState.COMPLETED
-        run.completed_at = datetime.now(timezone.utc).isoformat()
+        self.transition_state(
+            run,
+            WorkflowState.COMPLETED,
+            reason="Certification and mandatory audit persisted and verified",
+            metadata={"audit_persisted": True}
+        )
         timings["persistence_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
-        return audit_status_str
+        return "PERSISTED"
 
     def _fail_run(
         self,
@@ -1132,12 +1245,24 @@ class CanonicalV2WorkflowEngine:
         audit_status: str = "FAILED",
     ) -> WorkflowResult:
         """Helper to fail a WorkflowRun in a fail-closed, auditable state."""
-        run.state = WorkflowState.FAILED
-        run.error_code = error_code
-        run.error_message = error_message
-        run.completed_at = datetime.now(timezone.utc).isoformat()
         try:
-            self.persistence.save_run(run)
+            self.transition_state(
+                run,
+                WorkflowState.FAILED,
+                reason=f"Failure: {error_code.value}: {error_message}",
+                metadata={"error_code": error_code.value, "error_message": error_message}
+            )
+        except Exception:
+            run.state = WorkflowState.FAILED
+            run.error_code = error_code
+            run.error_message = error_message
+            run.completed_at = datetime.now(timezone.utc).isoformat()
+            try:
+                self.persistence.save_run(run)
+            except Exception:
+                pass
+
+        try:
             self.idempotency_mgr.finalize_run(run.request_fingerprint, run.workflow_run_id, status="FAILED")
         except Exception:
             pass
@@ -1159,39 +1284,74 @@ class CanonicalV2WorkflowEngine:
             state=WorkflowState.FAILED,
             status="FAILED",
             certified=False,
-            equivalence_score=0.0,
+            equivalence_score=None,
             audit_status=audit_status,
             error_code=error_code,
             error_message=error_message,
         )
 
-    def _build_result_from_existing_run(self, run: WorkflowRun) -> WorkflowResult:
-        """Constructs a WorkflowResult directly from an authoritative completed run."""
-        artifact = None
-        if run.certification_id:
-            try:
-                artifact = self.cert_repo.get_artifact(run.certification_id)
-            except Exception:
-                artifact = None
+    def _verify_and_build_existing_run(self, run: WorkflowRun) -> Optional[WorkflowResult]:
+        """Verifies the complete authoritative chain of an existing completed run before reusing."""
+        if run.state != WorkflowState.COMPLETED:
+            return None
 
-        return WorkflowResult(
-            workflow_run_id=run.workflow_run_id,
-            application_id=run.application_id,
-            state=run.state,
-            status=run.certification_status or "UNKNOWN",
-            certified=run.certification_status == "CERTIFIED",
-            equivalence_score=run.certification_score,
-            artifact_id=run.certification_id,
-            artifact_hash=artifact.artifact_hash if artifact else None,
-            threshold_resolution_id=run.threshold_resolution_id,
-            threshold_resolution_fingerprint=run.threshold_resolution_fingerprint,
-            unique_input_count=artifact.metrics.unique_input_count if (artifact and artifact.metrics) else None,
-            regressions_count=len(artifact.regressions) if artifact else 0,
-            regressions=[r.model_dump(mode="json") for r in artifact.regressions] if artifact else [],
-            explanation=None,
-            audit_status="PERSISTED",
-            timings_ms=run.stage_timings_ms,
-        )
+        if not run.certification_id:
+            return None
+
+        try:
+            artifact = self.cert_repo.get_artifact(run.certification_id)
+            if not artifact:
+                return None
+
+            # Verify artifact integrity
+            if not verify_artifact_integrity(artifact):
+                return None
+
+            # Verify cases exist
+            cases = self.cert_repo.get_cases(run.certification_id)
+            if not cases:
+                return None
+
+            # Verify threshold resolution if recorded
+            if run.threshold_resolution_id:
+                from threshold.persistence import ThresholdResolutionStore
+                t_store = ThresholdResolutionStore()
+                res = t_store.get_resolution(run.threshold_resolution_id)
+                if not res:
+                    return None
+                if run.threshold_resolution_fingerprint and res.fingerprint != run.threshold_resolution_fingerprint:
+                    return None
+
+            # Verify mandatory audit record exists
+            audit_events = audit_logger.list_events(certification_id=run.certification_id)
+            if not audit_events:
+                return None
+
+            return WorkflowResult(
+                workflow_run_id=run.workflow_run_id,
+                application_id=run.application_id,
+                state=run.state,
+                status=run.certification_status or "UNKNOWN",
+                certified=run.certification_status == "CERTIFIED",
+                equivalence_score=run.certification_score,
+                artifact_id=run.certification_id,
+                artifact_hash=artifact.artifact_hash,
+                threshold_resolution_id=run.threshold_resolution_id,
+                threshold_resolution_fingerprint=run.threshold_resolution_fingerprint,
+                unique_input_count=artifact.metrics.unique_input_count if artifact.metrics else len(cases),
+                regressions_count=len(artifact.regressions) if artifact.regressions else 0,
+                regressions=[r.model_dump(mode="json") for r in artifact.regressions] if artifact.regressions else [],
+                explanation=None,
+                audit_status="PERSISTED",
+                timings_ms=run.stage_timings_ms,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to verify existing completed run '{run.workflow_run_id}': {e}")
+            return None
+
+    def _build_result_from_existing_run(self, run: WorkflowRun) -> Optional[WorkflowResult]:
+        """Alias for _verify_and_build_existing_run."""
+        return self._verify_and_build_existing_run(run)
 
 
 workflow_engine = CanonicalV2WorkflowEngine()

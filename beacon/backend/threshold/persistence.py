@@ -254,3 +254,4 @@ class ThresholdPersistenceStore:
 
 # Module-level singleton
 threshold_persistence = ThresholdPersistenceStore()
+ThresholdResolutionStore = ThresholdPersistenceStore

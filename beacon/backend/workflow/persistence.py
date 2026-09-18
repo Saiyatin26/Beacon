@@ -100,10 +100,14 @@ class WorkflowPersistenceStore:
         self,
         request_fingerprint: str,
         workflow_run_id: str,
-    ) -> tuple[bool, Optional[str]]:
-        """Atomically reserves or checks persistent idempotency for a request fingerprint across processes."""
+    ) -> tuple[bool, Optional[str], str]:
+        """Atomically reserves or checks persistent idempotency for a request fingerprint across processes.
+        
+        Uses BEGIN IMMEDIATE transaction to guarantee database-atomic cross-process serialization.
+        """
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
             row = conn.execute(
                 "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE request_fingerprint = ?",
                 (request_fingerprint,),
@@ -113,10 +117,12 @@ class WorkflowPersistenceStore:
                 existing_run_id = row["workflow_run_id"]
                 existing_status = row["status"]
                 if existing_status == "COMPLETED":
-                    return False, existing_run_id
+                    conn.commit()
+                    return False, existing_run_id, "COMPLETED"
                 if existing_status == "IN_PROGRESS" and existing_run_id != workflow_run_id:
-                    # Active concurrent execution
-                    return False, existing_run_id
+                    # Active concurrent execution by another process/worker
+                    conn.commit()
+                    return False, existing_run_id, "IN_PROGRESS"
 
             conn.execute(
                 """
@@ -130,7 +136,7 @@ class WorkflowPersistenceStore:
                 (request_fingerprint, workflow_run_id, now, now),
             )
             conn.commit()
-            return True, workflow_run_id
+            return True, workflow_run_id, "IN_PROGRESS"
 
     def finalize_persistent_reservation(
         self,
@@ -141,6 +147,7 @@ class WorkflowPersistenceStore:
         """Updates persistent idempotency record upon completion or failure."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
             conn.execute(
                 """
                 INSERT INTO v2_workflow_idempotency (request_fingerprint, workflow_run_id, status, created_at, updated_at)
@@ -151,6 +158,27 @@ class WorkflowPersistenceStore:
                     updated_at = excluded.updated_at;
                 """,
                 (request_fingerprint, workflow_run_id, status, now, now),
+            )
+            conn.commit()
+
+    def get_idempotency_record(self, request_fingerprint: str) -> Optional[dict[str, Any]]:
+        """Retrieves persistent idempotency reservation record."""
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_workflow_idempotency WHERE request_fingerprint = ?",
+                (request_fingerprint,),
+            ).fetchone()
+            if not row:
+                return None
+            return dict(row)
+
+    def delete_idempotency_record(self, request_fingerprint: str) -> None:
+        """Deletes persistent idempotency reservation record."""
+        with self._lock, self._get_connection() as conn:
+            conn.execute("BEGIN IMMEDIATE;")
+            conn.execute(
+                "DELETE FROM v2_workflow_idempotency WHERE request_fingerprint = ?",
+                (request_fingerprint,),
             )
             conn.commit()
 

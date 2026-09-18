@@ -46,10 +46,12 @@ class WorkflowIdempotencyManager:
             raise TimeoutError(f"Timed out acquiring workflow execution lock for fingerprint '{fingerprint[:12]}'")
 
         res_ok = True
+        existing_id = None
+        existing_status = "UNKNOWN"
         try:
             if run_id:
-                res_ok, existing_id = self.persistence.acquire_persistent_reservation(fingerprint, run_id)
-            yield res_ok
+                res_ok, existing_id, existing_status = self.persistence.acquire_persistent_reservation(fingerprint, run_id)
+            yield (res_ok, existing_id, existing_status)
         finally:
             lock.release()
             with self._global_lock:

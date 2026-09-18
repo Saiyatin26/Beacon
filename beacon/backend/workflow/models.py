@@ -28,6 +28,11 @@ class WorkflowState(str, Enum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
+class WorkflowStateTransitionError(RuntimeError):
+    """Raised when an illegal or invariant-violating workflow state transition is attempted."""
+    pass
+
+
 VALID_WORKFLOW_STATE_TRANSITIONS: dict[WorkflowState, set[WorkflowState]] = {
     WorkflowState.INITIALIZED: {WorkflowState.VALIDATING, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
     WorkflowState.VALIDATING: {WorkflowState.CAPTURING_EVIDENCE, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE},
@@ -49,10 +54,91 @@ def is_valid_state_transition(current: WorkflowState, target: WorkflowState, is_
     if current == target:
         return True
     if is_recovery:
-        # In recovery, an in-flight uncompleted run may transition to COMPLETED, FAILED, or INCONCLUSIVE
+        # In recovery, an uncompleted in-flight run may transition strictly to COMPLETED, FAILED, or INCONCLUSIVE
         return target in (WorkflowState.COMPLETED, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE)
     allowed = VALID_WORKFLOW_STATE_TRANSITIONS.get(current, set())
     return target in allowed
+
+
+def transition_workflow_state(
+    run: "WorkflowRun",
+    target_state: WorkflowState,
+    reason: str = "",
+    metadata: Optional[dict[str, Any]] = None,
+    is_recovery: bool = False,
+) -> "WorkflowRun":
+    """Central authoritative state transition function. Validates transitions and enforces state invariants."""
+    current_state = run.state
+    if not is_valid_state_transition(current_state, target_state, is_recovery=is_recovery):
+        raise WorkflowStateTransitionError(
+            f"Illegal workflow state transition from '{current_state.value}' to '{target_state.value}' "
+            f"(reason: {reason}, is_recovery={is_recovery})"
+        )
+
+    if metadata:
+        run.metadata.update(metadata)
+
+    # State Invariant Enforcements
+    if target_state == WorkflowState.COMPLETED:
+        if not run.certification_id:
+            raise WorkflowStateTransitionError("Cannot transition to COMPLETED without valid certification_id.")
+        if not run.threshold_resolution_id:
+            raise WorkflowStateTransitionError("Cannot transition to COMPLETED without threshold_resolution_id.")
+        if not is_recovery and current_state != WorkflowState.PERSISTING:
+            raise WorkflowStateTransitionError(f"Cannot transition to COMPLETED directly from '{current_state.value}'.")
+        if not run.metadata.get("audit_persisted") and not is_recovery:
+            raise WorkflowStateTransitionError("Cannot transition to COMPLETED without verified audit persistence.")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    run.state = target_state
+    run.updated_at = now_iso
+    if target_state in (WorkflowState.COMPLETED, WorkflowState.FAILED, WorkflowState.INCONCLUSIVE):
+        run.completed_at = now_iso
+
+    if metadata:
+        run.metadata.update(metadata)
+    if reason:
+        transition_history = run.metadata.setdefault("state_transitions", [])
+        transition_history.append({
+            "from_state": current_state.value,
+            "to_state": target_state.value,
+            "reason": reason,
+            "timestamp": now_iso,
+            "is_recovery": is_recovery,
+        })
+
+    return run
+
+
+def compute_execution_fingerprint(
+    application_id: str,
+    ref_target_id: str,
+    ref_version: str,
+    ref_source_hash: str,
+    target_id: str,
+    target_version: str,
+    target_source_hash: str,
+    input_set_hash: str,
+    input_count: int,
+    policy_id: Optional[str] = None,
+    rule_config_mode: Optional[str] = None,
+) -> str:
+    """Computes deterministic Stage B execution identity over resolved material inputs."""
+    payload = {
+        "application_id": application_id,
+        "ref_target_id": ref_target_id,
+        "ref_version": ref_version,
+        "ref_source_hash": ref_source_hash,
+        "target_id": target_id,
+        "target_version": target_version,
+        "target_source_hash": target_source_hash,
+        "input_set_hash": input_set_hash,
+        "input_count": input_count,
+        "policy_id": policy_id or "",
+        "rule_config_mode": rule_config_mode or "",
+    }
+    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
 class WorkflowErrorCode(str, Enum):
