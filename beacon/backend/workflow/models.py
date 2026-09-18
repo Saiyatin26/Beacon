@@ -191,6 +191,8 @@ class WorkflowRunRequest(BaseModel):
     explain: bool = True
     explanation_mode: Literal["deterministic", "llm", "auto"] = "deterministic"
     use_company_knowledge: bool = False
+    enable_discovery: bool = False
+    evaluation_mode: Optional[str] = "CONTROLLED"
     force_recompute: bool = False
     idempotency_key: Optional[str] = None
     user_id: str = "system"
@@ -271,3 +273,4 @@ class WorkflowResult(BaseModel):
     error_code: Optional[WorkflowErrorCode] = None
     error_message: Optional[str] = None
     timings_ms: dict[str, float] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)

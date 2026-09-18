@@ -903,7 +903,12 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        enable_disc = getattr(request, "enable_discovery", False) or getattr(spec, "enable_discovery", False)
+        enable_disc = (
+            getattr(request, "enable_discovery", False)
+            or getattr(spec, "enable_discovery", False)
+            or getattr(request, "evaluation_mode", "") == "FULL_BEACON"
+            or bool(spec.rule_config and getattr(spec.rule_config, "mode", "") == "FULL_BEACON")
+        )
         if enable_disc:
             try:
                 disc_result = self.discovery_eng.discover_rules(

@@ -109,6 +109,11 @@ class ApplicationResolver:
             raise ApplicationResolutionError(f"Unsupported implementation target type: {type(target)}")
 
         # Try resolving entrypoint if available
+        # 1. Check adapter registry by name first
+        reg_adapter = adapter_registry.get_adapter(target_obj.name, version=target_obj.version)
+        if reg_adapter:
+            return reg_adapter
+
         if target_obj.entrypoint:
             if callable(target_obj.entrypoint):
                 return FunctionAdapter(
@@ -127,7 +132,16 @@ class ApplicationResolver:
                 if ":" in target_obj.entrypoint:
                     mod_name, fn_name = target_obj.entrypoint.split(":", 1)
                     try:
-                        mod = importlib.import_module(mod_name)
+                        p = Path(mod_name)
+                        if p.exists() or mod_name.endswith(".py"):
+                            spec_imp = importlib.util.spec_from_file_location(p.stem, str(p.resolve()))
+                            if spec_imp and spec_imp.loader:
+                                mod = importlib.util.module_from_spec(spec_imp)
+                                spec_imp.loader.exec_module(mod)
+                            else:
+                                mod = importlib.import_module(p.stem)
+                        else:
+                            mod = importlib.import_module(mod_name)
                         fn = getattr(mod, fn_name)
                         if isinstance(fn, type) and issubclass(fn, ImplementationAdapter):
                             inst = fn()
@@ -144,11 +158,6 @@ class ApplicationResolver:
                             )
                     except Exception as exc:
                         raise ApplicationResolutionError(f"Could not import entrypoint '{target_obj.entrypoint}': {exc}")
-
-        # Check adapter registry by name
-        reg_adapter = adapter_registry.get_adapter(target_obj.name, version=target_obj.version)
-        if reg_adapter:
-            return reg_adapter
 
         raise ApplicationResolutionError(f"Cannot resolve implementation target '{target_obj.name}' to executable adapter")
 
