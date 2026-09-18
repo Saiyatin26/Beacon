@@ -1,0 +1,375 @@
+{
+  "bundle_id": "BUNDLE-WRUN-fee310f8ced7",
+  "session_id": "SESS-WRUN-fee310f8ced7",
+  "correlation_id": "WRUN-fee310f8ced7",
+  "application_id": "loan_test_app",
+  "input_set_id": "INPSET-WRUN-fee",
+  "reference_execution_ids": [
+    "EXEC-REF-WRUN-f-1",
+    "EXEC-REF-WRUN-f-2",
+    "EXEC-REF-WRUN-f-3",
+    "EXEC-REF-WRUN-f-4"
+  ],
+  "target_execution_ids": [
+    "EXEC-TGT-WRUN-f-1",
+    "EXEC-TGT-WRUN-f-2",
+    "EXEC-TGT-WRUN-f-3",
+    "EXEC-TGT-WRUN-f-4"
+  ],
+  "manifest": {
+    "session_id": "SESS-WRUN-fee310f8ced7",
+    "correlation_id": "WRUN-fee310f8ced7",
+    "application_id": "loan_test_app",
+    "input_set_id": "INPSET-WRUN-fee",
+    "input_set_hash": "d995fe6b9708b87203e12e249e1c343c2e1a4c1bf0d3c2333c163f603c8939bf",
+    "items": [
+      {
+        "evidence_id": "EVID-REF-WRUN-f-1",
+        "evidence_type": "OUTPUT",
+        "role": "reference",
+        "input_id": "in_0000",
+        "content_hash": "23fce52b1c281c20503ecd64072cb1afd4d55a49a7ec1aecb823b98bcc5d29dd",
+        "size_bytes": 158,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      },
+      {
+        "evidence_id": "EVID-TGT-WRUN-f-1",
+        "evidence_type": "OUTPUT",
+        "role": "target",
+        "input_id": "in_0000",
+        "content_hash": "23fce52b1c281c20503ecd64072cb1afd4d55a49a7ec1aecb823b98bcc5d29dd",
+        "size_bytes": 158,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      },
+      {
+        "evidence_id": "EVID-REF-WRUN-f-2",
+        "evidence_type": "OUTPUT",
+        "role": "reference",
+        "input_id": "in_0001",
+        "content_hash": "481104fb58df98fe6b9b2bd3b4a6ebb4dc4cb494de5731c2402eb14dc3631321",
+        "size_bytes": 157,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      },
+      {
+        "evidence_id": "EVID-TGT-WRUN-f-2",
+        "evidence_type": "OUTPUT",
+        "role": "target",
+        "input_id": "in_0001",
+        "content_hash": "481104fb58df98fe6b9b2bd3b4a6ebb4dc4cb494de5731c2402eb14dc3631321",
+        "size_bytes": 157,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      },
+      {
+        "evidence_id": "EVID-REF-WRUN-f-3",
+        "evidence_type": "OUTPUT",
+        "role": "reference",
+        "input_id": "in_0002",
+        "content_hash": "ff53362d153dacfcbb648d52e0a53513c180c80aa0db4e95a6cf92110e22bfbf",
+        "size_bytes": 156,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      },
+      {
+        "evidence_id": "EVID-TGT-WRUN-f-3",
+        "evidence_type": "OUTPUT",
+        "role": "target",
+        "input_id": "in_0002",
+        "content_hash": "ff53362d153dacfcbb648d52e0a53513c180c80aa0db4e95a6cf92110e22bfbf",
+        "size_bytes": 156,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      },
+      {
+        "evidence_id": "EVID-REF-WRUN-f-4",
+        "evidence_type": "OUTPUT",
+        "role": "reference",
+        "input_id": "in_0003",
+        "content_hash": "fa0064983753f00b9ecd8ad3333ad1c2573f49addc9a0d542a465cb0003f4bf2",
+        "size_bytes": 159,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      },
+      {
+        "evidence_id": "EVID-TGT-WRUN-f-4",
+        "evidence_type": "OUTPUT",
+        "role": "target",
+        "input_id": "in_0003",
+        "content_hash": "fa0064983753f00b9ecd8ad3333ad1c2573f49addc9a0d542a465cb0003f4bf2",
+        "size_bytes": 159,
+        "capture_status": "CAPTURED",
+        "persistence_status": "PERSISTED"
+      }
+    ],
+    "total_evidence_count": 8,
+    "created_at": "2026-09-18T08:28:29.612108+00:00",
+    "bundle_hash": "11af0492519e573e1749b6c6b65963fa35bcb9cdcc63f67783d1eb40dd98f84d"
+  },
+  "bundle_hash": "11af0492519e573e1749b6c6b65963fa35bcb9cdcc63f67783d1eb40dd98f84d",
+  "records": [
+    {
+      "evidence_id": "EVID-REF-WRUN-f-1",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-REF-WRUN-f-1",
+      "application_id": "loan_test_app",
+      "role": "reference",
+      "input_id": "in_0000",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.428765+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "APPROVE"
+        },
+        "input": {
+          "credit_score": 750,
+          "debt_ratio": 0.25,
+          "annual_income": 85000,
+          "loan_amount": 25000
+        },
+        "raw_output": {
+          "decision": "APPROVE"
+        }
+      },
+      "content_hash": "23fce52b1c281c20503ecd64072cb1afd4d55a49a7ec1aecb823b98bcc5d29dd",
+      "size_bytes": 158,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    },
+    {
+      "evidence_id": "EVID-TGT-WRUN-f-1",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-TGT-WRUN-f-1",
+      "application_id": "loan_test_app",
+      "role": "target",
+      "input_id": "in_0000",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.444954+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "APPROVE"
+        },
+        "input": {
+          "credit_score": 750,
+          "debt_ratio": 0.25,
+          "annual_income": 85000,
+          "loan_amount": 25000
+        },
+        "raw_output": {
+          "decision": "APPROVE"
+        }
+      },
+      "content_hash": "23fce52b1c281c20503ecd64072cb1afd4d55a49a7ec1aecb823b98bcc5d29dd",
+      "size_bytes": 158,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    },
+    {
+      "evidence_id": "EVID-REF-WRUN-f-2",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-REF-WRUN-f-2",
+      "application_id": "loan_test_app",
+      "role": "reference",
+      "input_id": "in_0001",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.470439+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "APPROVE"
+        },
+        "input": {
+          "credit_score": 620,
+          "debt_ratio": 0.4,
+          "annual_income": 45000,
+          "loan_amount": 15000
+        },
+        "raw_output": {
+          "decision": "APPROVE"
+        }
+      },
+      "content_hash": "481104fb58df98fe6b9b2bd3b4a6ebb4dc4cb494de5731c2402eb14dc3631321",
+      "size_bytes": 157,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    },
+    {
+      "evidence_id": "EVID-TGT-WRUN-f-2",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-TGT-WRUN-f-2",
+      "application_id": "loan_test_app",
+      "role": "target",
+      "input_id": "in_0001",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.495462+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "APPROVE"
+        },
+        "input": {
+          "credit_score": 620,
+          "debt_ratio": 0.4,
+          "annual_income": 45000,
+          "loan_amount": 15000
+        },
+        "raw_output": {
+          "decision": "APPROVE"
+        }
+      },
+      "content_hash": "481104fb58df98fe6b9b2bd3b4a6ebb4dc4cb494de5731c2402eb14dc3631321",
+      "size_bytes": 157,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    },
+    {
+      "evidence_id": "EVID-REF-WRUN-f-3",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-REF-WRUN-f-3",
+      "application_id": "loan_test_app",
+      "role": "reference",
+      "input_id": "in_0002",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.512102+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "REJECT"
+        },
+        "input": {
+          "credit_score": 580,
+          "debt_ratio": 0.55,
+          "annual_income": 30000,
+          "loan_amount": 10000
+        },
+        "raw_output": {
+          "decision": "REJECT"
+        }
+      },
+      "content_hash": "ff53362d153dacfcbb648d52e0a53513c180c80aa0db4e95a6cf92110e22bfbf",
+      "size_bytes": 156,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    },
+    {
+      "evidence_id": "EVID-TGT-WRUN-f-3",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-TGT-WRUN-f-3",
+      "application_id": "loan_test_app",
+      "role": "target",
+      "input_id": "in_0002",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.537129+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "REJECT"
+        },
+        "input": {
+          "credit_score": 580,
+          "debt_ratio": 0.55,
+          "annual_income": 30000,
+          "loan_amount": 10000
+        },
+        "raw_output": {
+          "decision": "REJECT"
+        }
+      },
+      "content_hash": "ff53362d153dacfcbb648d52e0a53513c180c80aa0db4e95a6cf92110e22bfbf",
+      "size_bytes": 156,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    },
+    {
+      "evidence_id": "EVID-REF-WRUN-f-4",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-REF-WRUN-f-4",
+      "application_id": "loan_test_app",
+      "role": "reference",
+      "input_id": "in_0003",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.569143+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "APPROVE"
+        },
+        "input": {
+          "credit_score": 800,
+          "debt_ratio": 0.15,
+          "annual_income": 120000,
+          "loan_amount": 50000
+        },
+        "raw_output": {
+          "decision": "APPROVE"
+        }
+      },
+      "content_hash": "fa0064983753f00b9ecd8ad3333ad1c2573f49addc9a0d542a465cb0003f4bf2",
+      "size_bytes": 159,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    },
+    {
+      "evidence_id": "EVID-TGT-WRUN-f-4",
+      "session_id": "SESS-WRUN-fee310f8ced7",
+      "execution_id": "EXEC-TGT-WRUN-f-4",
+      "application_id": "loan_test_app",
+      "role": "target",
+      "input_id": "in_0003",
+      "evidence_type": "OUTPUT",
+      "timestamp": "2026-09-18T08:28:29.587136+00:00",
+      "sequence": 0,
+      "source": "adapter",
+      "payload": {
+        "output": {
+          "decision": "APPROVE"
+        },
+        "input": {
+          "credit_score": 800,
+          "debt_ratio": 0.15,
+          "annual_income": 120000,
+          "loan_amount": 50000
+        },
+        "raw_output": {
+          "decision": "APPROVE"
+        }
+      },
+      "content_hash": "fa0064983753f00b9ecd8ad3333ad1c2573f49addc9a0d542a465cb0003f4bf2",
+      "size_bytes": 159,
+      "capture_status": "CAPTURED",
+      "persistence_status": "PERSISTED",
+      "provenance": {},
+      "metadata": {}
+    }
+  ],
+  "created_at": "2026-09-18T08:28:29.612108+00:00",
+  "is_partial": false,
+  "persistence_status": "PERSISTED",
+  "persistence_error": null,
+  "error_summary": null
+}

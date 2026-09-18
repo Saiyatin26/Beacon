@@ -83,7 +83,18 @@ from oracle.models import OracleSet
 from reconciliation.engine import RuleReconciliationEngine
 from reconciliation.persistence import ReconciliationPersistenceStore, reconciliation_persistence
 from rules.engine import ControlledAssessmentEngine
-from rules.models import BusinessRule, ControlledEvaluationResult
+from rules.models import (
+    BusinessRule,
+    CompoundRuleCondition,
+    ControlledEvaluationResult,
+    ExpectedBehavior,
+    ExpectedBehaviorType,
+    RuleOperator,
+    RulePredicate,
+    RuleSeverity,
+    RuleSource,
+    UnaryRuleCondition,
+)
 from rules.registry import RuleRegistry, rule_registry
 from threshold.engine import ThresholdEngine, threshold_engine
 from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdResolution, ThresholdStrategy
@@ -257,6 +268,7 @@ class CanonicalV2WorkflowEngine:
                 audit_status_str = self._stage_persist_and_audit(
                     artifact=artifact,
                     test_inputs=test_inputs,
+                    evaluated_input_cases=evaluated_input_cases,
                     spec=spec,
                     threshold_res=threshold_res,
                     eval_result=eval_result,
@@ -603,6 +615,108 @@ class CanonicalV2WorkflowEngine:
         except Exception:
             user_rules = []
 
+        if not user_rules and spec.rule_config and spec.rule_config.rules:
+            for r_item in spec.rule_config.rules:
+                if isinstance(r_item, BusinessRule):
+                    user_rules.append(r_item)
+                elif isinstance(r_item, dict):
+                    rule_id = str(r_item.get("rule_id", "RULE_UNKNOWN"))
+                    name = str(r_item.get("name", rule_id))
+                    
+                    raw_cond = r_item.get("condition")
+                    if isinstance(raw_cond, (RulePredicate, CompoundRuleCondition, UnaryRuleCondition)):
+                        cond_node = raw_cond
+                    elif isinstance(raw_cond, dict):
+                        cond_node = raw_cond
+                    elif isinstance(raw_cond, str):
+                        cond_str = raw_cond.strip()
+                        matched_c = False
+                        for sym, op in [
+                            (">=", RuleOperator.GTE),
+                            ("<=", RuleOperator.LTE),
+                            ("==", RuleOperator.EQ),
+                            ("!=", RuleOperator.NE),
+                            (">", RuleOperator.GT),
+                            ("<", RuleOperator.LT),
+                        ]:
+                            if sym in cond_str:
+                                parts = cond_str.split(sym, 1)
+                                fld = parts[0].strip()
+                                val_str = parts[1].strip()
+                                if val_str.lower() == "true":
+                                    val = True
+                                elif val_str.lower() == "false":
+                                    val = False
+                                elif val_str.lower() in ("null", "none"):
+                                    val = None
+                                else:
+                                    try:
+                                        val = float(val_str) if "." in val_str else int(val_str)
+                                    except ValueError:
+                                        val = val_str.strip("'\"")
+                                cond_node = RulePredicate(field=fld, operator=op, value=val)
+                                matched_c = True
+                                break
+                        if not matched_c:
+                            cond_node = RulePredicate(field=cond_str, operator=RuleOperator.EXISTS)
+                    else:
+                        cond_node = RulePredicate(field="unknown", operator=RuleOperator.EXISTS)
+
+                    raw_conseq = r_item.get("expected_behavior") or r_item.get("consequence")
+                    if isinstance(raw_conseq, ExpectedBehavior):
+                        exp_behavior = raw_conseq
+                    elif isinstance(raw_conseq, dict):
+                        exp_behavior = ExpectedBehavior(**raw_conseq)
+                    elif isinstance(raw_conseq, str):
+                        c_str = raw_conseq.strip()
+                        matched_b = False
+                        for sym in ["==", ">=", "<=", "!=", ">", "<"]:
+                            if sym in c_str:
+                                parts = c_str.split(sym, 1)
+                                tfld = parts[0].strip()
+                                tval_str = parts[1].strip()
+                                if tval_str.lower() == "true":
+                                    tval = True
+                                elif tval_str.lower() == "false":
+                                    tval = False
+                                elif tval_str.lower() in ("null", "none"):
+                                    tval = None
+                                else:
+                                    try:
+                                        tval = float(tval_str) if "." in tval_str else int(tval_str)
+                                    except ValueError:
+                                        tval = tval_str.strip("'\"")
+                                exp_behavior = ExpectedBehavior(
+                                    behavior_type=ExpectedBehaviorType.RETURN_VALUE,
+                                    target_field=tfld,
+                                    expected_value=tval,
+                                )
+                                matched_b = True
+                                break
+                        if not matched_b:
+                            if c_str.lower() in ("accept", "pass", "ok"):
+                                exp_behavior = ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT)
+                            elif c_str.lower() in ("reject", "fail", "error"):
+                                exp_behavior = ExpectedBehavior(behavior_type=ExpectedBehaviorType.REJECT)
+                            else:
+                                exp_behavior = ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT)
+                    else:
+                        exp_behavior = ExpectedBehavior(behavior_type=ExpectedBehaviorType.ACCEPT)
+
+                    raw_sev = str(r_item.get("severity", "CRITICAL")).upper()
+                    sev = RuleSeverity[raw_sev] if raw_sev in RuleSeverity.__members__ else RuleSeverity.CRITICAL
+
+                    user_rules.append(
+                        BusinessRule(
+                            rule_id=rule_id,
+                            name=name,
+                            condition=cond_node,
+                            expected_behavior=exp_behavior,
+                            severity=sev,
+                            source=RuleSource.USER_DEFINED,
+                        )
+                    )
+
         if is_controlled or len(user_rules) > 0:
             try:
                 ctrl_result = self.controlled_eng.evaluate_controlled_mode(
@@ -610,19 +724,32 @@ class CanonicalV2WorkflowEngine:
                     bundle=bundle,
                     phase4_result=eval_result,
                 )
+                if not ctrl_result:
+                    return self._fail_run(
+                        run,
+                        WorkflowErrorCode.RULE_VIOLATION_FAIL,
+                        "Phase 5 ControlledAssessmentEngine returned null result for controlled application.",
+                    )
+
                 run.metadata["controlled_evaluation_id"] = ctrl_result.evaluation_id
                 run.metadata["controlled_compliance_verdict"] = (
                     ctrl_result.overall_verdict.value
                     if hasattr(ctrl_result.overall_verdict, "value")
                     else str(ctrl_result.overall_verdict)
                 )
+                run.metadata["phase5_applicable"] = True
                 timings["controlled_mode_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
                 return user_rules, ctrl_result
             except Exception as exc:
-                logger.warning(f"Controlled mode evaluation error for '{run.workflow_run_id}': {exc}")
-                return user_rules, None
+                logger.error(f"Controlled mode evaluation error for '{run.workflow_run_id}': {exc}", exc_info=True)
+                return self._fail_run(
+                    run,
+                    WorkflowErrorCode.RULE_VIOLATION_FAIL,
+                    f"Controlled mode evaluation failed: {str(exc)}",
+                )
 
         run.metadata["phase5_applicable"] = False
+        run.metadata["controlled_mode_status"] = "NOT_APPLICABLE"
         timings["controlled_mode_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
         return user_rules, None
 
@@ -644,12 +771,22 @@ class CanonicalV2WorkflowEngine:
                     phase4_result=eval_result,
                     persist=True,
                 )
-                run.metadata["discovery_id"] = disc_result.discovery_id
-                run.metadata["discovered_candidate_count"] = len(disc_result.candidates)
-                timings["discovery_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
-                return disc_result
+                if disc_result:
+                    run.metadata["discovery_id"] = disc_result.discovery_id
+                    run.metadata["discovered_candidate_count"] = len(disc_result.candidates)
+                    run.metadata["phase6_applicable"] = True
+                    timings["discovery_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
+                    return disc_result
+                else:
+                    run.metadata["discovery_status"] = "DISCOVERY_UNAVAILABLE"
+                    run.metadata["phase6_applicable"] = True
+                    timings["discovery_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
+                    return None
             except Exception as exc:
                 logger.warning(f"Rule discovery failed for '{run.workflow_run_id}': {exc}")
+                run.metadata["discovery_status"] = "DISCOVERY_UNAVAILABLE"
+                run.metadata["phase6_applicable"] = True
+                timings["discovery_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
                 return None
 
         run.metadata["phase6_applicable"] = False
@@ -669,7 +806,7 @@ class CanonicalV2WorkflowEngine:
         run.state = WorkflowState.RESOLVING_ORACLES
         self.persistence.save_run(run)
 
-        # 1. First attempt authoritative reconciliation through Phase 7 RuleReconciliationEngine
+        # Authoritative reconciliation through Phase 7 RuleReconciliationEngine
         recon_oracle_set: Optional[OracleSet] = None
         try:
             recon_res = self.reconcile_eng.reconcile(
@@ -680,19 +817,21 @@ class CanonicalV2WorkflowEngine:
                 session_id=bundle.session_id,
                 persist=True,
             )
-            if recon_res and recon_res.oracle_set and (len(recon_res.oracle_set.rules) > 0 or len(recon_res.oracle_set.oracles) > 0):
+            if recon_res and recon_res.oracle_set and (
+                len(getattr(recon_res.oracle_set, "rules", [])) > 0
+                or len(getattr(recon_res.oracle_set, "oracles", [])) > 0
+            ):
                 recon_oracle_set = recon_res.oracle_set
         except Exception as exc:
             logger.debug(f"Rule reconciliation note for '{spec.application_id}': {exc}")
 
-        # 2. Fall back to application resolver registered OracleSet if reconciliation had no user/discovered rules
-        oracle_set = recon_oracle_set or self.app_resolver.resolve_oracle_set(spec=spec)
+        oracle_set = recon_oracle_set
 
         if not oracle_set:
             return self._fail_run(
                 run,
                 WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
-                f"No authoritative OracleSet could be resolved for application '{spec.application_id}'.",
+                f"No authoritative OracleSet produced by reconciliation for application '{spec.application_id}'.",
             )
 
         oset_id = getattr(oracle_set, "oracle_set_id", "")
@@ -762,6 +901,15 @@ class CanonicalV2WorkflowEngine:
 
         self.thresh_persistence.save_resolution(threshold_res)
 
+        # Re-verify persisted resolution
+        persisted_res = self.thresh_persistence.get_resolution(threshold_res.resolution_id)
+        if not persisted_res or persisted_res.fingerprint != threshold_res.fingerprint:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+                f"Persisted threshold resolution verification failed for resolution '{threshold_res.resolution_id}'.",
+            )
+
         run.threshold_resolution_id = threshold_res.resolution_id
         run.threshold_resolution_fingerprint = threshold_res.fingerprint
         timings["threshold_resolution_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
@@ -784,7 +932,7 @@ class CanonicalV2WorkflowEngine:
         run.state = WorkflowState.CERTIFYING
         self.persistence.save_run(run)
 
-        # Strict Authority Check: threshold fingerprint verification
+        # Strict verification before CertificationEngine execution
         expected_fp = threshold_res.compute_fingerprint()
         if threshold_res.fingerprint != expected_fp:
             return self._fail_run(
@@ -858,33 +1006,25 @@ class CanonicalV2WorkflowEngine:
         self.persistence.save_run(run)
 
         try:
-            exp_ctx = self.ctx_builder.build_context(
+            exp_req = ExplanationRequest(
+                mode=getattr(request, "explanation_mode", "deterministic") or "deterministic",
+                use_company_knowledge=getattr(request, "use_company_knowledge", False),
+            )
+            explanation_res = self.intel_eng.generate_explanation(
                 certification_id=artifact.certification_id,
                 artifact=artifact,
+                evidence_records=all_evidence_records,
                 evaluation_result=eval_result,
                 oracle_set=oracle_set,
                 threshold_resolution=threshold_res,
-                evidence_records=all_evidence_records,
-                execution_mode="v2",
-                use_company_knowledge=request.use_company_knowledge,
+                request=exp_req,
             )
-            explanation = self.intel_eng.generate_explanation(
-                certification_id=artifact.certification_id,
-                artifact=artifact,
-                evaluation_result=eval_result,
-                oracle_set=oracle_set,
-                threshold_resolution=threshold_res,
-                evidence_records=all_evidence_records,
-                request=ExplanationRequest(
-                    mode=request.explanation_mode,
-                    use_company_knowledge=request.use_company_knowledge,
-                ),
-                user_id=request.user_id,
-            )
-            run.explanation_id = explanation.explanation_id
-            return explanation.model_dump(mode="json")
+
+            run.explanation_id = getattr(explanation_res, "explanation_id", None)
+            return explanation_res.model_dump(mode="json") if hasattr(explanation_res, "model_dump") else explanation_res
+
         except Exception as exc:
-            logger.warning(f"Grounded explanation generation failed for '{run.workflow_run_id}': {exc}", exc_info=True)
+            logger.warning(f"Non-blocking grounded explanation failure for '{run.workflow_run_id}': {exc}")
             return {
                 "status": "EXPLANATION_FAILED",
                 "error": str(exc),
@@ -895,6 +1035,7 @@ class CanonicalV2WorkflowEngine:
         self,
         artifact: CertificationArtifact,
         test_inputs: list[Any],
+        evaluated_input_cases: list[dict[str, Any]],
         spec: ApplicationSpec,
         threshold_res: ThresholdResolution,
         eval_result: EvaluationResult,
@@ -918,13 +1059,20 @@ class CanonicalV2WorkflowEngine:
         )
 
         # 2. Derive CertificationCases strictly from authoritative EvaluationResult & Artifact
+        input_data_map = {c["input_id"]: c for c in evaluated_input_cases}
         cases_to_save: list[CertificationCase] = []
+
         for idx, item_res in enumerate(eval_result.input_results):
             inp_id = item_res.input_id
             is_equiv = (item_res.verdict == EvaluationVerdict.EQUIVALENT)
             cls_str = "MATCH" if is_equiv else "MODERN_REGRESSION"
-            diff_str = json.dumps([d.model_dump(mode="json") for d in item_res.differences], sort_keys=True)
-            inp_json = json.dumps(getattr(test_inputs[idx], "values", test_inputs[idx]), sort_keys=True, default=str) if idx < len(test_inputs) else "{}"
+            case_data = input_data_map.get(inp_id, {})
+            inp_vals = case_data.get("input_values", getattr(test_inputs[idx], "values", test_inputs[idx]) if idx < len(test_inputs) else {})
+            inp_json = json.dumps(inp_vals, sort_keys=True, default=str)
+            legacy_val = case_data.get("ref_val", "")
+            modern_val = case_data.get("tgt_val", "")
+            legacy_out_json = json.dumps(legacy_val, sort_keys=True, default=str)
+            modern_out_json = json.dumps(modern_val, sort_keys=True, default=str)
 
             cases_to_save.append(
                 CertificationCase(
@@ -935,8 +1083,8 @@ class CanonicalV2WorkflowEngine:
                     input_id=inp_id,
                     input_json=inp_json,
                     input_hash=hashlib.sha256(inp_json.encode()).hexdigest(),
-                    legacy_output_json=diff_str,
-                    modern_output_json=diff_str,
+                    legacy_output_json=legacy_out_json,
+                    modern_output_json=modern_out_json,
                     execution_time_ms=0.0,
                     oracle_result="PASS" if is_equiv else "VIOLATED",
                     classification=cls_str,

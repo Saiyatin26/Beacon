@@ -132,6 +132,37 @@ class RuleComparator:
         if not fields_a.intersection(fields_b):
             return "DISJOINT"
 
+        # Check if single predicate conditions on the same field are mutually exclusive (disjoint)
+        if len(pred_a) == 1 and len(pred_b) == 1:
+            pa, pb = pred_a[0], pred_b[0]
+            if pa.get("field") == pb.get("field") and pa.get("field"):
+                opa = str(pa.get("operator", "")).upper()
+                opb = str(pb.get("operator", "")).upper()
+                va = pa.get("value")
+                vb = pb.get("value")
+
+                op_map = {
+                    ">=": ">=", "<=": "<=", "==": "==", "!=": "!=", ">": ">", "<": "<",
+                    "GTE": ">=", "LTE": "<=", "EQ": "==", "NE": "!=", "GT": ">", "LT": "<",
+                }
+                norm_opa = op_map.get(opa, opa)
+                norm_opb = op_map.get(opb, opb)
+
+                if norm_opa == "==" and norm_opb == "==" and va != vb:
+                    return "DISJOINT"
+
+                if isinstance(va, (int, float)) and isinstance(vb, (int, float)):
+                    if norm_opa in (">=", ">") and norm_opb in ("<=", "<"):
+                        if norm_opa == ">=" and norm_opb == "<=" and va > vb:
+                            return "DISJOINT"
+                        elif (norm_opa == ">" or norm_opb == "<") and va >= vb:
+                            return "DISJOINT"
+                    elif norm_opa in ("<=", "<") and norm_opb in (">=", ">"):
+                        if norm_opa == "<=" and norm_opb == ">=" and va < vb:
+                            return "DISJOINT"
+                        elif (norm_opa == "<" or norm_opb == ">") and va <= vb:
+                            return "DISJOINT"
+
         return "OVERLAPPING"
 
     def _extract_predicates(self, cond: dict[str, Any]) -> list[dict[str, Any]]:

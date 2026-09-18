@@ -190,6 +190,21 @@ class ThresholdPersistenceStore:
             logger.error(f"Failed to save threshold resolution {resolution.resolution_id}: {exc}")
             raise ThresholdPersistenceError(f"Failed to save resolution: {exc}") from exc
 
+    def get_resolution(self, resolution_id: str) -> Optional[ThresholdResolution]:
+        """Retrieves a threshold resolution by ID."""
+        try:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT resolution_json FROM threshold_resolutions WHERE resolution_id = ?",
+                    (resolution_id,),
+                ).fetchone()
+                if row:
+                    return ThresholdResolution.model_validate_json(row["resolution_json"])
+                return None
+        except Exception as exc:
+            logger.error(f"Failed to get threshold resolution {resolution_id}: {exc}")
+            raise ThresholdPersistenceError(f"Failed to get resolution: {exc}") from exc
+
     def save_evaluation_result(self, result: AdvancedEvaluationResult) -> str:
         """Persists an advanced behavioral evaluation run."""
         now = datetime.now(timezone.utc).isoformat()
