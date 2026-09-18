@@ -16,7 +16,7 @@ from ingestion.audit import AuditAction, audit_logger
 from reconciliation.persistence import ReconciliationPersistenceStore, reconciliation_persistence
 from threshold.persistence import ThresholdPersistenceStore, threshold_persistence
 from .idempotency import workflow_idempotency
-from .models import WorkflowErrorCode, WorkflowRun, WorkflowState, transition_workflow_state
+from .models import FinalizationState, WorkflowErrorCode, WorkflowRun, WorkflowState, transition_workflow_state
 from .persistence import WorkflowPersistenceStore, workflow_persistence
 
 logger = logging.getLogger("beacon.workflow.recovery")
@@ -57,18 +57,27 @@ class WorkflowRecoveryService:
                 run.certification_score = art.score
                 run.metadata["audit_persisted"] = True
                 run.metadata["recovery_note"] = "Recovered after full cryptographic authority chain and audit verification."
+
+                # Authoritative Stage-B Idempotency Finalization
+                try:
+                    workflow_idempotency.finalize_stage_b(
+                        execution_fingerprint=run.execution_fingerprint,
+                        run_id=run.workflow_run_id,
+                        status="COMPLETED",
+                        finalization_state="IDEMPOTENCY_FINALIZED",
+                        request_fingerprint=run.request_fingerprint,
+                    )
+                except Exception as idemp_err:
+                    logger.debug(f"Recovery Stage-B finalization notice for '{run.workflow_run_id}': {idemp_err}")
+                run.finalization_state = FinalizationState.IDEMPOTENCY_FINALIZED
+
                 transition_workflow_state(
                     run,
                     WorkflowState.COMPLETED,
                     reason="Recovered after full cryptographic authority verification",
                     is_recovery=True,
                 )
-                workflow_idempotency.finalize_run(
-                    run.request_fingerprint,
-                    run.workflow_run_id,
-                    status="COMPLETED",
-                    execution_fingerprint=run.execution_fingerprint,
-                )
+                run.finalization_state = FinalizationState.COMPLETED
                 logger.info(f"Recovered workflow run '{run.workflow_run_id}' as COMPLETED (status: {status_str}).")
             else:
                 # Incomplete or broken authority chain: mark as FAILED (Fail-Closed)
@@ -80,12 +89,17 @@ class WorkflowRecoveryService:
                     reason=f"Recovery failed-closed: {failure_reason}",
                     is_recovery=True,
                 )
-                workflow_idempotency.finalize_run(
-                    run.request_fingerprint,
-                    run.workflow_run_id,
-                    status="FAILED",
-                    execution_fingerprint=run.execution_fingerprint,
-                )
+                run.finalization_state = FinalizationState.NOT_STARTED
+                try:
+                    workflow_idempotency.finalize_stage_b(
+                        execution_fingerprint=run.execution_fingerprint or run.request_fingerprint,
+                        run_id=run.workflow_run_id,
+                        status="FAILED",
+                        finalization_state="FAILED",
+                        request_fingerprint=run.request_fingerprint,
+                    )
+                except Exception as idemp_err:
+                    logger.debug(f"Recovery Stage-B failure finalization notice for '{run.workflow_run_id}': {idemp_err}")
                 logger.warning(f"Marked incomplete workflow run '{run.workflow_run_id}' as FAILED: {failure_reason}")
 
             updated = self.persistence.save_run(run)

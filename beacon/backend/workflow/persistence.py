@@ -13,7 +13,7 @@ import threading
 from typing import Any, Optional, Union
 
 from common.config import settings
-from .models import WorkflowErrorCode, WorkflowRun, WorkflowState
+from .models import FinalizationState, WorkflowErrorCode, WorkflowRun, WorkflowState
 
 logger = logging.getLogger("beacon.workflow.persistence")
 
@@ -56,6 +56,7 @@ class WorkflowPersistenceStore:
                     application_id TEXT NOT NULL,
                     request_fingerprint TEXT NOT NULL,
                     execution_fingerprint TEXT,
+                    finalization_state TEXT,
                     input_set_id TEXT,
                     input_set_hash TEXT,
                     evidence_bundle_id TEXT,
@@ -92,11 +93,26 @@ class WorkflowPersistenceStore:
                 );
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS v2_stage_b_reservations (
+                    execution_fingerprint TEXT PRIMARY KEY,
+                    workflow_run_id TEXT NOT NULL,
+                    owner_run_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    finalization_state TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                """
+            )
 
             # Safe column migrations if existing tables lack Stage-B fields
             cols_runs = {col["name"] for col in conn.execute("PRAGMA table_info(v2_workflow_runs);").fetchall()}
             if "execution_fingerprint" not in cols_runs:
                 conn.execute("ALTER TABLE v2_workflow_runs ADD COLUMN execution_fingerprint TEXT;")
+            if "finalization_state" not in cols_runs:
+                conn.execute("ALTER TABLE v2_workflow_runs ADD COLUMN finalization_state TEXT;")
             if "input_set_id" not in cols_runs:
                 conn.execute("ALTER TABLE v2_workflow_runs ADD COLUMN input_set_id TEXT;")
             if "input_set_hash" not in cols_runs:
@@ -126,12 +142,16 @@ class WorkflowPersistenceStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_v2_idemp_exec_fp ON v2_workflow_idempotency(execution_fingerprint);"
             )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_v2_stage_b_wrun ON v2_stage_b_reservations(workflow_run_id);"
+            )
             conn.commit()
 
     def acquire_persistent_reservation(
         self,
         request_fingerprint: str,
         workflow_run_id: str,
+        force_recompute: bool = False,
     ) -> tuple[bool, Optional[str], str]:
         """Atomically reserves or checks persistent idempotency for a Stage-A request fingerprint across processes.
         
@@ -145,7 +165,7 @@ class WorkflowPersistenceStore:
                 (request_fingerprint,),
             ).fetchone()
 
-            if row:
+            if row and not force_recompute:
                 existing_run_id = row["workflow_run_id"]
                 existing_status = row["status"]
                 if existing_status == "IN_PROGRESS" and existing_run_id != workflow_run_id:
@@ -172,34 +192,74 @@ class WorkflowPersistenceStore:
         request_fingerprint: str,
         execution_fingerprint: str,
         workflow_run_id: str,
+        force_recompute: bool = False,
     ) -> tuple[bool, Optional[str], str]:
-        """Atomically binds Stage-B execution identity to an in-progress Stage-A reservation.
+        """Atomically binds Stage-B execution identity to an in-progress Stage-A reservation in durable store.
         
-        Guarantees that only one authoritative execution owns a given Stage-B execution fingerprint.
+        Guarantees that exactly one authoritative execution owns a given Stage-B execution fingerprint.
         """
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
 
-            # Check if another completed run already matches this execution_fingerprint
-            row_completed = conn.execute(
-                "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE execution_fingerprint = ? AND status = 'COMPLETED'",
+            # Check Stage-B table for existing reservation
+            row_b = conn.execute(
+                "SELECT workflow_run_id, owner_run_id, status FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
                 (execution_fingerprint,),
             ).fetchone()
-            if row_completed:
-                conn.commit()
-                return False, row_completed["workflow_run_id"], "COMPLETED"
 
-            # Check if another active in-progress run is currently executing this execution_fingerprint
-            row_in_prog = conn.execute(
-                "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE execution_fingerprint = ? AND status = 'IN_PROGRESS' AND workflow_run_id != ?",
-                (execution_fingerprint, workflow_run_id),
-            ).fetchone()
-            if row_in_prog:
-                conn.commit()
-                return False, row_in_prog["workflow_run_id"], "IN_PROGRESS"
+            if row_b and not force_recompute:
+                existing_b_owner = row_b["workflow_run_id"]
+                existing_b_status = row_b["status"]
+                if existing_b_status == "COMPLETED":
+                    run_row = conn.execute("SELECT state FROM v2_workflow_runs WHERE workflow_run_id = ?", (existing_b_owner,)).fetchone()
+                    if run_row and run_row["state"] == "COMPLETED":
+                        conn.commit()
+                        return False, existing_b_owner, "COMPLETED"
+                elif existing_b_status == "IN_PROGRESS" and existing_b_owner != workflow_run_id:
+                    conn.commit()
+                    return False, existing_b_owner, "IN_PROGRESS"
+                elif existing_b_owner == workflow_run_id:
+                    conn.commit()
+                    return True, workflow_run_id, existing_b_status
 
-            # Update current run's idempotency record to bind execution_fingerprint
+            # Also check Stage-A idempotency table for any completed run matching this execution_fingerprint
+            if not force_recompute:
+                row_completed = conn.execute(
+                    "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE execution_fingerprint = ? AND status = 'COMPLETED'",
+                    (execution_fingerprint,),
+                ).fetchone()
+                if row_completed and row_completed["workflow_run_id"] != workflow_run_id:
+                    run_row_a = conn.execute("SELECT state FROM v2_workflow_runs WHERE workflow_run_id = ?", (row_completed["workflow_run_id"],)).fetchone()
+                    if run_row_a and run_row_a["state"] == "COMPLETED":
+                        conn.commit()
+                        return False, row_completed["workflow_run_id"], "COMPLETED"
+
+                # Check if another active in-progress run is currently executing this execution_fingerprint
+                row_in_prog = conn.execute(
+                    "SELECT workflow_run_id, status FROM v2_workflow_idempotency WHERE execution_fingerprint = ? AND status = 'IN_PROGRESS' AND workflow_run_id != ?",
+                    (execution_fingerprint, workflow_run_id),
+                ).fetchone()
+                if row_in_prog:
+                    conn.commit()
+                    return False, row_in_prog["workflow_run_id"], "IN_PROGRESS"
+
+            # Claim Stage-B reservation in dedicated table
+            conn.execute(
+                """
+                INSERT INTO v2_stage_b_reservations (execution_fingerprint, workflow_run_id, owner_run_id, status, finalization_state, created_at, updated_at)
+                VALUES (?, ?, ?, 'IN_PROGRESS', 'NOT_STARTED', ?, ?)
+                ON CONFLICT(execution_fingerprint) DO UPDATE SET
+                    workflow_run_id = excluded.workflow_run_id,
+                    owner_run_id = excluded.owner_run_id,
+                    status = 'IN_PROGRESS',
+                    finalization_state = 'NOT_STARTED',
+                    updated_at = excluded.updated_at;
+                """,
+                (execution_fingerprint, workflow_run_id, workflow_run_id, now, now),
+            )
+
+            # Update current run's Stage-A idempotency record to bind execution_fingerprint
             conn.execute(
                 """
                 UPDATE v2_workflow_idempotency
@@ -217,26 +277,67 @@ class WorkflowPersistenceStore:
         workflow_run_id: str,
         status: str = "COMPLETED",
         execution_fingerprint: Optional[str] = None,
+        finalization_state: Optional[str] = None,
     ) -> None:
-        """Updates persistent idempotency record upon completion or failure, enforcing ownership safety."""
+        """Updates persistent idempotency records upon completion or failure, enforcing ownership safety across Stage-A and Stage-B."""
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._get_connection() as conn:
             conn.execute("BEGIN IMMEDIATE;")
-            row = conn.execute(
+
+            # 1. Finalize Stage-B reservation if execution_fingerprint is provided
+            if execution_fingerprint:
+                row_b = conn.execute(
+                    "SELECT workflow_run_id, owner_run_id, status FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
+                    (execution_fingerprint,),
+                ).fetchone()
+
+                if row_b:
+                    existing_b_owner = row_b["workflow_run_id"]
+                    existing_b_status = row_b["status"]
+                    if existing_b_owner != workflow_run_id and existing_b_status == "COMPLETED":
+                        if status == "FAILED":
+                            pass
+                        else:
+                            run_row_b = conn.execute("SELECT state FROM v2_workflow_runs WHERE workflow_run_id = ?", (existing_b_owner,)).fetchone()
+                            if run_row_b and run_row_b["state"] == "COMPLETED":
+                                conn.commit()
+                                raise WorkflowPersistenceConflictError(
+                                    f"Cannot finalize Stage-B reservation for '{execution_fingerprint[:12]}': owned by run '{existing_b_owner}'"
+                                )
+
+                conn.execute(
+                    """
+                    INSERT INTO v2_stage_b_reservations (execution_fingerprint, workflow_run_id, owner_run_id, status, finalization_state, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(execution_fingerprint) DO UPDATE SET
+                        workflow_run_id = excluded.workflow_run_id,
+                        owner_run_id = excluded.owner_run_id,
+                        status = excluded.status,
+                        finalization_state = COALESCE(excluded.finalization_state, v2_stage_b_reservations.finalization_state),
+                        updated_at = excluded.updated_at;
+                    """,
+                    (execution_fingerprint, workflow_run_id, workflow_run_id, status, finalization_state or status, now, now),
+                )
+
+            # 2. Finalize Stage-A record
+            row_a = conn.execute(
                 "SELECT workflow_run_id, status, execution_fingerprint FROM v2_workflow_idempotency WHERE request_fingerprint = ?",
                 (request_fingerprint,),
             ).fetchone()
 
-            if row:
-                existing_owner = row["workflow_run_id"]
-                existing_status = row["status"]
-                # Ownership check: if already finalized by another owner and not failed, prevent overwrite
+            if row_a:
+                existing_owner = row_a["workflow_run_id"]
+                existing_status = row_a["status"]
+                # Ownership check: if already finalized by another owner as COMPLETED, prevent overwrite
                 if existing_owner != workflow_run_id and existing_status == "COMPLETED":
-                    conn.commit()
-                    raise WorkflowPersistenceConflictError(
-                        f"Cannot finalize reservation for '{request_fingerprint[:12]}': owned by run '{existing_owner}'"
-                    )
-                exec_fp = execution_fingerprint or row["execution_fingerprint"]
+                    if status == "FAILED":
+                        pass
+                    else:
+                        conn.commit()
+                        raise WorkflowPersistenceConflictError(
+                            f"Cannot finalize reservation for '{request_fingerprint[:12]}': owned by run '{existing_owner}'"
+                        )
+                exec_fp = execution_fingerprint or row_a["execution_fingerprint"]
             else:
                 exec_fp = execution_fingerprint
 
@@ -255,11 +356,22 @@ class WorkflowPersistenceStore:
             conn.commit()
 
     def get_idempotency_record(self, request_fingerprint: str) -> Optional[dict[str, Any]]:
-        """Retrieves persistent idempotency reservation record."""
+        """Retrieves persistent Stage-A idempotency reservation record."""
         with self._lock, self._get_connection() as conn:
             row = conn.execute(
                 "SELECT * FROM v2_workflow_idempotency WHERE request_fingerprint = ?",
                 (request_fingerprint,),
+            ).fetchone()
+            if not row:
+                return None
+            return dict(row)
+
+    def get_stage_b_reservation(self, execution_fingerprint: str) -> Optional[dict[str, Any]]:
+        """Retrieves authoritative Stage-B execution reservation record."""
+        with self._lock, self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
+                (execution_fingerprint,),
             ).fetchone()
             if not row:
                 return None
@@ -276,27 +388,29 @@ class WorkflowPersistenceStore:
             conn.commit()
 
     def save_run(self, run: WorkflowRun) -> WorkflowRun:
-        """Atomically upserts a WorkflowRun record with complete Stage-B identity fields."""
+        """Atomically upserts a WorkflowRun record with complete Stage-B identity and finalization fields."""
         run.updated_at = datetime.now(timezone.utc).isoformat()
         timings_str = json.dumps(run.stage_timings_ms, sort_keys=True)
         meta_str = json.dumps(run.metadata, sort_keys=True)
+        fin_state_str = run.finalization_state.value if (run.finalization_state and hasattr(run.finalization_state, "value")) else (str(run.finalization_state) if run.finalization_state else None)
 
         with self._lock, self._get_connection() as conn:
             conn.execute(
                 """
                 INSERT INTO v2_workflow_runs (
                     workflow_run_id, application_id, request_fingerprint, execution_fingerprint,
-                    input_set_id, input_set_hash, evidence_bundle_id, state,
+                    finalization_state, input_set_id, input_set_hash, evidence_bundle_id, state,
                     error_code, error_message, created_at, updated_at, completed_at,
                     evidence_session_id, evaluation_id, oracle_set_id, oracle_set_hash,
                     threshold_resolution_id, threshold_resolution_fingerprint,
                     certification_id, certification_status, certification_score,
                     explanation_id, stage_timings_json, metadata_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(workflow_run_id) DO UPDATE SET
                     application_id = excluded.application_id,
                     request_fingerprint = excluded.request_fingerprint,
                     execution_fingerprint = excluded.execution_fingerprint,
+                    finalization_state = excluded.finalization_state,
                     input_set_id = excluded.input_set_id,
                     input_set_hash = excluded.input_set_hash,
                     evidence_bundle_id = excluded.evidence_bundle_id,
@@ -323,6 +437,7 @@ class WorkflowPersistenceStore:
                     run.application_id,
                     run.request_fingerprint,
                     run.execution_fingerprint,
+                    fin_state_str,
                     run.input_set_id,
                     run.input_set_hash,
                     run.evidence_bundle_id,
@@ -467,11 +582,20 @@ class WorkflowPersistenceStore:
             except ValueError:
                 err_enum = WorkflowErrorCode.INTERNAL_ERROR
 
+        fin_val = row["finalization_state"] if "finalization_state" in keys else None
+        fin_enum = None
+        if fin_val:
+            try:
+                fin_enum = FinalizationState(fin_val)
+            except ValueError:
+                fin_enum = None
+
         return WorkflowRun(
             workflow_run_id=row["workflow_run_id"],
             application_id=row["application_id"],
             request_fingerprint=row["request_fingerprint"],
             execution_fingerprint=row["execution_fingerprint"] if "execution_fingerprint" in keys else None,
+            finalization_state=fin_enum,
             input_set_id=row["input_set_id"] if "input_set_id" in keys else None,
             input_set_hash=row["input_set_hash"] if "input_set_hash" in keys else None,
             evidence_bundle_id=row["evidence_bundle_id"] if "evidence_bundle_id" in keys else None,
@@ -494,6 +618,10 @@ class WorkflowPersistenceStore:
             stage_timings_ms=timings,
             metadata=meta,
         )
+
+    def find_execution_by_fingerprint(self, execution_fingerprint: str, completed_only: bool = True) -> Optional[WorkflowRun]:
+        """Alias for find_run_by_execution_fingerprint."""
+        return self.find_run_by_execution_fingerprint(execution_fingerprint, completed_only=completed_only)
 
 
 workflow_persistence = WorkflowPersistenceStore()

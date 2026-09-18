@@ -44,16 +44,18 @@ class WorkflowIdempotencyManager:
         request_fingerprint: str,
         execution_fingerprint: str,
         workflow_run_id: str,
+        force_recompute: bool = False,
     ) -> tuple[bool, Optional[str], str]:
         """Atomically binds Stage-B execution identity to an in-progress Stage-A reservation."""
         return self.persistence.bind_execution_identity(
             request_fingerprint=request_fingerprint,
             execution_fingerprint=execution_fingerprint,
             workflow_run_id=workflow_run_id,
+            force_recompute=force_recompute,
         )
 
     @contextmanager
-    def acquire_execution_lock(self, fingerprint: str, run_id: Optional[str] = None):
+    def acquire_execution_lock(self, fingerprint: str, run_id: Optional[str] = None, force_recompute: bool = False):
         """Acquires a Stage-A execution lock (thread-safe and persistent across processes) to prevent duplicate initialization."""
         with self._global_lock:
             if fingerprint not in self._active_locks:
@@ -69,14 +71,10 @@ class WorkflowIdempotencyManager:
         existing_status = "UNKNOWN"
         try:
             if run_id:
-                res_ok, existing_id, existing_status = self.persistence.acquire_persistent_reservation(fingerprint, run_id)
+                res_ok, existing_id, existing_status = self.persistence.acquire_persistent_reservation(fingerprint, run_id, force_recompute=force_recompute)
             yield (res_ok, existing_id, existing_status)
         finally:
             lock.release()
-            with self._global_lock:
-                if fingerprint in self._active_locks:
-                    # Clean up unused locks
-                    del self._active_locks[fingerprint]
 
     def finalize_run(
         self,
@@ -84,6 +82,7 @@ class WorkflowIdempotencyManager:
         run_id: str,
         status: str = "COMPLETED",
         execution_fingerprint: Optional[str] = None,
+        finalization_state: Optional[str] = None,
     ) -> None:
         """Finalizes the persistent reservation for a completed or failed run, enforcing ownership safety."""
         self.persistence.finalize_persistent_reservation(
@@ -91,6 +90,24 @@ class WorkflowIdempotencyManager:
             workflow_run_id=run_id,
             status=status,
             execution_fingerprint=execution_fingerprint,
+            finalization_state=finalization_state,
+        )
+
+    def finalize_stage_b(
+        self,
+        execution_fingerprint: str,
+        run_id: str,
+        status: str = "COMPLETED",
+        finalization_state: Optional[str] = None,
+        request_fingerprint: Optional[str] = None,
+    ) -> None:
+        """Finalizes the authoritative Stage-B execution reservation, enforcing ownership safety."""
+        self.persistence.finalize_persistent_reservation(
+            request_fingerprint=request_fingerprint or execution_fingerprint,
+            workflow_run_id=run_id,
+            status=status,
+            execution_fingerprint=execution_fingerprint,
+            finalization_state=finalization_state,
         )
 
 

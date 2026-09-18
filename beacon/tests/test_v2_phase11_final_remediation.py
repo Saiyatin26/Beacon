@@ -22,6 +22,7 @@ import sqlite3
 import uuid
 
 from workflow.models import (
+    FinalizationState,
     WorkflowState,
     WorkflowErrorCode,
     WorkflowRunRequest,
@@ -913,4 +914,76 @@ def test_46_recovery_state_machine_strict_transition_enforcement():
     # But transitioning to FAILED in recovery mode from any state is permitted
     transition_workflow_state(run_early, WorkflowState.FAILED, reason="Crash recovery fail-closed", is_recovery=True)
     assert run_early.state == WorkflowState.FAILED
+
+
+def test_47_storage_level_stage_b_uniqueness_constraint():
+    """Proves that Stage-B execution identity is uniquely constrained at the database layer."""
+    store1 = WorkflowPersistenceStore()
+    store2 = WorkflowPersistenceStore()
+
+    exec_fp = "exec_fp_unique_storage_test_001"
+    req_fp_a = "req_fp_a_123"
+    req_fp_b = "req_fp_b_456"
+
+    # Process A reserves and binds exec_fp
+    store1.acquire_persistent_reservation(req_fp_a, "RUN-A")
+    ok1, owner1, st1 = store1.bind_execution_identity(req_fp_a, exec_fp, "RUN-A")
+    assert ok1 is True
+    assert owner1 == "RUN-A"
+
+    # Process B with different request fingerprint attempts to bind same exec_fp
+    store2.acquire_persistent_reservation(req_fp_b, "RUN-B")
+    ok2, owner2, st2 = store2.bind_execution_identity(req_fp_b, exec_fp, "RUN-B")
+    assert ok2 is False
+    assert owner2 == "RUN-A"
+    assert st2 == "IN_PROGRESS"
+
+    # Direct Stage-B lookup returns RUN-A
+    b_rec = store2.get_stage_b_reservation(exec_fp)
+    assert b_rec is not None
+    assert b_rec["workflow_run_id"] == "RUN-A"
+    assert b_rec["owner_run_id"] == "RUN-A"
+
+
+def test_48_finalization_state_crash_recovery_progression():
+    """Tests durable finalization state progression across crashes."""
+    req = WorkflowRunRequest(application_id="loan_test_app", target_index=0)
+    res = workflow_engine.execute_workflow(req)
+    assert res.state == WorkflowState.COMPLETED
+
+    run = workflow_persistence.get_run(res.workflow_run_id)
+    assert run is not None
+    assert run.finalization_state == FinalizationState.COMPLETED
+
+    # Simulate crash at FINALIZATION_PENDING stage
+    run.state = WorkflowState.PERSISTING
+    run.finalization_state = FinalizationState.FINALIZATION_PENDING
+    workflow_persistence.save_run(run)
+
+    # Recovery resumes from FINALIZATION_PENDING to IDEMPOTENCY_FINALIZED to COMPLETED
+    rec = workflow_recovery.recover_interrupted_workflows()
+    assert len(rec) == 1
+    assert rec[0].state == WorkflowState.COMPLETED
+    assert rec[0].finalization_state == FinalizationState.COMPLETED
+
+    # Reload and verify
+    reloaded = workflow_persistence.get_run(res.workflow_run_id)
+    assert reloaded.state == WorkflowState.COMPLETED
+    assert reloaded.finalization_state == FinalizationState.COMPLETED
+
+
+def test_49_cross_request_same_stage_b_lookup():
+    """Different Stage-A requests resolving to identical Stage-B identity share single authoritative completed run."""
+    req1 = WorkflowRunRequest(application_id="loan_test_app", target_index=0, idempotency_key="key_1")
+    res1 = workflow_engine.execute_workflow(req1)
+    assert res1.state == WorkflowState.COMPLETED
+
+    run1 = workflow_persistence.get_run(res1.workflow_run_id)
+    exec_fp = run1.execution_fingerprint
+
+    # Authoritative direct Stage-B lookup
+    found = workflow_persistence.find_execution_by_fingerprint(exec_fp, completed_only=True)
+    assert found is not None
+    assert found.workflow_run_id == res1.workflow_run_id
+    assert found.execution_fingerprint == exec_fp
 

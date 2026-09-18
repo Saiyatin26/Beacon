@@ -28,6 +28,17 @@ class WorkflowState(str, Enum):
     INCONCLUSIVE = "INCONCLUSIVE"
 
 
+class FinalizationState(str, Enum):
+    """Durable state progression during workflow persistence and finalization."""
+    NOT_STARTED = "NOT_STARTED"
+    PERSISTING = "PERSISTING"
+    CERTIFICATION_VERIFIED = "CERTIFICATION_VERIFIED"
+    AUDIT_VERIFIED = "AUDIT_VERIFIED"
+    FINALIZATION_PENDING = "FINALIZATION_PENDING"
+    IDEMPOTENCY_FINALIZED = "IDEMPOTENCY_FINALIZED"
+    COMPLETED = "COMPLETED"
+
+
 class WorkflowStateTransitionError(RuntimeError):
     """Raised when an illegal or invariant-violating workflow state transition is attempted."""
     pass
@@ -213,6 +224,7 @@ class WorkflowRun(BaseModel):
     input_set_id: Optional[str] = None
     input_set_hash: Optional[str] = None
     state: WorkflowState = WorkflowState.INITIALIZED
+    finalization_state: Optional[FinalizationState] = FinalizationState.NOT_STARTED
     error_code: Optional[WorkflowErrorCode] = None
     error_message: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

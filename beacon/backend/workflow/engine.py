@@ -105,6 +105,7 @@ from threshold.persistence import ThresholdPersistenceStore, threshold_persisten
 
 from .idempotency import WorkflowIdempotencyManager, workflow_idempotency
 from .models import (
+    FinalizationState,
     WorkflowErrorCode,
     WorkflowResult,
     WorkflowRun,
@@ -187,7 +188,7 @@ class CanonicalV2WorkflowEngine:
         # 2. Create Candidate Run ID & Acquire Initial Stage-A Reservation
         run_id = f"WRUN-{uuid.uuid4().hex[:12]}"
 
-        with self.idempotency_mgr.acquire_execution_lock(stage_a_fp, run_id=run_id) as (res_ok, existing_owner_id, existing_status):
+        with self.idempotency_mgr.acquire_execution_lock(stage_a_fp, run_id=run_id, force_recompute=request.force_recompute) as (res_ok, existing_owner_id, existing_status):
             if not res_ok:
                 if existing_status == "IN_PROGRESS":
                     log_operational_event(
@@ -248,6 +249,7 @@ class CanonicalV2WorkflowEngine:
                     request_fingerprint=stage_a_fp,
                     execution_fingerprint=run.execution_fingerprint,
                     workflow_run_id=run.workflow_run_id,
+                    force_recompute=request.force_recompute,
                 )
                 if not bound_ok:
                     if bound_status == "COMPLETED" and not request.force_recompute:
@@ -256,8 +258,13 @@ class CanonicalV2WorkflowEngine:
                             verified_res = self._verify_and_build_existing_run(existing_run)
                             if verified_res:
                                 logger.info(f"Reusing verified completed run '{existing_run.workflow_run_id}' for Stage-B execution identity.")
+                                self.idempotency_mgr.finalize_run(
+                                    fingerprint=stage_a_fp,
+                                    run_id=existing_run.workflow_run_id,
+                                    status="COMPLETED",
+                                )
                                 return verified_res
-                    if bound_status == "IN_PROGRESS":
+                    if bound_status == "IN_PROGRESS" and not request.force_recompute:
                         log_operational_event(
                             event="workflow_concurrency_conflict",
                             logger_name="beacon.workflow",
@@ -286,9 +293,8 @@ class CanonicalV2WorkflowEngine:
                             )
                             self.idempotency_mgr.finalize_run(
                                 fingerprint=run.request_fingerprint,
-                                run_id=run.workflow_run_id,
+                                run_id=existing_completed.workflow_run_id,
                                 status="COMPLETED",
-                                execution_fingerprint=run.execution_fingerprint,
                             )
                             return verified_res
 
@@ -1243,21 +1249,26 @@ class CanonicalV2WorkflowEngine:
                 WorkflowErrorCode.PERSISTENCE_FAILED,
                 f"Persisted cases count mismatch: expected {len(cases_to_save)}, found {len(persisted_cases)}."
             )
+        run.certification_id = artifact.certification_id
+        run.finalization_state = FinalizationState.CERTIFICATION_VERIFIED
+        self.persistence.save_run(run)
 
-        # 5. Record structured audit log
-        status_str = artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status)
+        # 5. Mandatory structured audit event logging
         logged_event = audit_logger.log(
-            project_id=spec.application_id,
+            project_id=run.application_id,
             action=AuditAction.CERTIFICATION_COMPLETE,
-            status="SUCCESS" if artifact.certified else "INFO",
+            status="SUCCESS" if artifact.status == CertificationStatus.CERTIFIED else "FAILED",
             certification_id=artifact.certification_id,
             details={
                 "workflow_run_id": run.workflow_run_id,
-                "status": status_str,
-                "score": artifact.score,
-                "threshold_resolution_id": threshold_res.resolution_id,
-                "threshold_resolution_fingerprint": threshold_res.fingerprint,
+                "artifact_hash": artifact.artifact_hash,
+                "unique_input_count": len(cases_to_save),
+                "threshold_resolution_id": getattr(artifact, "threshold_resolution_id", None) or (artifact.context.threshold_resolution_id if artifact.context else None),
+                "oracle_set_id": artifact.oracle_set_id,
                 "evaluation_id": eval_result.evaluation_id,
+                "target_index": getattr(artifact.context, "target_index", 0) if artifact.context else 0,
+                "score": artifact.score,
+                "user_id": run.metadata.get("user_id", "system"),
             },
         )
         if not logged_event:
@@ -1278,20 +1289,34 @@ class CanonicalV2WorkflowEngine:
                 WorkflowErrorCode.PERSISTENCE_FAILED,
                 f"Mandatory audit verification failed for certification '{artifact.certification_id}'."
             )
+        run.metadata["audit_persisted"] = True
+        run.finalization_state = FinalizationState.AUDIT_VERIFIED
+        self.persistence.save_run(run)
 
-        # 7. Finalize persistent reservation and mark workflow COMPLETED via state machine
-        self.idempotency_mgr.finalize_run(
-            fingerprint=run.request_fingerprint,
+        # 7. Durable Finalization Pending
+        run.finalization_state = FinalizationState.FINALIZATION_PENDING
+        self.persistence.save_run(run)
+
+        # 8. Finalize persistent Stage-B idempotency reservation
+        self.idempotency_mgr.finalize_stage_b(
+            execution_fingerprint=run.execution_fingerprint,
             run_id=run.workflow_run_id,
             status="COMPLETED",
-            execution_fingerprint=run.execution_fingerprint,
+            finalization_state="IDEMPOTENCY_FINALIZED",
+            request_fingerprint=run.request_fingerprint,
         )
+        run.finalization_state = FinalizationState.IDEMPOTENCY_FINALIZED
+        self.persistence.save_run(run)
+
+        # 9. Mark workflow COMPLETED via centralized state machine
         self.transition_state(
             run,
             WorkflowState.COMPLETED,
-            reason="Certification and mandatory audit persisted and verified",
+            reason="Certification, mandatory audit, and Stage-B idempotency durably finalized",
             metadata={"audit_persisted": True}
         )
+        run.finalization_state = FinalizationState.COMPLETED
+        self.persistence.save_run(run)
         timings["persistence_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
         return "PERSISTED"
 
@@ -1317,8 +1342,8 @@ class CanonicalV2WorkflowEngine:
             try:
                 run.completed_at = datetime.now(timezone.utc).isoformat()
                 self.persistence.save_run(run)
-            except Exception:
-                pass
+            except Exception as save_err:
+                logger.error(f"Failed to save failed run state '{run.workflow_run_id}': {save_err}")
 
         try:
             self.idempotency_mgr.finalize_run(
@@ -1326,9 +1351,10 @@ class CanonicalV2WorkflowEngine:
                 run_id=run.workflow_run_id,
                 status="FAILED",
                 execution_fingerprint=run.execution_fingerprint,
+                finalization_state="FAILED",
             )
-        except Exception:
-            pass
+        except Exception as idemp_err:
+            logger.warning(f"Failed to finalize idempotency reservation for failed run '{run.workflow_run_id}': {idemp_err}")
 
         log_operational_event(
             event="workflow_failed",
