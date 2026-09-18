@@ -138,8 +138,12 @@ def compute_execution_fingerprint(
     input_count: int,
     policy_id: Optional[str] = None,
     rule_config_mode: Optional[str] = None,
+    legacy_source_identity: Optional[dict[str, Any]] = None,
+    modern_source_identity: Optional[dict[str, Any]] = None,
+    evaluation_mode: Optional[str] = None,
+    specification_fingerprint: Optional[str] = None,
 ) -> str:
-    """Computes deterministic Stage B execution identity over resolved material inputs."""
+    """Computes deterministic Stage B execution identity over resolved material inputs including immutable repository identities."""
     payload = {
         "application_id": application_id,
         "ref_target_id": ref_target_id,
@@ -152,8 +156,12 @@ def compute_execution_fingerprint(
         "input_count": input_count,
         "policy_id": policy_id or "",
         "rule_config_mode": rule_config_mode or "",
+        "legacy_source_identity": legacy_source_identity or {},
+        "modern_source_identity": modern_source_identity or {},
+        "evaluation_mode": evaluation_mode or "",
+        "specification_fingerprint": specification_fingerprint or "",
     }
-    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 

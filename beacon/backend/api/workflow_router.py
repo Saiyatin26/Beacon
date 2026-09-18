@@ -58,6 +58,7 @@ from application.models import (
 )
 from application.repository import application_repository
 from certification.adapter_registry import adapter_registry
+from certification.repository import certification_repository
 from threshold.persistence import threshold_persistence
 from threshold.models import ThresholdPolicy, DifferenceMetric, ThresholdStrategy
 
@@ -376,7 +377,7 @@ def _run_repository_certification_pipeline(
 
     result = workflow_engine.execute_workflow(wf_req, spec_override=spec)
 
-    # 7. Enrich result metadata with repository facts
+    # 7. Enrich result metadata with repository facts and execution authority objects
     result.metadata = result.metadata or {}
     result.metadata["repository_certification"] = True
     result.metadata["evaluation_mode"] = req.evaluation_mode
@@ -389,6 +390,55 @@ def _run_repository_certification_pipeline(
         input_discovery_res.model_dump(exclude={"test_inputs"}) if input_discovery_res else input_discovery_meta
     )
     result.metadata["inputs_count"] = len(test_inputs)
+    result.metadata["discovered_rules"] = analysis_result.discovered_rules
+
+    if result.threshold_resolution_id:
+        th_res = threshold_persistence.get_resolution(result.threshold_resolution_id)
+        if th_res:
+            result.metadata["threshold_resolution"] = {
+                "resolution_id": th_res.resolution_id,
+                "metric": th_res.metric.value if hasattr(th_res.metric, "value") else str(th_res.metric),
+                "strategy": th_res.strategy.value if hasattr(th_res.strategy, "value") else str(th_res.strategy),
+                "status": th_res.status.value if hasattr(th_res.status, "value") else str(th_res.status),
+                "raw_value": th_res.raw_value,
+                "final_value": th_res.final_value,
+                "sample_count": th_res.sample_count,
+                "minimum_required_samples": th_res.minimum_required_samples,
+                "estimator": th_res.estimator.value if hasattr(th_res.estimator, "value") else (str(th_res.estimator) if th_res.estimator else None),
+                "outlier_policy": th_res.outlier_policy.value if hasattr(th_res.outlier_policy, "value") else (str(th_res.outlier_policy) if th_res.outlier_policy else "NONE"),
+                "outliers_detected": th_res.outliers_detected,
+                "fingerprint": th_res.fingerprint,
+                "fallback_used": th_res.fallback_used,
+            }
+
+    if result.artifact_id:
+        try:
+            persisted_cases = certification_repository.list_certification_cases(result.artifact_id, limit=20)
+            rep_cases = []
+            for c in persisted_cases:
+                rep_cases.append({
+                    "case_index": c.case_index,
+                    "input": json.loads(c.input_json) if isinstance(c.input_json, str) else c.input_json,
+                    "legacy_output": json.loads(c.legacy_output_json) if isinstance(c.legacy_output_json, str) else c.legacy_output_json,
+                    "modern_output": json.loads(c.modern_output_json) if isinstance(c.modern_output_json, str) else c.modern_output_json,
+                    "oracle_result": c.oracle_result,
+                    "classification": c.classification,
+                })
+            result.metadata["representative_cases"] = rep_cases
+        except Exception as c_err:
+            logger.debug(f"Representative cases extraction note: {c_err}")
+
+    persisted_run = workflow_persistence.get_run(result.workflow_run_id)
+    if persisted_run:
+        result.metadata["execution_fingerprint"] = persisted_run.execution_fingerprint
+        result.metadata["finalization_state"] = persisted_run.finalization_state.value if persisted_run.finalization_state else "COMPLETED"
+        result.metadata["oracle_set_id"] = persisted_run.oracle_set_id
+        result.metadata["oracle_set_hash"] = persisted_run.oracle_set_hash
+        try:
+            persisted_run.metadata = {**(persisted_run.metadata or {}), **result.metadata}
+            workflow_persistence.save_run(persisted_run)
+        except Exception as p_err:
+            logger.debug(f"Could not update run metadata: {p_err}")
 
     return result
 

@@ -165,10 +165,10 @@ class WorkflowPersistenceStore:
                 (request_fingerprint,),
             ).fetchone()
 
-            if row and not force_recompute:
+            if row:
                 existing_run_id = row["workflow_run_id"]
                 existing_status = row["status"]
-                if existing_status == "IN_PROGRESS" and existing_run_id != workflow_run_id:
+                if existing_status == "IN_PROGRESS" and existing_run_id != workflow_run_id and not force_recompute:
                     # Active concurrent execution by another process/worker
                     conn.commit()
                     return False, existing_run_id, "IN_PROGRESS"
@@ -197,6 +197,7 @@ class WorkflowPersistenceStore:
         """Atomically binds Stage-B execution identity to an in-progress Stage-A reservation in durable store.
         
         Guarantees that exactly one authoritative execution owns a given Stage-B execution fingerprint.
+        Active reservations owned by another execution cannot be stolen or overwritten.
         """
         now = datetime.now(timezone.utc).isoformat()
         with self._lock, self._get_connection() as conn:
@@ -204,21 +205,22 @@ class WorkflowPersistenceStore:
 
             # Check Stage-B table for existing reservation
             row_b = conn.execute(
-                "SELECT workflow_run_id, owner_run_id, status FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
+                "SELECT workflow_run_id, owner_run_id, status, finalization_state FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
                 (execution_fingerprint,),
             ).fetchone()
 
-            if row_b and not force_recompute:
+            if row_b:
                 existing_b_owner = row_b["workflow_run_id"]
                 existing_b_status = row_b["status"]
-                if existing_b_status == "COMPLETED":
+                if existing_b_status == "COMPLETED" and not force_recompute:
                     run_row = conn.execute("SELECT state FROM v2_workflow_runs WHERE workflow_run_id = ?", (existing_b_owner,)).fetchone()
                     if run_row and run_row["state"] == "COMPLETED":
                         conn.commit()
                         return False, existing_b_owner, "COMPLETED"
-                elif existing_b_status == "IN_PROGRESS" and existing_b_owner != workflow_run_id:
+                elif existing_b_status in ("IN_PROGRESS", "PERSISTING", "CERTIFICATION_VERIFIED", "AUDIT_VERIFIED", "FINALIZATION_PENDING") and existing_b_owner != workflow_run_id:
+                    # Active reservation owned by another execution cannot be stolen
                     conn.commit()
-                    return False, existing_b_owner, "IN_PROGRESS"
+                    return False, existing_b_owner, existing_b_status
                 elif existing_b_owner == workflow_run_id:
                     conn.commit()
                     return True, workflow_run_id, existing_b_status

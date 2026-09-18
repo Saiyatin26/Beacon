@@ -239,6 +239,11 @@ class ThresholdResolution(BaseModel):
         }
         return compute_deterministic_hash(payload)
 
+    @property
+    def effective_threshold(self) -> float:
+        """Returns the final resolved mathematical threshold value."""
+        return self.final_value if self.final_value is not None else 0.0
+
     def model_post_init(self, __context: Any) -> None:
         if not self.fingerprint:
             object.__setattr__(self, "fingerprint", self.compute_fingerprint())

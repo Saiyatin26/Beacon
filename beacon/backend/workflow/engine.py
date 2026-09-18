@@ -331,9 +331,9 @@ class CanonicalV2WorkflowEngine:
                 if not oracle_set:
                     return self._fail_run(run, WorkflowErrorCode.ORACLE_AUTHORITY_MISSING, "OracleSet resolution missing.")
 
-                # 9. Stage 7: Phase 8 Exact Threshold Resolution
+                # 9. Stage 7: Phase 8 Exact Threshold Resolution (Automatic Evidence-Based)
                 self.transition_state(run, WorkflowState.RESOLVING_THRESHOLDS, "Resolving and verifying Phase 8 ThresholdResolution")
-                threshold_res = self._stage_resolve_thresholds(spec, run, timings)
+                threshold_res = self._stage_resolve_thresholds(spec, bundle, eval_result, all_evidence_records, run, timings)
                 if isinstance(threshold_res, WorkflowResult):
                     return threshold_res
                 if not threshold_res:
@@ -482,6 +482,12 @@ class CanonicalV2WorkflowEngine:
         ref_s_hash = (getattr(ref_target, "source_hash", "") or getattr(ref_adapter, "implementation_hash", "") or "") if ref_target else getattr(ref_adapter, "implementation_hash", "")
         tgt_s_hash = (getattr(tgt_target, "source_hash", "") or getattr(target_adapter, "implementation_hash", "") or "") if tgt_target else getattr(target_adapter, "implementation_hash", "")
 
+        meta = getattr(spec, "metadata", {}) or {}
+        legacy_src = meta.get("legacy_provenance") or {}
+        modern_src = meta.get("modern_provenance") or {}
+        eval_mode = meta.get("evaluation_mode") or getattr(request, "evaluation_mode", "CONTROLLED")
+        spec_fp = meta.get("specification_fingerprint", "")
+
         input_set_canonical_hash = compute_input_set_canonical_hash(test_inputs)
         exec_fp = compute_execution_fingerprint(
             application_id=spec.application_id,
@@ -495,6 +501,10 @@ class CanonicalV2WorkflowEngine:
             input_count=len(test_inputs),
             policy_id=f"POL-{spec.application_id}",
             rule_config_mode=spec.rule_config.mode if (spec and spec.rule_config) else "CONTROLLED",
+            legacy_source_identity=legacy_src,
+            modern_source_identity=modern_src,
+            evaluation_mode=eval_mode,
+            specification_fingerprint=spec_fp,
         )
         run.execution_fingerprint = exec_fp
         run.input_set_hash = input_set_canonical_hash
@@ -1010,26 +1020,94 @@ class CanonicalV2WorkflowEngine:
     def _stage_resolve_thresholds(
         self,
         spec: ApplicationSpec,
+        bundle: EvidenceBundle,
+        eval_result: EvaluationResult,
+        all_evidence_records: list[EvidenceRecord],
         run: WorkflowRun,
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
 
-        # Retrieve authoritative policy without fabricating silent defaults
+        # 1. Extract clean numerical reference observations (Anti-Target-Contamination: Reference ONLY)
+        clean_observations: list[float] = []
+        ev_ids: list[str] = []
+        ref_exec_ids = set(bundle.reference_execution_ids) if bundle else set()
+
+        for rec in (all_evidence_records or []):
+            if rec.role == "reference" or (rec.execution_id and rec.execution_id in ref_exec_ids):
+                ev_ids.append(rec.record_id)
+                out = rec.output
+                if isinstance(out, (int, float)) and not (isinstance(out, bool) or math.isnan(out) or math.isinf(out)):
+                    clean_observations.append(float(out))
+                elif isinstance(out, dict):
+                    for v in out.values():
+                        if isinstance(v, (int, float)) and not (isinstance(v, bool) or math.isnan(v) or math.isinf(v)):
+                            clean_observations.append(float(v))
+
+        if not clean_observations and eval_result and getattr(eval_result, "input_results", None):
+            for item_res in eval_result.input_results:
+                ref_v = getattr(item_res, "reference_value", None)
+                if isinstance(ref_v, (int, float)) and not (isinstance(ref_v, bool) or math.isnan(ref_v) or math.isinf(ref_v)):
+                    clean_observations.append(float(ref_v))
+                elif isinstance(ref_v, dict):
+                    for v in ref_v.values():
+                        if isinstance(v, (int, float)) and not (isinstance(v, bool) or math.isnan(v) or math.isinf(v)):
+                            clean_observations.append(float(v))
+
+        # 2. Retrieve authoritative policy or automatically derive evidence-driven policy
         th_policy = self.thresh_persistence.get_policy(f"POL-{spec.application_id}")
         if not th_policy:
             th_policy = self.thresh_persistence.get_policy(spec.application_id)
 
         if not th_policy:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
-                f"Authoritative ThresholdPolicy 'POL-{spec.application_id}' is missing. Production workflows cannot fabricate default policies.",
-            )
+            # Derive evidence-grounded policy from actual repository observations
+            metric = DifferenceMetric.ABSOLUTE_DIFF
+            obs_count = len(clean_observations)
+            if obs_count >= 5:
+                th_policy = ThresholdPolicy(
+                    policy_id=f"POL-{spec.application_id}",
+                    version="1.0.0",
+                    description=f"Auto-derived evidence-based threshold policy for {spec.application_id}",
+                    metric=metric,
+                    strategy=ThresholdStrategy.EVIDENCE_DERIVED,
+                    estimator=EstimatorType.IQR,
+                    parameters={"k": 1.5},
+                    minimum_samples=5,
+                    minimum_bound=0.0,
+                    maximum_bound=None,
+                )
+            elif obs_count > 0:
+                is_zero_variance = (len(set(clean_observations)) <= 1)
+                th_policy = ThresholdPolicy(
+                    policy_id=f"POL-{spec.application_id}",
+                    version="1.0.0",
+                    description=f"Auto-derived discrete threshold policy for {spec.application_id}",
+                    metric=metric,
+                    strategy=ThresholdStrategy.EVIDENCE_DERIVED,
+                    estimator=EstimatorType.RANGE,
+                    parameters={"k": 1.0},
+                    minimum_samples=1,
+                    minimum_bound=0.0,
+                    maximum_bound=0.0 if is_zero_variance else None,
+                )
+            else:
+                meta_th = (getattr(spec, "metadata", {}) or {}).get("threshold_policy")
+                if meta_th and isinstance(meta_th, dict):
+                    th_policy = ThresholdPolicy(**meta_th)
+                else:
+                    return self._fail_run(
+                        run,
+                        WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+                        f"Unable to resolve evidence-driven threshold: insufficient reference observations and no explicit threshold policy registered for '{spec.application_id}'. Magic/arbitrary fallback tolerances are forbidden.",
+                    )
+            self.thresh_persistence.save_policy(th_policy)
 
+        # 3. Deterministic Threshold Resolution Engine Execution
         threshold_res = self.thresh_eng.resolve_threshold(
             metric=th_policy.metric,
             policy=th_policy,
+            reference_observations=clean_observations,
+            evidence_ids=ev_ids,
         )
         if not threshold_res or not getattr(threshold_res, "resolution_id", None):
             return self._fail_run(
@@ -1038,7 +1116,14 @@ class CanonicalV2WorkflowEngine:
                 f"Failed to resolve threshold for metric '{th_policy.metric.value}'.",
             )
 
-        # Strict Authority Check: threshold fingerprint verification
+        if threshold_res.status == ThresholdStatus.INSUFFICIENT_EVIDENCE and not threshold_res.fallback_used:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+                f"Threshold resolution failed-closed: insufficient reference samples ({threshold_res.sample_count} < {threshold_res.minimum_required_samples}) and no verified fallback policy. Arbitrary tolerance injection is forbidden.",
+            )
+
+        # 4. Strict Authority Check: threshold fingerprint verification
         expected_fp = threshold_res.compute_fingerprint()
         if threshold_res.fingerprint != expected_fp:
             return self._fail_run(
@@ -1049,7 +1134,7 @@ class CanonicalV2WorkflowEngine:
 
         self.thresh_persistence.save_resolution(threshold_res)
 
-        # Re-verify persisted resolution
+        # 5. Re-verify persisted resolution
         persisted_res = self.thresh_persistence.get_resolution(threshold_res.resolution_id)
         if not persisted_res or persisted_res.fingerprint != threshold_res.fingerprint:
             return self._fail_run(
@@ -1078,7 +1163,20 @@ class CanonicalV2WorkflowEngine:
     ) -> Any:
         t_stage = time.perf_counter()
 
-        # Strict verification before CertificationEngine execution
+        # Strict cross-binding verification before CertificationEngine execution
+        if getattr(eval_result, "application_id", None) and eval_result.application_id != spec.application_id:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.EVALUATION_FAILED,
+                f"EvaluationResult application '{eval_result.application_id}' does not match workflow '{spec.application_id}'.",
+            )
+        if getattr(oracle_set, "application_id", None) and oracle_set.application_id != spec.application_id:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
+                f"OracleSet application '{oracle_set.application_id}' does not match workflow '{spec.application_id}'.",
+            )
+
         expected_fp = threshold_res.compute_fingerprint()
         if threshold_res.fingerprint != expected_fp:
             return self._fail_run(
@@ -1125,6 +1223,22 @@ class CanonicalV2WorkflowEngine:
                 run,
                 WorkflowErrorCode.CERTIFICATION_FAILED,
                 "CertificationEngine failed to produce a valid CertificationArtifact.",
+            )
+
+        # Verify cross-binding of produced artifact
+        art_thresh_id = artifact.threshold_resolution_id or (artifact.context.threshold_resolution_id if artifact.context else None)
+        if art_thresh_id != threshold_res.resolution_id:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.CERTIFICATION_FAILED,
+                f"CertificationArtifact threshold resolution mismatch ('{art_thresh_id}' vs '{threshold_res.resolution_id}').",
+            )
+
+        if not verify_artifact_integrity(artifact):
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.CERTIFICATION_FAILED,
+                "CertificationArtifact cryptographic content hash verification failed.",
             )
 
         run.certification_id = artifact.certification_id
