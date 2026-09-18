@@ -204,6 +204,9 @@ class WorkflowRun(BaseModel):
     workflow_run_id: str
     application_id: str
     request_fingerprint: str
+    execution_fingerprint: Optional[str] = None
+    input_set_id: Optional[str] = None
+    input_set_hash: Optional[str] = None
     state: WorkflowState = WorkflowState.INITIALIZED
     error_code: Optional[WorkflowErrorCode] = None
     error_message: Optional[str] = None
@@ -213,6 +216,7 @@ class WorkflowRun(BaseModel):
 
     # Linked Stage Authoritative Identifiers
     evidence_session_id: Optional[str] = None
+    evidence_bundle_id: Optional[str] = None
     evaluation_id: Optional[str] = None
     oracle_set_id: Optional[str] = None
     oracle_set_hash: Optional[str] = None

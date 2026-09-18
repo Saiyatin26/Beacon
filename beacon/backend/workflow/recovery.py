@@ -10,7 +10,11 @@ from typing import Optional
 
 from certification.models import verify_artifact_integrity
 from certification.repository import CertificationRepository, certification_repository
+from evaluation.models import verify_evaluation_result_integrity
+from evaluation.persistence import EvaluationPersistenceStore, evaluation_persistence
 from ingestion.audit import AuditAction, audit_logger
+from reconciliation.persistence import ReconciliationPersistenceStore, reconciliation_persistence
+from threshold.persistence import ThresholdPersistenceStore, threshold_persistence
 from .idempotency import workflow_idempotency
 from .models import WorkflowErrorCode, WorkflowRun, WorkflowState, transition_workflow_state
 from .persistence import WorkflowPersistenceStore, workflow_persistence
@@ -25,9 +29,15 @@ class WorkflowRecoveryService:
         self,
         persistence: Optional[WorkflowPersistenceStore] = None,
         cert_repo: Optional[CertificationRepository] = None,
+        eval_persistence: Optional[EvaluationPersistenceStore] = None,
+        rec_persistence: Optional[ReconciliationPersistenceStore] = None,
+        thresh_persistence: Optional[ThresholdPersistenceStore] = None,
     ):
         self.persistence = persistence or workflow_persistence
         self.cert_repo = cert_repo or certification_repository
+        self.eval_persistence = eval_persistence or evaluation_persistence
+        self.rec_persistence = rec_persistence or reconciliation_persistence
+        self.thresh_persistence = thresh_persistence or threshold_persistence
 
     def recover_interrupted_workflows(self) -> list[WorkflowRun]:
         """Audits and resolves any inflight/interrupted workflow runs left in unfinalized states."""
@@ -102,6 +112,15 @@ class WorkflowRecoveryService:
         if not run.threshold_resolution_fingerprint or run.threshold_resolution_fingerprint != art_thresh_fp:
             return False, f"ThresholdResolution fingerprint mismatch between run and artifact."
 
+        try:
+            persisted_thresh = self.thresh_persistence.get_resolution(run.threshold_resolution_id)
+            if not persisted_thresh:
+                return False, f"ThresholdResolution '{run.threshold_resolution_id}' not found in persistence store."
+            if persisted_thresh.compute_fingerprint() != run.threshold_resolution_fingerprint:
+                return False, f"ThresholdResolution '{run.threshold_resolution_id}' computed fingerprint mismatch."
+        except Exception as exc:
+            return False, f"Failed to verify persisted ThresholdResolution: {str(exc)}"
+
         # 5. Oracle Set identity and hash verification
         if run.oracle_set_id and art.oracle_set_id and run.oracle_set_id != art.oracle_set_id:
             return False, f"OracleSet ID mismatch between run and artifact ('{run.oracle_set_id}' vs '{art.oracle_set_id}')."
@@ -109,9 +128,35 @@ class WorkflowRecoveryService:
         if run.oracle_set_hash and art.oracle_set_hash and run.oracle_set_hash != art.oracle_set_hash:
             return False, f"OracleSet hash mismatch between run and artifact."
 
-        # 6. Evaluation result identity verification
+        if run.oracle_set_id:
+            try:
+                persisted_oset = self.rec_persistence.get_oracle_set(run.oracle_set_id)
+                if not persisted_oset:
+                    return False, f"OracleSet '{run.oracle_set_id}' not found in persistence store."
+                if run.oracle_set_hash and persisted_oset.oracle_set_hash != run.oracle_set_hash:
+                    return False, f"OracleSet '{run.oracle_set_id}' hash mismatch in persistence."
+                if persisted_oset.application_id and run.application_id and persisted_oset.application_id != run.application_id:
+                    return False, f"OracleSet application '{persisted_oset.application_id}' mismatch with run '{run.application_id}'."
+                rules_count = len(getattr(persisted_oset, "rules", [])) + len(getattr(persisted_oset, "oracles", []))
+                if rules_count == 0:
+                    return False, f"OracleSet '{run.oracle_set_id}' contains zero rules (empty oracle authority forbidden)."
+            except Exception as exc:
+                return False, f"Failed to verify persisted OracleSet: {str(exc)}"
+
+        # 6. Evaluation result identity and cryptographic verification
         if not run.evaluation_id:
             return False, "Missing evaluation_id in workflow run."
+
+        try:
+            persisted_eval = self.eval_persistence.get_evaluation_result(run.evaluation_id)
+            if not persisted_eval:
+                return False, f"EvaluationResult '{run.evaluation_id}' not found in persistence store."
+            if not verify_evaluation_result_integrity(persisted_eval):
+                return False, f"EvaluationResult '{run.evaluation_id}' failed cryptographic integrity verification."
+            if persisted_eval.application_id and run.application_id and persisted_eval.application_id != run.application_id:
+                return False, f"EvaluationResult application '{persisted_eval.application_id}' mismatch with run '{run.application_id}'."
+        except Exception as exc:
+            return False, f"Failed to verify persisted EvaluationResult: {str(exc)}"
 
         # 7. Certification cases verification
         try:

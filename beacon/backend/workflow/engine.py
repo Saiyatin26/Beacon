@@ -64,7 +64,9 @@ from evaluation.models import (
     EvaluationSummary,
     EvaluationVerdict,
     InputEvaluationResult,
+    verify_evaluation_result_integrity,
 )
+from evaluation.persistence import EvaluationPersistenceStore, evaluation_persistence
 from execution.evidence_models import (
     EvidenceBundle,
     EvidenceCaptureStatus,
@@ -126,6 +128,7 @@ class CanonicalV2WorkflowEngine:
         app_resolver: Optional[ApplicationResolver] = None,
         ev_store: Optional[EvidenceStore] = None,
         eval_eng: Optional[BehavioralEvaluationEngine] = None,
+        eval_persistence: Optional[EvaluationPersistenceStore] = None,
         controlled_eng: Optional[ControlledAssessmentEngine] = None,
         rules_registry: Optional[RuleRegistry] = None,
         discovery_eng: Optional[RuleDiscoveryEngine] = None,
@@ -144,6 +147,7 @@ class CanonicalV2WorkflowEngine:
         self.app_resolver = app_resolver or application_resolver
         self.ev_store = ev_store or evidence_store
         self.eval_eng = eval_eng or behavioral_evaluation_engine
+        self.eval_persistence = eval_persistence or evaluation_persistence
         self.controlled_eng = controlled_eng or ControlledAssessmentEngine()
         self.rules_registry = rules_registry or rule_registry
         self.discovery_eng = discovery_eng or RuleDiscoveryEngine()
@@ -431,6 +435,29 @@ class CanonicalV2WorkflowEngine:
                 f"No test inputs could be resolved for application '{spec.application_id}'.",
             )
 
+        ref_target = spec.get_reference_target() if (spec and hasattr(spec, "get_reference_target")) else None
+        tgt_targets = spec.get_target_candidates() if (spec and hasattr(spec, "get_target_candidates")) else []
+        tgt_target = tgt_targets[request.target_index] if (request.target_index < len(tgt_targets)) else None
+
+        input_set_canonical_hash = compute_input_set_canonical_hash(test_inputs)
+        exec_fp = compute_execution_fingerprint(
+            application_id=spec.application_id,
+            ref_target_id=getattr(ref_target, "target_id", "ref_default") if ref_target else getattr(ref_adapter, "name", "ref_default"),
+            ref_version=getattr(ref_target, "version", "1.0.0") if ref_target else "1.0.0",
+            ref_source_hash=getattr(ref_target, "source_hash", getattr(ref_adapter, "implementation_hash", "")) if ref_target else getattr(ref_adapter, "implementation_hash", ""),
+            target_id=getattr(tgt_target, "target_id", "tgt_default") if tgt_target else getattr(target_adapter, "name", "tgt_default"),
+            target_version=getattr(tgt_target, "version", "1.0.0") if tgt_target else "1.0.0",
+            target_source_hash=getattr(tgt_target, "source_hash", getattr(target_adapter, "implementation_hash", "")) if tgt_target else getattr(target_adapter, "implementation_hash", ""),
+            input_set_hash=input_set_canonical_hash,
+            input_count=len(test_inputs),
+            policy_id=f"POL-{spec.application_id}",
+            rule_config_mode=spec.rule_config.mode if (spec and spec.rule_config) else "CONTROLLED",
+        )
+        run.execution_fingerprint = exec_fp
+        run.input_set_hash = input_set_canonical_hash
+        run.input_set_id = f"INPSET-{spec.application_id}-{input_set_canonical_hash[:8]}"
+        self.persistence.save_run(run)
+
         timings["validation_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
         return spec, ref_adapter, target_adapter, test_inputs
 
@@ -444,9 +471,6 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        run.state = WorkflowState.CAPTURING_EVIDENCE
-        self.persistence.save_run(run)
-
         session_id = f"SESS-{run.workflow_run_id}"
         run.evidence_session_id = session_id
         all_evidence_records: list[EvidenceRecord] = []
@@ -568,8 +592,8 @@ class CanonicalV2WorkflowEngine:
             })
 
         # Assemble canonical EvidenceManifest & EvidenceBundle
-        input_set_id = f"INPSET-{run.workflow_run_id[:8]}"
-        input_set_hash = compute_input_set_canonical_hash(test_inputs)
+        input_set_id = run.input_set_id or f"INPSET-{run.workflow_run_id[:8]}"
+        input_set_hash = run.input_set_hash or compute_input_set_canonical_hash(test_inputs)
 
         manifest = EvidenceManifest(
             session_id=session_id,
@@ -605,6 +629,7 @@ class CanonicalV2WorkflowEngine:
                 f"EvidenceBundle tamper detection: hash mismatch '{bundle.bundle_hash}' vs '{recomputed_bundle_hash}'.",
             )
 
+        run.evidence_bundle_id = bundle.bundle_id
         timings["evidence_capture_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
         return bundle, all_evidence_records, evaluated_input_cases
 
@@ -617,8 +642,6 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        run.state = WorkflowState.EVALUATING
-        self.persistence.save_run(run)
 
         # Fail closed immediately if bundle hash does not match manifest
         if not bundle.manifest or bundle.bundle_hash != bundle.manifest.compute_bundle_hash():
@@ -664,6 +687,9 @@ class CanonicalV2WorkflowEngine:
                 WorkflowErrorCode.EVALUATION_FAILED,
                 f"Evaluation total inputs ({len(getattr(eval_result, 'input_results', []))}) != test inputs count ({len(test_inputs)}).",
             )
+
+        # Persist EvaluationResult to authoritative Phase 4 persistence store
+        self.eval_persistence.save_evaluation_result(eval_result)
 
         run.evaluation_id = eval_result.evaluation_id
         timings["evaluation_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
@@ -874,8 +900,6 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        run.state = WorkflowState.RESOLVING_ORACLES
-        self.persistence.save_run(run)
 
         # Authoritative reconciliation through Phase 7 RuleReconciliationEngine
         recon_oracle_set: Optional[OracleSet] = None
@@ -942,8 +966,6 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        run.state = WorkflowState.RESOLVING_THRESHOLDS
-        self.persistence.save_run(run)
 
         # Retrieve authoritative policy without fabricating silent defaults
         th_policy = self.thresh_persistence.get_policy(f"POL-{spec.application_id}")
@@ -1007,8 +1029,6 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        run.state = WorkflowState.CERTIFYING
-        self.persistence.save_run(run)
 
         # Strict verification before CertificationEngine execution
         expected_fp = threshold_res.compute_fingerprint()
@@ -1080,8 +1100,6 @@ class CanonicalV2WorkflowEngine:
             return None
 
         t_stage = time.perf_counter()
-        run.state = WorkflowState.EXPLAINING
-        self.persistence.save_run(run)
 
         try:
             exp_req = ExplanationRequest(
@@ -1121,8 +1139,6 @@ class CanonicalV2WorkflowEngine:
         timings: dict[str, float],
     ) -> Any:
         t_stage = time.perf_counter()
-        t_stage = time.perf_counter()
-        self.transition_state(run, WorkflowState.PERSISTING, reason="Persisting certification artifacts and audit trail")
 
         # 1. Build canonical CertificationInputSet
         input_set_id = f"INPSET-{artifact.certification_id}"
@@ -1245,6 +1261,8 @@ class CanonicalV2WorkflowEngine:
         audit_status: str = "FAILED",
     ) -> WorkflowResult:
         """Helper to fail a WorkflowRun in a fail-closed, auditable state."""
+        run.error_code = error_code
+        run.error_message = error_message
         try:
             self.transition_state(
                 run,
@@ -1252,12 +1270,10 @@ class CanonicalV2WorkflowEngine:
                 reason=f"Failure: {error_code.value}: {error_message}",
                 metadata={"error_code": error_code.value, "error_message": error_message}
             )
-        except Exception:
-            run.state = WorkflowState.FAILED
-            run.error_code = error_code
-            run.error_message = error_message
-            run.completed_at = datetime.now(timezone.utc).isoformat()
+        except Exception as exc:
+            logger.error(f"State transition to FAILED failed for run '{run.workflow_run_id}': {exc}")
             try:
+                run.completed_at = datetime.now(timezone.utc).isoformat()
                 self.persistence.save_run(run)
             except Exception:
                 pass
@@ -1281,7 +1297,7 @@ class CanonicalV2WorkflowEngine:
         return WorkflowResult(
             workflow_run_id=run.workflow_run_id,
             application_id=run.application_id,
-            state=WorkflowState.FAILED,
+            state=run.state,
             status="FAILED",
             certified=False,
             equivalence_score=None,
@@ -1312,11 +1328,27 @@ class CanonicalV2WorkflowEngine:
             if not cases:
                 return None
 
+            # Verify EvaluationResult from persistence
+            if run.evaluation_id:
+                eval_res = self.eval_persistence.get_evaluation_result(run.evaluation_id)
+                if not eval_res or not verify_evaluation_result_integrity(eval_res):
+                    return None
+                if eval_res.application_id and eval_res.application_id != run.application_id:
+                    return None
+
+            # Verify OracleSet from persistence
+            if run.oracle_set_id:
+                oset = self.rec_persistence.get_oracle_set(run.oracle_set_id)
+                if not oset:
+                    return None
+                if run.oracle_set_hash and oset.oracle_set_hash != run.oracle_set_hash:
+                    return None
+                if oset.application_id and oset.application_id != run.application_id:
+                    return None
+
             # Verify threshold resolution if recorded
             if run.threshold_resolution_id:
-                from threshold.persistence import ThresholdResolutionStore
-                t_store = ThresholdResolutionStore()
-                res = t_store.get_resolution(run.threshold_resolution_id)
+                res = self.thresh_persistence.get_resolution(run.threshold_resolution_id)
                 if not res:
                     return None
                 if run.threshold_resolution_fingerprint and res.fingerprint != run.threshold_resolution_fingerprint:

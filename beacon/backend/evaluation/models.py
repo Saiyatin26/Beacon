@@ -177,6 +177,10 @@ class EvaluationSummary(BaseModel):
     differences_by_dimension: dict[str, int] = Field(default_factory=dict)
     coverage_ratio: float = 1.0
 
+    @property
+    def divergent_inputs(self) -> int:
+        return self.different_inputs
+
 
 class EvaluationResult(BaseModel):
     """Complete evaluation outcome for a full execution run or EvidenceBundle."""
@@ -232,3 +236,40 @@ class EvaluationRequest(BaseModel):
     enabled_dimensions: Optional[list[BehaviorDimension]] = None
     fail_fast: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+def compute_evaluation_result_hash(eval_res: EvaluationResult) -> str:
+    """Computes deterministic canonical SHA-256 fingerprint over all material behavioral evaluation findings."""
+    diff_inputs = getattr(eval_res.summary, "different_inputs", getattr(eval_res.summary, "divergent_inputs", 0))
+    material_data = {
+        "evaluation_id": eval_res.evaluation_id,
+        "bundle_id": eval_res.bundle_id or "",
+        "application_id": eval_res.application_id or "",
+        "verdict": eval_res.verdict.value if hasattr(eval_res.verdict, "value") else str(eval_res.verdict),
+        "policy_id": eval_res.policy_id,
+        "policy_hash": eval_res.policy_hash,
+        "total_inputs": eval_res.summary.total_inputs,
+        "equivalent_inputs": eval_res.summary.equivalent_inputs,
+        "different_inputs": diff_inputs,
+        "total_differences": eval_res.summary.total_differences,
+        "input_results": [
+            {
+                "input_id": item.input_id,
+                "verdict": item.verdict.value if hasattr(item.verdict, "value") else str(item.verdict),
+                "diff_count": len(item.differences),
+            }
+            for item in sorted(eval_res.input_results, key=lambda x: x.input_id)
+        ],
+    }
+    canonical_json = json.dumps(material_data, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+
+
+def verify_evaluation_result_integrity(eval_res: EvaluationResult) -> bool:
+    """Confirms cryptographic integrity of an EvaluationResult against its canonical content hash."""
+    if not eval_res or not eval_res.evaluation_id:
+        return False
+    expected_hash = compute_evaluation_result_hash(eval_res)
+    if not eval_res.evaluation_hash:
+        return True
+    return eval_res.evaluation_hash == expected_hash
