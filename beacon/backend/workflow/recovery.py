@@ -15,6 +15,7 @@ from evaluation.persistence import EvaluationPersistenceStore, evaluation_persis
 from ingestion.audit import AuditAction, audit_logger
 from reconciliation.persistence import ReconciliationPersistenceStore, reconciliation_persistence
 from threshold.persistence import ThresholdPersistenceStore, threshold_persistence
+from .authority_verifier import verify_execution_authority_chain
 from .idempotency import workflow_idempotency
 from .models import FinalizationState, WorkflowErrorCode, WorkflowRun, WorkflowState, transition_workflow_state
 from .persistence import WorkflowPersistenceStore, workflow_persistence
@@ -123,101 +124,40 @@ class WorkflowRecoveryService:
         return resolved_runs
 
     def verify_authority_chain(self, run: WorkflowRun) -> tuple[bool, str]:
-        """Verifies the complete unbroken cryptographic authority chain for a workflow run."""
-        # 1. Stage-B Execution Identity must be present
+        """Verifies the complete unbroken cryptographic authority chain for a workflow run using the central verifier."""
         if not run.execution_fingerprint:
             return False, "Missing Stage-B execution_fingerprint in workflow run."
 
-        # 2. Certification ID must be present
         if not run.certification_id:
             return False, "Missing certification_id (workflow interrupted before certification)."
 
-        # 3. Certification Artifact must exist in repository
         try:
             art = self.cert_repo.get_artifact(run.certification_id)
         except Exception as exc:
             return False, f"Failed to retrieve CertificationArtifact '{run.certification_id}': {str(exc)}"
 
-        if not art or not art.certification_id:
+        if not art or not getattr(art, "certification_id", None):
             return False, f"CertificationArtifact '{run.certification_id}' not found in repository."
 
-        # 3. Artifact content hash integrity verification
-        if not verify_artifact_integrity(art):
-            return False, f"CertificationArtifact '{run.certification_id}' failed cryptographic content hash verification."
+        persisted_eval = self.eval_persistence.get_evaluation_result(run.evaluation_id) if run.evaluation_id else None
+        persisted_oset = self.rec_persistence.get_oracle_set(run.oracle_set_id) if run.oracle_set_id else None
+        persisted_thresh = self.thresh_persistence.get_resolution(run.threshold_resolution_id) if run.threshold_resolution_id else None
+        cases = self.cert_repo.list_certification_cases(run.certification_id)
+        audit_events = audit_logger.list_events(certification_id=run.certification_id)
 
-        # 4. Threshold Resolution identity and fingerprint verification
-        art_thresh_id = art.threshold_resolution_id or (art.context.threshold_resolution_id if art.context else None)
-        art_thresh_fp = art.threshold_resolution_fingerprint or (art.context.threshold_resolution_fingerprint if art.context else None)
-
-        if not run.threshold_resolution_id or run.threshold_resolution_id != art_thresh_id:
-            return False, f"ThresholdResolution ID mismatch between run and artifact ('{run.threshold_resolution_id}' vs '{art_thresh_id}')."
-
-        if not run.threshold_resolution_fingerprint or run.threshold_resolution_fingerprint != art_thresh_fp:
-            return False, f"ThresholdResolution fingerprint mismatch between run and artifact."
-
-        try:
-            persisted_thresh = self.thresh_persistence.get_resolution(run.threshold_resolution_id)
-            if not persisted_thresh:
-                return False, f"ThresholdResolution '{run.threshold_resolution_id}' not found in persistence store."
-            if persisted_thresh.compute_fingerprint() != run.threshold_resolution_fingerprint:
-                return False, f"ThresholdResolution '{run.threshold_resolution_id}' computed fingerprint mismatch."
-        except Exception as exc:
-            return False, f"Failed to verify persisted ThresholdResolution: {str(exc)}"
-
-        # 5. Oracle Set identity and hash verification
-        if run.oracle_set_id and art.oracle_set_id and run.oracle_set_id != art.oracle_set_id:
-            return False, f"OracleSet ID mismatch between run and artifact ('{run.oracle_set_id}' vs '{art.oracle_set_id}')."
-
-        if run.oracle_set_hash and art.oracle_set_hash and run.oracle_set_hash != art.oracle_set_hash:
-            return False, f"OracleSet hash mismatch between run and artifact."
-
-        if run.oracle_set_id:
-            try:
-                persisted_oset = self.rec_persistence.get_oracle_set(run.oracle_set_id)
-                if not persisted_oset:
-                    return False, f"OracleSet '{run.oracle_set_id}' not found in persistence store."
-                if run.oracle_set_hash and persisted_oset.oracle_set_hash != run.oracle_set_hash:
-                    return False, f"OracleSet '{run.oracle_set_id}' hash mismatch in persistence."
-                if persisted_oset.application_id and run.application_id and persisted_oset.application_id != run.application_id:
-                    return False, f"OracleSet application '{persisted_oset.application_id}' mismatch with run '{run.application_id}'."
-                rules_count = len(getattr(persisted_oset, "rules", [])) + len(getattr(persisted_oset, "oracles", []))
-                if rules_count == 0:
-                    return False, f"OracleSet '{run.oracle_set_id}' contains zero rules (empty oracle authority forbidden)."
-            except Exception as exc:
-                return False, f"Failed to verify persisted OracleSet: {str(exc)}"
-
-        # 6. Evaluation result identity and cryptographic verification
-        if not run.evaluation_id:
-            return False, "Missing evaluation_id in workflow run."
-
-        try:
-            persisted_eval = self.eval_persistence.get_evaluation_result(run.evaluation_id)
-            if not persisted_eval:
-                return False, f"EvaluationResult '{run.evaluation_id}' not found in persistence store."
-            if not verify_evaluation_result_integrity(persisted_eval):
-                return False, f"EvaluationResult '{run.evaluation_id}' failed cryptographic integrity verification."
-            if persisted_eval.application_id and run.application_id and persisted_eval.application_id != run.application_id:
-                return False, f"EvaluationResult application '{persisted_eval.application_id}' mismatch with run '{run.application_id}'."
-        except Exception as exc:
-            return False, f"Failed to verify persisted EvaluationResult: {str(exc)}"
-
-        # 7. Certification cases verification
-        try:
-            cases = self.cert_repo.list_certification_cases(run.certification_id)
-            if not cases or len(cases) == 0:
-                return False, f"No persisted CertificationCase records found for certificate '{run.certification_id}'."
-        except Exception as exc:
-            return False, f"Failed to verify persisted CertificationCase records: {str(exc)}"
-
-        # 8. Mandatory audit trail verification
-        try:
-            audit_events = audit_logger.list_events(certification_id=run.certification_id)
-            if not audit_events or len(audit_events) == 0:
-                return False, f"No persisted audit trail records found for certificate '{run.certification_id}'."
-        except Exception as exc:
-            return False, f"Failed to query audit trail: {str(exc)}"
-
-        return True, "Authority chain verified."
+        result = verify_execution_authority_chain(
+            execution_fingerprint=run.execution_fingerprint,
+            application_id=run.application_id,
+            eval_result=persisted_eval,
+            oracle_set=persisted_oset,
+            threshold_res=persisted_thresh,
+            artifact=art,
+            cases=cases,
+            audit_events=audit_events,
+            require_artifact=True,
+            require_audit=True,
+        )
+        return result.is_valid, result.failure_reason
 
 
 workflow_recovery = WorkflowRecoveryService()

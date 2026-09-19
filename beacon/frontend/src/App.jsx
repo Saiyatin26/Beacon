@@ -96,25 +96,19 @@ export default function App() {
   // =========================================================================
   // Phase 14 Custom Dataset Certification State
   // =========================================================================
-  const [customProjectId, setCustomProjectId] = useState("proj_retail_pilot");
-  const [customDatasetName, setCustomDatasetName] = useState("Retail Custom Promo Dataset");
+  const [customProjectId, setCustomProjectId] = useState("");
+  const [customDatasetName, setCustomDatasetName] = useState("");
   const [customFormat, setCustomFormat] = useState("JSON");
   const [customProvenance, setCustomProvenance] = useState("USER_SUPPLIED");
   const [customVersion, setCustomVersion] = useState("1.0.0");
-  const [customSourceRef, setCustomSourceRef] = useState("Enterprise Pilot Dataset v1");
-  const [customDomain, setCustomDomain] = useState("Retail & Wholesale Commerce");
-  const [customRawContent, setCustomRawContent] = useState(`[
-  {"order_amount": 45.0, "customer_tier": "STANDARD", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": false},
-  {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": false},
-  {"order_amount": 75.0, "customer_tier": "VIP", "items_count": 3, "coupon_code": "NONE", "is_express_shipping": false},
-  {"order_amount": 250.0, "customer_tier": "VIP", "items_count": 5, "coupon_code": "LOYALTY20", "is_express_shipping": true},
-  {"order_amount": 15.0, "customer_tier": "WHOLESALE", "items_count": 1, "coupon_code": "NONE", "is_express_shipping": false}
-]`);
+  const [customSourceRef, setCustomSourceRef] = useState("");
+  const [customDomain, setCustomDomain] = useState("");
+  const [customRawContent, setCustomRawContent] = useState("");
   const [customPreview, setCustomPreview] = useState(null);
   const [customUploadedManifest, setCustomUploadedManifest] = useState(null);
-  const [customLegacyAdapterId, setCustomLegacyAdapterId] = useState("retail_discount_legacy");
-  const [customModernAdapterId, setCustomModernAdapterId] = useState("retail_discount_modern_clean");
-  const [customOracleSetId, setCustomOracleSetId] = useState("SET-RETAIL-CONTROLLED-v1");
+  const [customLegacyAdapterId, setCustomLegacyAdapterId] = useState("");
+  const [customModernAdapterId, setCustomModernAdapterId] = useState("");
+  const [customOracleSetId, setCustomOracleSetId] = useState("");
   const [customMode, setCustomMode] = useState("CONTROLLED");
   const [customProvider, setCustomProvider] = useState("auto");
   const [customAllowExternalLLM, setCustomAllowExternalLLM] = useState(false);
@@ -906,50 +900,6 @@ export default function App() {
                     Provide structured records (JSON, JSONL, or CSV) with explicit provenance declaration.
                   </p>
                 </div>
-                {/* Sample Preset Loaders */}
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <button
-                    onClick={() => {
-                      setCustomDatasetName("Retail Custom Pricing Invariants");
-                      setCustomFormat("JSON");
-                      setCustomDomain("Retail E-Commerce");
-                      setCustomProvenance("USER_SUPPLIED");
-                      setCustomLegacyAdapterId("retail_discount_legacy");
-                      setCustomModernAdapterId("retail_discount_modern_clean");
-                      setCustomRawContent(`[
-  {"order_amount": 45.0, "customer_tier": "STANDARD", "items_count": 2, "coupon_code": "NONE", "is_express_shipping": false},
-  {"order_amount": 120.0, "customer_tier": "STANDARD", "items_count": 4, "coupon_code": "WELCOME10", "is_express_shipping": false},
-  {"order_amount": 75.0, "customer_tier": "VIP", "items_count": 3, "coupon_code": "NONE", "is_express_shipping": false},
-  {"order_amount": 250.0, "customer_tier": "VIP", "items_count": 5, "coupon_code": "LOYALTY20", "is_express_shipping": true},
-  {"order_amount": 15.0, "customer_tier": "WHOLESALE", "items_count": 1, "coupon_code": "NONE", "is_express_shipping": false}
-]`);
-                      invalidateCustomState();
-                    }}
-                    style={{ background: "#f8fafc", border: "1px solid #cbd5e1", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontWeight: "600" }}
-                  >
-                    Load Retail Preset
-                  </button>
-                  <button
-                    onClick={() => {
-                      setCustomDatasetName("Loan Underwriting Custom Test Inputs");
-                      setCustomFormat("JSON");
-                      setCustomDomain("Financial Services & Underwriting");
-                      setCustomProvenance("PRIVATE_ENTERPRISE");
-                      setCustomLegacyAdapterId("loan_approval_legacy");
-                      setCustomModernAdapterId("loan_approval_modern_equiv");
-                      setCustomRawContent(`[
-  {"credit_score": 750, "debt_ratio": 0.25, "annual_income": 85000},
-  {"credit_score": 580, "debt_ratio": 0.45, "annual_income": 42000},
-  {"credit_score": 810, "debt_ratio": 0.15, "annual_income": 120000},
-  {"credit_score": 640, "debt_ratio": 0.35, "annual_income": 55000}
-]`);
-                      invalidateCustomState();
-                    }}
-                    style={{ background: "#f8fafc", border: "1px solid #cbd5e1", padding: "4px 10px", borderRadius: "4px", fontSize: "12px", cursor: "pointer", fontWeight: "600" }}
-                  >
-                    Load Loan Preset
-                  </button>
-                </div>
               </div>
 
               {/* Metadata Inputs */}
@@ -1118,6 +1068,7 @@ export default function App() {
                     onChange={(e) => { setCustomLegacyAdapterId(e.target.value); invalidateCustomState(); }}
                     style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
                   >
+                    <option value="">-- Select Adapter --</option>
                     <option value="retail_discount_legacy">retail_discount_legacy (v1.0.0)</option>
                     <option value="loan_approval_legacy">loan_approval_legacy (v1.0.0)</option>
                     <option value="payroll_tax_legacy">payroll_tax_legacy (v1.0.0)</option>
@@ -1131,6 +1082,7 @@ export default function App() {
                     onChange={(e) => { setCustomModernAdapterId(e.target.value); invalidateCustomState(); }}
                     style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
                   >
+                    <option value="">-- Select Variant --</option>
                     <option value="retail_discount_modern_clean">retail_discount_modern_clean (v2.0.0 Clean)</option>
                     <option value="retail_discount_modern_buggy_threshold">retail_discount_modern_buggy_threshold (v2.0.0 Buggy)</option>
                     <option value="loan_approval_modern_equiv">loan_approval_modern_equiv (v2.0.0 Clean)</option>
@@ -1146,6 +1098,7 @@ export default function App() {
                     onChange={(e) => { setCustomOracleSetId(e.target.value); invalidateCustomState(); }}
                     style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
                   >
+                    <option value="">-- Select OracleSet --</option>
                     <option value="SET-RETAIL-CONTROLLED-v1">SET-RETAIL-CONTROLLED-v1 (Retail Pricing)</option>
                     <option value="SET-LOAN-CONTROLLED-v1">SET-LOAN-CONTROLLED-v1 (Loan Approval)</option>
                     <option value="SET-PAYROLL-CONTROLLED-v1">SET-PAYROLL-CONTROLLED-v1 (Payroll Tax)</option>
@@ -2408,9 +2361,9 @@ export default function App() {
         )}
 
         {/* ========================================================================= */}
-        {/* TAB: DYNAMIC THRESHOLDS (PHASE 8 ADVANCED BEHAVIORAL EVALUATION)          */}
+        {/* TAB: THRESHOLD CALIBRATION (ADMIN / EXPERIMENTATION TOOLING ONLY)         */}
         {/* ========================================================================= */}
-        {activeTab === "thresholds" && (
+        {activeTab === "thresholds" && (currentUser?.is_system_admin || currentRole === "PROJECT_ADMIN") && (
           <ThresholdMode
             apiBase={API_BASE}
             authFetch={authFetch}

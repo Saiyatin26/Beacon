@@ -137,13 +137,14 @@ def compute_execution_fingerprint(
     input_set_hash: str,
     input_count: int,
     policy_id: Optional[str] = None,
+    policy_fingerprint: Optional[str] = None,
     rule_config_mode: Optional[str] = None,
     legacy_source_identity: Optional[dict[str, Any]] = None,
     modern_source_identity: Optional[dict[str, Any]] = None,
     evaluation_mode: Optional[str] = None,
     specification_fingerprint: Optional[str] = None,
 ) -> str:
-    """Computes deterministic Stage B execution identity over resolved material inputs including immutable repository identities."""
+    """Computes deterministic Stage B execution identity over resolved material inputs including immutable repository identities and complete policy fingerprint."""
     payload = {
         "application_id": application_id,
         "ref_target_id": ref_target_id,
@@ -155,6 +156,7 @@ def compute_execution_fingerprint(
         "input_set_hash": input_set_hash,
         "input_count": input_count,
         "policy_id": policy_id or "",
+        "policy_fingerprint": policy_fingerprint or policy_id or "",
         "rule_config_mode": rule_config_mode or "",
         "legacy_source_identity": legacy_source_identity or {},
         "modern_source_identity": modern_source_identity or {},
@@ -191,11 +193,13 @@ class WorkflowRunRequest(BaseModel):
 
     application_id: str
     target_index: int = 0
-    custom_inputs: Optional[list[dict[str, Any]]] = None
+    authoritative_input_set: Optional[list[Any]] = None
+    custom_inputs: Optional[list[dict[str, Any]]] = None  # Deprecated in production; retained for compatibility
     sample_count: Optional[int] = None
     policy_min_equivalence_score: float = 0.999
     policy_min_oracle_coverage: float = 0.0
     allow_warnings: bool = False
+    policy_override: Optional[dict[str, Any]] = None
     explain: bool = True
     explanation_mode: Literal["deterministic", "llm", "auto"] = "deterministic"
     use_company_knowledge: bool = False
@@ -207,10 +211,11 @@ class WorkflowRunRequest(BaseModel):
 
     def compute_request_fingerprint(self) -> str:
         """Computes deterministic SHA-256 fingerprint over all material request fields."""
+        inputs_repr = self.authoritative_input_set if self.authoritative_input_set is not None else (self.custom_inputs or [])
         payload = {
             "application_id": self.application_id,
             "target_index": self.target_index,
-            "custom_inputs": self.custom_inputs or [],
+            "input_count": len(inputs_repr) if isinstance(inputs_repr, list) else 0,
             "sample_count": self.sample_count,
             "policy_min_equivalence_score": round(self.policy_min_equivalence_score, 6),
             "policy_min_oracle_coverage": round(self.policy_min_oracle_coverage, 6),
@@ -218,8 +223,9 @@ class WorkflowRunRequest(BaseModel):
             "explain": self.explain,
             "explanation_mode": self.explanation_mode,
             "use_company_knowledge": self.use_company_knowledge,
+            "evaluation_mode": self.evaluation_mode or "CONTROLLED",
         }
-        canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 

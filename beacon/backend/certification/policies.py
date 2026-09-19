@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 
-from .models import CertificationStatus
+from .models import CertificationPolicy, CertificationStatus
 
 
 class ThresholdPolicy(ABC):
@@ -124,3 +124,64 @@ class DynamicThresholdPolicy(ThresholdPolicy, BaseModel):
             "min_oracle_coverage": self.min_oracle_coverage,
             "allow_warnings": self.allow_warnings,
         }
+
+
+class CertificationPolicyResolver:
+    """Backend-authoritative resolver for deterministic certification policies.
+    
+    Ensures certification authority is strictly governed by verified backend configuration,
+    preventing callers from manipulating certification boundaries.
+    """
+
+    def resolve_effective_policy(
+        self,
+        application_id: str,
+        evaluation_mode: str = "CONTROLLED",
+        configured_policy: Optional[dict[str, Any]] = None,
+    ) -> CertificationPolicy:
+        """Deterministically derives the effective certification policy."""
+        # 1. Base policy configuration derived from evaluation mode
+        if evaluation_mode in ("FULL", "FULL_BEACON"):
+            base_min_score = 0.99
+            base_min_coverage = 0.70
+            allow_warn = False
+        else:  # CONTROLLED default
+            base_min_score = 0.999
+            base_min_coverage = 0.0  # Controlled mode exercises discovered/reconciled rules directly
+            allow_warn = False
+
+        # 2. Allow server-side configured overrides if valid
+        if configured_policy and isinstance(configured_policy, dict):
+            min_score = float(configured_policy.get("min_equivalence_score", base_min_score))
+            min_cov = float(configured_policy.get("min_oracle_coverage", base_min_coverage))
+            allow_warn = bool(configured_policy.get("allow_warnings", allow_warn))
+            comp_pol = str(configured_policy.get("comparison_policy", "default_v2"))
+            metric = str(configured_policy.get("threshold_metric", "ABSOLUTE_DIFF"))
+        else:
+            min_score = base_min_score
+            min_cov = base_min_coverage
+            comp_pol = "default_v2"
+            metric = "ABSOLUTE_DIFF"
+
+        pol = CertificationPolicy(
+            policy_id=f"POL-{application_id}",
+            version=1,
+            name=f"Authoritative Policy for {application_id} ({evaluation_mode})",
+            min_equivalence_score=min_score,
+            min_oracle_coverage=min_cov,
+            min_applicable_probes_per_oracle=0,
+            allow_warnings=allow_warn,
+            block_on_critical_regression=True,
+            block_on_reference_inconsistent=True,
+            block_on_mutual_violation=True,
+            comparison_policy=comp_pol,
+            threshold_metric=metric,
+            evaluation_mode=evaluation_mode,
+        )
+        pol.policy_hash = pol.compute_hash()
+        pol.policy_fingerprint = pol.policy_hash
+        return pol
+
+
+certification_policy_resolver = CertificationPolicyResolver()
+

@@ -202,6 +202,8 @@ class CertificationContext(BaseModel):
     run_status: str = "NOT_CERTIFIED"
     threshold_resolution_id: Optional[str] = None
     threshold_resolution_fingerprint: Optional[str] = None
+    execution_fingerprint: str = ""
+    evaluation_result_id: str = ""
     # Disambiguated metrics
     unique_input_count: int = 0
     certification_case_count: int = 0
@@ -298,19 +300,23 @@ class CertificationPolicy(BaseModel):
     block_on_critical_regression: bool = True
     block_on_reference_inconsistent: bool = True
     block_on_mutual_violation: bool = True
+    comparison_policy: str = "default_v2"
+    threshold_metric: str = "ABSOLUTE_DIFF"
+    evaluation_mode: str = "CONTROLLED"
     policy_hash: str = ""
+    policy_fingerprint: str = ""
     statement: str = (
         "Certification is relative to the frozen validated oracle set and tested input domain. "
         "It is not a mathematical proof of arbitrary program equivalence."
     )
 
     def compute_hash(self) -> str:
-        """Computes deterministic SHA-256 hash of policy rules."""
+        """Computes deterministic SHA-256 hash of all material policy rules."""
         data = {
             "policy_id": self.policy_id,
             "version": self.version,
-            "min_equivalence_score": self.min_equivalence_score,
-            "min_oracle_coverage": self.min_oracle_coverage,
+            "min_equivalence_score": round(self.min_equivalence_score, 6),
+            "min_oracle_coverage": round(self.min_oracle_coverage, 6),
             "min_applicable_probes_per_oracle": self.min_applicable_probes_per_oracle,
             "allow_warnings": self.allow_warnings,
             "max_permitted_execution_errors": self.max_permitted_execution_errors,
@@ -318,9 +324,16 @@ class CertificationPolicy(BaseModel):
             "block_on_critical_regression": self.block_on_critical_regression,
             "block_on_reference_inconsistent": self.block_on_reference_inconsistent,
             "block_on_mutual_violation": self.block_on_mutual_violation,
+            "comparison_policy": self.comparison_policy,
+            "threshold_metric": self.threshold_metric,
+            "evaluation_mode": self.evaluation_mode,
         }
         payload = json.dumps(data, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def compute_policy_fingerprint(self) -> str:
+        """Alias for compute_hash providing explicit policy identity."""
+        return self.compute_hash()
 
 
 class PerOracleCertificationSummary(BaseModel):

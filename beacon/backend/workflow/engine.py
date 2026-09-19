@@ -52,6 +52,7 @@ from certification.models import (
     compute_input_set_canonical_hash,
     verify_artifact_integrity,
 )
+from certification.policies import certification_policy_resolver
 from certification.repository import CertificationRepository, certification_repository
 from discovery.engine import RuleDiscoveryEngine
 from discovery.models import DiscoveryResult
@@ -113,6 +114,7 @@ from threshold.models import (
 )
 from threshold.persistence import ThresholdPersistenceStore, threshold_persistence
 
+from .authority_verifier import verify_execution_authority_chain
 from .idempotency import WorkflowIdempotencyManager, workflow_idempotency
 from .models import (
     FinalizationState,
@@ -468,15 +470,20 @@ class CanonicalV2WorkflowEngine:
             target_index=request.target_index,
         )
 
-        resolved_custom_inputs = request.custom_inputs
-        if resolved_custom_inputs is None and spec.dataset_config and spec.dataset_config.metadata and spec.dataset_config.metadata.get("custom_inputs"):
-            resolved_custom_inputs = spec.dataset_config.metadata.get("custom_inputs")
-        elif resolved_custom_inputs is None and spec.metadata and spec.metadata.get("custom_inputs"):
-            resolved_custom_inputs = spec.metadata.get("custom_inputs")
+        # Resolve authoritative input set (prioritizing discovered/authoritative inputs over caller overrides)
+        authoritative_inputs = request.authoritative_input_set
+        if authoritative_inputs is None and spec.metadata and spec.metadata.get("discovered_inputs"):
+            authoritative_inputs = spec.metadata.get("discovered_inputs")
+        elif authoritative_inputs is None and request.custom_inputs:
+            authoritative_inputs = request.custom_inputs
+        elif authoritative_inputs is None and spec.dataset_config and spec.dataset_config.metadata and spec.dataset_config.metadata.get("custom_inputs"):
+            authoritative_inputs = spec.dataset_config.metadata.get("custom_inputs")
+        elif authoritative_inputs is None and spec.metadata and spec.metadata.get("custom_inputs"):
+            authoritative_inputs = spec.metadata.get("custom_inputs")
 
         test_inputs = self.app_resolver.resolve_inputs(
             spec=spec,
-            custom_inputs=resolved_custom_inputs,
+            custom_inputs=authoritative_inputs,
         )
         if not test_inputs or len(test_inputs) == 0:
             return self._fail_run(
@@ -498,6 +505,18 @@ class CanonicalV2WorkflowEngine:
         eval_mode = meta.get("evaluation_mode") or getattr(request, "evaluation_mode", "CONTROLLED")
         spec_fp = meta.get("specification_fingerprint", "")
 
+        # Resolve authoritative backend certification policy and policy fingerprint
+        effective_cert_policy = certification_policy_resolver.resolve_effective_policy(
+            application_id=spec.application_id,
+            evaluation_mode=eval_mode,
+            configured_policy=request.policy_override or {
+                "min_equivalence_score": request.policy_min_equivalence_score,
+                "min_oracle_coverage": request.policy_min_oracle_coverage,
+                "allow_warnings": request.allow_warnings,
+            },
+        )
+        policy_fp = effective_cert_policy.compute_policy_fingerprint()
+
         input_set_canonical_hash = compute_input_set_canonical_hash(test_inputs)
         exec_fp = compute_execution_fingerprint(
             application_id=spec.application_id,
@@ -509,7 +528,8 @@ class CanonicalV2WorkflowEngine:
             target_source_hash=tgt_s_hash,
             input_set_hash=input_set_canonical_hash,
             input_count=len(test_inputs),
-            policy_id=f"POL-{spec.application_id}",
+            policy_id=effective_cert_policy.policy_id,
+            policy_fingerprint=policy_fp,
             rule_config_mode=spec.rule_config.mode if (spec and spec.rule_config) else "CONTROLLED",
             legacy_source_identity=legacy_src,
             modern_source_identity=modern_src,
@@ -519,6 +539,8 @@ class CanonicalV2WorkflowEngine:
         run.execution_fingerprint = exec_fp
         run.input_set_hash = input_set_canonical_hash
         run.input_set_id = f"INPSET-{spec.application_id}-{input_set_canonical_hash[:8]}"
+        run.metadata["policy_fingerprint"] = policy_fp
+        run.metadata["effective_policy"] = effective_cert_policy.model_dump()
         self.persistence.save_run(run)
 
         timings["validation_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
@@ -1203,62 +1225,41 @@ class CanonicalV2WorkflowEngine:
     ) -> Any:
         t_stage = time.perf_counter()
 
-        # Strict cross-binding verification before CertificationEngine execution
-        if getattr(eval_result, "application_id", None) and eval_result.application_id != spec.application_id:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.EVALUATION_FAILED,
-                f"EvaluationResult application '{eval_result.application_id}' does not match workflow '{spec.application_id}'.",
-            )
-        eval_exec_fp = (getattr(eval_result, "metadata", {}) or {}).get("execution_fingerprint")
-        if eval_exec_fp and run.execution_fingerprint and eval_exec_fp != run.execution_fingerprint:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.EVALUATION_FAILED,
-                f"EvaluationResult execution fingerprint mismatch: expected '{run.execution_fingerprint}', found '{eval_exec_fp}'.",
-            )
-
-        if getattr(oracle_set, "application_id", None) and oracle_set.application_id != spec.application_id:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
-                f"OracleSet application '{oracle_set.application_id}' does not match workflow '{spec.application_id}'.",
-            )
-
-        # Cross-binding checks on threshold resolution
-        thresh_exec_fp = getattr(threshold_res, "provenance", {}).get("execution_fingerprint")
-        if thresh_exec_fp and run.execution_fingerprint and thresh_exec_fp != run.execution_fingerprint:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
-                f"ThresholdResolution execution fingerprint mismatch: expected '{run.execution_fingerprint}', found '{thresh_exec_fp}'.",
-            )
-        thresh_oset_id = getattr(threshold_res, "provenance", {}).get("oracle_set_id")
-        if thresh_oset_id and getattr(oracle_set, "oracle_set_id", None) and thresh_oset_id != oracle_set.oracle_set_id:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
-                f"ThresholdResolution oracle set id mismatch: expected '{oracle_set.oracle_set_id}', found '{thresh_oset_id}'.",
-            )
-
-        expected_fp = threshold_res.compute_fingerprint()
-        if threshold_res.fingerprint != expected_fp:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.THRESHOLD_FINGERPRINT_MISMATCH,
-                f"Threshold fingerprint mismatch: expected '{expected_fp}', found '{threshold_res.fingerprint}'.",
-            )
-
-        cert_policy = CertificationPolicy(
-            policy_id=f"POL-{spec.application_id}",
-            min_equivalence_score=request.policy_min_equivalence_score,
-            min_oracle_coverage=request.policy_min_oracle_coverage,
-            min_applicable_probes_per_oracle=0,
-            allow_warnings=request.allow_warnings,
-            block_on_critical_regression=True,
-            block_on_reference_inconsistent=True,
+        # 1. Strict pre-certification cross-binding verification via central verifier
+        pre_verify = verify_execution_authority_chain(
+            execution_fingerprint=run.execution_fingerprint,
+            application_id=spec.application_id,
+            eval_result=eval_result,
+            oracle_set=oracle_set,
+            threshold_res=threshold_res,
+            artifact=None,
+            require_artifact=False,
+            require_audit=False,
         )
+        if not pre_verify.is_valid:
+            return self._fail_run(
+                run,
+                pre_verify.error_code or WorkflowErrorCode.CERTIFICATION_FAILED,
+                f"Pre-certification authority verification failed: {pre_verify.failure_reason}",
+            )
 
+        # 2. Authoritative Effective Certification Policy
+        eff_meta = (run.metadata or {}).get("effective_policy")
+        if eff_meta and isinstance(eff_meta, dict):
+            cert_policy = CertificationPolicy(**eff_meta)
+        else:
+            eval_mode = spec.rule_config.mode if (spec and spec.rule_config) else "CONTROLLED"
+            cert_policy = certification_policy_resolver.resolve_effective_policy(
+                application_id=spec.application_id,
+                evaluation_mode=eval_mode,
+                configured_policy=request.policy_override or {
+                    "min_equivalence_score": request.policy_min_equivalence_score,
+                    "min_oracle_coverage": request.policy_min_oracle_coverage,
+                    "allow_warnings": request.allow_warnings,
+                },
+            )
+
+        # 3. Execution Context Cross-Binding
         cert_ctx = CertificationContext(
             benchmark_id=spec.application_id,
             benchmark_name=spec.name,
@@ -1269,9 +1270,17 @@ class CanonicalV2WorkflowEngine:
             modernized_implementation_hash=getattr(target_adapter, "implementation_hash", ""),
             oracle_set_id=getattr(oracle_set, "oracle_set_id", ""),
             oracle_set_hash=getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", ""),
-            evaluation_mode=spec.rule_config.mode if spec.rule_config else "CONTROLLED",
-            policy_min_equivalence_score=request.policy_min_equivalence_score,
-            policy_allow_warnings=request.allow_warnings,
+            evaluation_mode=cert_policy.evaluation_mode or "CONTROLLED",
+            policy_id=cert_policy.policy_id,
+            policy_version=cert_policy.version,
+            policy_hash=cert_policy.policy_hash or cert_policy.compute_hash(),
+            policy_min_equivalence_score=cert_policy.min_equivalence_score,
+            policy_min_oracle_coverage=cert_policy.min_oracle_coverage,
+            policy_allow_warnings=cert_policy.allow_warnings,
+            execution_fingerprint=run.execution_fingerprint or "",
+            evaluation_result_id=eval_result.evaluation_id,
+            threshold_resolution_id=threshold_res.resolution_id,
+            threshold_resolution_fingerprint=threshold_res.fingerprint,
         )
 
         artifact = self.cert_eng.certify(
@@ -1289,27 +1298,22 @@ class CanonicalV2WorkflowEngine:
                 "CertificationEngine failed to produce a valid CertificationArtifact.",
             )
 
-        # Verify cross-binding of produced artifact
-        art_thresh_id = artifact.threshold_resolution_id or (artifact.context.threshold_resolution_id if artifact.context else None)
-        if art_thresh_id != threshold_res.resolution_id:
+        # 4. Comprehensive post-certification authority chain verification
+        post_verify = verify_execution_authority_chain(
+            execution_fingerprint=run.execution_fingerprint,
+            application_id=spec.application_id,
+            eval_result=eval_result,
+            oracle_set=oracle_set,
+            threshold_res=threshold_res,
+            artifact=artifact,
+            require_artifact=True,
+            require_audit=False,
+        )
+        if not post_verify.is_valid:
             return self._fail_run(
                 run,
-                WorkflowErrorCode.CERTIFICATION_FAILED,
-                f"CertificationArtifact threshold resolution mismatch ('{art_thresh_id}' vs '{threshold_res.resolution_id}').",
-            )
-        art_oset_id = artifact.oracle_set_id or (artifact.context.oracle_set_id if artifact.context else None)
-        if art_oset_id and getattr(oracle_set, "oracle_set_id", None) and art_oset_id != oracle_set.oracle_set_id:
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.CERTIFICATION_FAILED,
-                f"CertificationArtifact oracle set mismatch ('{art_oset_id}' vs '{oracle_set.oracle_set_id}').",
-            )
-
-        if not verify_artifact_integrity(artifact):
-            return self._fail_run(
-                run,
-                WorkflowErrorCode.CERTIFICATION_FAILED,
-                "CertificationArtifact cryptographic content hash verification failed.",
+                post_verify.error_code or WorkflowErrorCode.CERTIFICATION_FAILED,
+                f"Post-certification authority chain verification failed: {post_verify.failure_reason}",
             )
 
         run.certification_id = artifact.certification_id
@@ -1596,52 +1600,27 @@ class CanonicalV2WorkflowEngine:
             if not artifact:
                 return None
 
-            # Verify artifact integrity
-            if not verify_artifact_integrity(artifact):
-                return None
-
-            # Verify cases exist
+            eval_res = self.eval_persistence.get_evaluation_result(run.evaluation_id) if run.evaluation_id else None
+            oset = self.rec_persistence.get_oracle_set(run.oracle_set_id) if run.oracle_set_id else None
+            res = self.thresh_persistence.get_resolution(run.threshold_resolution_id) if run.threshold_resolution_id else None
             cases = self.cert_repo.get_cases(run.certification_id)
-            if not cases or len(cases) == 0:
-                return None
-
-            # Verify EvaluationResult from persistence and cross-bindings
-            if run.evaluation_id:
-                eval_res = self.eval_persistence.get_evaluation_result(run.evaluation_id)
-                if not eval_res or not verify_evaluation_result_integrity(eval_res):
-                    return None
-                if eval_res.application_id and eval_res.application_id != run.application_id:
-                    return None
-
-            # Verify OracleSet from persistence and cross-bindings
-            if run.oracle_set_id:
-                oset = self.rec_persistence.get_oracle_set(run.oracle_set_id)
-                if not oset:
-                    return None
-                if run.oracle_set_hash and oset.oracle_set_hash != run.oracle_set_hash:
-                    return None
-                if oset.application_id and oset.application_id != run.application_id:
-                    return None
-                rules_count = len(getattr(oset, "rules", [])) + len(getattr(oset, "oracles", []))
-                if rules_count == 0:
-                    return None
-                if artifact.oracle_set_id and artifact.oracle_set_id != run.oracle_set_id:
-                    return None
-
-            # Verify threshold resolution if recorded
-            if run.threshold_resolution_id:
-                res = self.thresh_persistence.get_resolution(run.threshold_resolution_id)
-                if not res:
-                    return None
-                if run.threshold_resolution_fingerprint and res.compute_fingerprint() != run.threshold_resolution_fingerprint:
-                    return None
-                art_thresh_id = artifact.threshold_resolution_id or (artifact.context.threshold_resolution_id if artifact.context else None)
-                if art_thresh_id and art_thresh_id != run.threshold_resolution_id:
-                    return None
-
-            # Verify mandatory audit record exists
             audit_events = audit_logger.list_events(certification_id=run.certification_id)
-            if not audit_events or len(audit_events) == 0:
+
+            # Strict cross-binding and integrity verification via central verifier
+            verify_res = verify_execution_authority_chain(
+                execution_fingerprint=run.execution_fingerprint,
+                application_id=run.application_id,
+                eval_result=eval_res,
+                oracle_set=oset,
+                threshold_res=res,
+                artifact=artifact,
+                cases=cases,
+                audit_events=audit_events,
+                require_artifact=True,
+                require_audit=True,
+            )
+            if not verify_res.is_valid:
+                logger.warning(f"Authority chain verification rejected existing run '{run.workflow_run_id}': {verify_res.failure_reason}")
                 return None
 
             return WorkflowResult(

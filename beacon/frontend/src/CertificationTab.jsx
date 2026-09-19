@@ -166,9 +166,6 @@ export default function CertificationTab({
           subdirectory: modernSubdir.trim() || null,
         },
         evaluation_mode: evaluationMode,
-        policy_min_equivalence_score: 0.999,
-        policy_min_oracle_coverage: 0.0,
-        allow_warnings: false,
         explain: true,
         explanation_mode: "deterministic",
       };

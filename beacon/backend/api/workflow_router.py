@@ -63,6 +63,7 @@ from certification.adapter_registry import adapter_registry
 from certification.repository import certification_repository
 from threshold.persistence import threshold_persistence
 from threshold.models import ThresholdPolicy, DifferenceMetric, ThresholdStrategy
+from certification.policies import certification_policy_resolver
 
 
 class RepositoryAnalysisRequest(BaseModel):
@@ -185,7 +186,10 @@ def _perform_repository_analysis(
         input_set_identity=input_set_id,
         rule_set_identity=rule_set_id,
         evaluation_mode=req.evaluation_mode,
-        policy_identity=hashlib.sha256(f"score:{getattr(req, 'policy_min_equivalence_score', 0.999)}".encode()).hexdigest(),
+        policy_identity=certification_policy_resolver.resolve_effective_policy(
+            application_id=repo_app_id,
+            evaluation_mode=req.evaluation_mode,
+        ).compute_policy_fingerprint(),
         provenance={
             "legacy_provenance": legacy_prov.model_dump(),
             "modern_provenance": modern_prov.model_dump(),
@@ -363,10 +367,9 @@ def _run_repository_certification_pipeline(
     wf_req = WorkflowRunRequest(
         application_id=spec.application_id,
         target_index=0,
-        custom_inputs=test_inputs,
-        policy_min_equivalence_score=req.policy_min_equivalence_score,
-        policy_min_oracle_coverage=req.policy_min_oracle_coverage,
-        allow_warnings=req.allow_warnings,
+        authoritative_input_set=test_inputs,
+        custom_inputs=None,
+        policy_override=None,
         explain=req.explain,
         explanation_mode=req.explanation_mode,
         enable_discovery=(req.evaluation_mode in ("FULL", "FULL_BEACON")),
