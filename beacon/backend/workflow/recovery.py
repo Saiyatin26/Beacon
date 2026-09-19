@@ -67,9 +67,23 @@ class WorkflowRecoveryService:
                         finalization_state="IDEMPOTENCY_FINALIZED",
                         request_fingerprint=run.request_fingerprint,
                     )
+                    run.finalization_state = FinalizationState.IDEMPOTENCY_FINALIZED
                 except Exception as idemp_err:
-                    logger.debug(f"Recovery Stage-B finalization notice for '{run.workflow_run_id}': {idemp_err}")
-                run.finalization_state = FinalizationState.IDEMPOTENCY_FINALIZED
+                    logger.error(f"Recovery Stage-B finalization failed for '{run.workflow_run_id}': {idemp_err}", exc_info=True)
+                    run.error_code = WorkflowErrorCode.PERSISTENCE_FAILED
+                    run.error_message = f"Recovery Stage-B finalization failed: {str(idemp_err)}"
+                    run.metadata["persistence_failure"] = str(idemp_err)
+                    updated = self.persistence.save_run(run)
+                    resolved_runs.append(updated)
+                    continue
+
+                if run.state != WorkflowState.PERSISTING:
+                    transition_workflow_state(
+                        run,
+                        WorkflowState.PERSISTING,
+                        reason="Recovery advancing verified execution to PERSISTING before finalization",
+                        is_recovery=True,
+                    )
 
                 transition_workflow_state(
                     run,
@@ -99,7 +113,8 @@ class WorkflowRecoveryService:
                         request_fingerprint=run.request_fingerprint,
                     )
                 except Exception as idemp_err:
-                    logger.debug(f"Recovery Stage-B failure finalization notice for '{run.workflow_run_id}': {idemp_err}")
+                    logger.error(f"Recovery Stage-B failure finalization failed for '{run.workflow_run_id}': {idemp_err}", exc_info=True)
+                    run.metadata["persistence_failure"] = str(idemp_err)
                 logger.warning(f"Marked incomplete workflow run '{run.workflow_run_id}' as FAILED: {failure_reason}")
 
             updated = self.persistence.save_run(run)

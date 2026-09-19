@@ -100,7 +100,17 @@ from rules.models import (
 )
 from rules.registry import RuleRegistry, rule_registry
 from threshold.engine import ThresholdEngine, threshold_engine
-from threshold.models import DifferenceMetric, ThresholdPolicy, ThresholdResolution, ThresholdStrategy
+from threshold.models import (
+    DifferenceMetric,
+    EstimatorType,
+    OutlierPolicy,
+    ThresholdPolicy,
+    ThresholdResolution,
+    ThresholdStatus,
+    ThresholdStrategy,
+    ThresholdStrategyProposal,
+    ThresholdValidationPolicy,
+)
 from threshold.persistence import ThresholdPersistenceStore, threshold_persistence
 
 from .idempotency import WorkflowIdempotencyManager, workflow_idempotency
@@ -741,6 +751,11 @@ class CanonicalV2WorkflowEngine:
                 f"Evaluation total inputs ({len(getattr(eval_result, 'input_results', []))}) != test inputs count ({len(test_inputs)}).",
             )
 
+        # Bind execution identity to EvaluationResult metadata
+        if not hasattr(eval_result, "metadata") or eval_result.metadata is None:
+            eval_result.metadata = {}
+        eval_result.metadata["execution_fingerprint"] = run.execution_fingerprint
+
         # Persist EvaluationResult to authoritative Phase 4 persistence store
         self.eval_persistence.save_evaluation_result(eval_result)
 
@@ -1054,41 +1069,59 @@ class CanonicalV2WorkflowEngine:
                         if isinstance(v, (int, float)) and not (isinstance(v, bool) or math.isnan(v) or math.isinf(v)):
                             clean_observations.append(float(v))
 
-        # 2. Retrieve authoritative policy or automatically derive evidence-driven policy
+        # 2. Retrieve authoritative policy or derive through advisory proposal + deterministic validation
         th_policy = self.thresh_persistence.get_policy(f"POL-{spec.application_id}")
         if not th_policy:
             th_policy = self.thresh_persistence.get_policy(spec.application_id)
 
         if not th_policy:
-            # Derive evidence-grounded policy from actual repository observations
-            metric = DifferenceMetric.ABSOLUTE_DIFF
+            # Check for candidate advisory strategy proposal in metadata
+            ai_proposal_dict = (getattr(spec, "metadata", {}) or {}).get("threshold_strategy_proposal")
+            proposal: Optional[ThresholdStrategyProposal] = None
+            if ai_proposal_dict and isinstance(ai_proposal_dict, dict):
+                try:
+                    proposal = ThresholdStrategyProposal(**ai_proposal_dict)
+                except Exception as pe:
+                    logger.warning(f"Invalid advisory threshold proposal in metadata: {pe}")
+
             obs_count = len(clean_observations)
-            if obs_count >= 5:
-                th_policy = ThresholdPolicy(
-                    policy_id=f"POL-{spec.application_id}",
-                    version="1.0.0",
-                    description=f"Auto-derived evidence-based threshold policy for {spec.application_id}",
-                    metric=metric,
-                    strategy=ThresholdStrategy.EVIDENCE_DERIVED,
-                    estimator=EstimatorType.IQR,
-                    parameters={"k": 1.5},
-                    minimum_samples=5,
-                    minimum_bound=0.0,
-                    maximum_bound=None,
+            if not proposal:
+                # Derive evidence-grounded candidate proposal
+                if obs_count >= 5:
+                    proposal = ThresholdStrategyProposal(
+                        strategy=ThresholdStrategy.EVIDENCE_DERIVED,
+                        metric=DifferenceMetric.ABSOLUTE_DIFF,
+                        candidate_parameters={"k": 1.5},
+                        estimator=EstimatorType.IQR,
+                        reasoning=f"Auto-derived proposal: empirical sample count ({obs_count} >= 5) permits robust IQR estimation.",
+                        evidence_summary={"sample_count": obs_count},
+                        confidence=0.95,
+                    )
+                elif obs_count > 0:
+                    is_zero_variance = (len(set(clean_observations)) <= 1)
+                    proposal = ThresholdStrategyProposal(
+                        strategy=ThresholdStrategy.EVIDENCE_DERIVED,
+                        metric=DifferenceMetric.ABSOLUTE_DIFF,
+                        candidate_parameters={"k": 1.0, "maximum_bound": 0.0 if is_zero_variance else None},
+                        estimator=EstimatorType.RANGE,
+                        reasoning=f"Auto-derived proposal: small sample count ({obs_count} < 5) uses RANGE bounded estimation.",
+                        evidence_summary={"sample_count": obs_count, "zero_variance": is_zero_variance},
+                        confidence=0.80,
+                    )
+
+            if proposal:
+                val_policy = ThresholdValidationPolicy(
+                    allowed_strategies=[ThresholdStrategy.EVIDENCE_DERIVED, ThresholdStrategy.STATISTICAL, ThresholdStrategy.EXACT],
+                    min_k=0.1,
+                    max_k=10.0,
+                    allow_fallback_to_deterministic=True,
                 )
-            elif obs_count > 0:
-                is_zero_variance = (len(set(clean_observations)) <= 1)
-                th_policy = ThresholdPolicy(
+                th_policy = val_policy.validate_proposal(
+                    proposal=proposal,
                     policy_id=f"POL-{spec.application_id}",
                     version="1.0.0",
-                    description=f"Auto-derived discrete threshold policy for {spec.application_id}",
-                    metric=metric,
-                    strategy=ThresholdStrategy.EVIDENCE_DERIVED,
-                    estimator=EstimatorType.RANGE,
-                    parameters={"k": 1.0},
-                    minimum_samples=1,
-                    minimum_bound=0.0,
-                    maximum_bound=0.0 if is_zero_variance else None,
+                    description=f"Validated deterministic threshold policy for {spec.application_id}",
+                    minimum_samples=5 if obs_count >= 5 else 1,
                 )
             else:
                 meta_th = (getattr(spec, "metadata", {}) or {}).get("threshold_policy")
@@ -1122,6 +1155,13 @@ class CanonicalV2WorkflowEngine:
                 WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
                 f"Threshold resolution failed-closed: insufficient reference samples ({threshold_res.sample_count} < {threshold_res.minimum_required_samples}) and no verified fallback policy. Arbitrary tolerance injection is forbidden.",
             )
+
+        # Bind threshold to execution and oracle
+        if not hasattr(threshold_res, "provenance") or not isinstance(threshold_res.provenance, dict):
+            threshold_res.provenance = {}
+        threshold_res.provenance["execution_fingerprint"] = run.execution_fingerprint
+        threshold_res.provenance["oracle_set_id"] = getattr(run, "oracle_set_id", "")
+        threshold_res.provenance["oracle_set_hash"] = getattr(run, "oracle_set_hash", "")
 
         # 4. Strict Authority Check: threshold fingerprint verification
         expected_fp = threshold_res.compute_fingerprint()
@@ -1170,11 +1210,35 @@ class CanonicalV2WorkflowEngine:
                 WorkflowErrorCode.EVALUATION_FAILED,
                 f"EvaluationResult application '{eval_result.application_id}' does not match workflow '{spec.application_id}'.",
             )
+        eval_exec_fp = (getattr(eval_result, "metadata", {}) or {}).get("execution_fingerprint")
+        if eval_exec_fp and run.execution_fingerprint and eval_exec_fp != run.execution_fingerprint:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.EVALUATION_FAILED,
+                f"EvaluationResult execution fingerprint mismatch: expected '{run.execution_fingerprint}', found '{eval_exec_fp}'.",
+            )
+
         if getattr(oracle_set, "application_id", None) and oracle_set.application_id != spec.application_id:
             return self._fail_run(
                 run,
                 WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
                 f"OracleSet application '{oracle_set.application_id}' does not match workflow '{spec.application_id}'.",
+            )
+
+        # Cross-binding checks on threshold resolution
+        thresh_exec_fp = getattr(threshold_res, "provenance", {}).get("execution_fingerprint")
+        if thresh_exec_fp and run.execution_fingerprint and thresh_exec_fp != run.execution_fingerprint:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+                f"ThresholdResolution execution fingerprint mismatch: expected '{run.execution_fingerprint}', found '{thresh_exec_fp}'.",
+            )
+        thresh_oset_id = getattr(threshold_res, "provenance", {}).get("oracle_set_id")
+        if thresh_oset_id and getattr(oracle_set, "oracle_set_id", None) and thresh_oset_id != oracle_set.oracle_set_id:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+                f"ThresholdResolution oracle set id mismatch: expected '{oracle_set.oracle_set_id}', found '{thresh_oset_id}'.",
             )
 
         expected_fp = threshold_res.compute_fingerprint()
@@ -1232,6 +1296,13 @@ class CanonicalV2WorkflowEngine:
                 run,
                 WorkflowErrorCode.CERTIFICATION_FAILED,
                 f"CertificationArtifact threshold resolution mismatch ('{art_thresh_id}' vs '{threshold_res.resolution_id}').",
+            )
+        art_oset_id = artifact.oracle_set_id or (artifact.context.oracle_set_id if artifact.context else None)
+        if art_oset_id and getattr(oracle_set, "oracle_set_id", None) and art_oset_id != oracle_set.oracle_set_id:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.CERTIFICATION_FAILED,
+                f"CertificationArtifact oracle set mismatch ('{art_oset_id}' vs '{oracle_set.oracle_set_id}').",
             )
 
         if not verify_artifact_integrity(artifact):
@@ -1458,11 +1529,17 @@ class CanonicalV2WorkflowEngine:
             )
         except Exception as exc:
             logger.error(f"State transition to FAILED failed for run '{run.workflow_run_id}': {exc}")
+            audit_status = "PERSISTENCE_FAILED"
+            if not hasattr(run, "metadata") or run.metadata is None:
+                run.metadata = {}
+            run.metadata["persistence_failure"] = str(exc)
+            error_message = f"{error_message} [STATE TRANSITION FAILED: {exc}]"
             try:
                 run.completed_at = datetime.now(timezone.utc).isoformat()
                 self.persistence.save_run(run)
             except Exception as save_err:
                 logger.error(f"Failed to save failed run state '{run.workflow_run_id}': {save_err}")
+                error_message = f"{error_message} [SAVE FAILED: {save_err}]"
 
         try:
             self.idempotency_mgr.finalize_run(
@@ -1473,7 +1550,12 @@ class CanonicalV2WorkflowEngine:
                 finalization_state="FAILED",
             )
         except Exception as idemp_err:
-            logger.warning(f"Failed to finalize idempotency reservation for failed run '{run.workflow_run_id}': {idemp_err}")
+            logger.error(f"Failed to finalize idempotency reservation for failed run '{run.workflow_run_id}': {idemp_err}")
+            audit_status = "PERSISTENCE_FAILED"
+            if not hasattr(run, "metadata") or run.metadata is None:
+                run.metadata = {}
+            run.metadata["persistence_failure"] = str(idemp_err)
+            error_message = f"{error_message} [FAILURE PERSISTENCE NOT CONFIRMED: {idemp_err}]"
 
         log_operational_event(
             event="workflow_failed",

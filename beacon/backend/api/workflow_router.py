@@ -55,6 +55,8 @@ from application.models import (
     ImplementationTarget,
     RuleConfig,
     DatasetConfig,
+    RepositoryExecutionSpec,
+    build_application_spec_from_repository_execution_spec,
 )
 from application.repository import application_repository
 from certification.adapter_registry import adapter_registry
@@ -150,21 +152,47 @@ def _perform_repository_analysis(
 
     # Prepare inputs payload
     discovered_inputs = [inp.values for inp in input_discovery_res.test_inputs]
-
-    # Calculate specification fingerprint
-    raw_fp_data = {
-        "legacy_content_hash": legacy_prov.content_hash,
-        "modern_content_hash": modern_prov.content_hash,
-        "legacy_adapter": legacy_adapter_res.adapter_name,
-        "modern_adapter": modern_adapter_res.adapter_name,
-        "legacy_entrypoint": legacy_adapter_res.resolved_entrypoint,
-        "modern_entrypoint": modern_adapter_res.resolved_entrypoint,
-        "input_set_hash": input_discovery_res.input_set_hash,
-        "evaluation_mode": req.evaluation_mode,
-    }
-    spec_fingerprint = hashlib.sha256(
-        json.dumps(raw_fp_data, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    input_set_id = input_discovery_res.input_set_hash or hashlib.sha256(
+        json.dumps(discovered_inputs, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
+    rule_set_id = hashlib.sha256(
+        json.dumps(discovered_rules, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()
+
+    # Build authoritative RepositoryExecutionSpec
+    repo_spec = RepositoryExecutionSpec(
+        specification_id=app_id,
+        legacy_source_identity={
+            **(legacy_prov.identity.model_dump() if legacy_prov.identity else {}),
+            "repository_url": legacy_prov.source_url,
+            "commit_sha": legacy_prov.commit_sha,
+            "content_hash": legacy_prov.content_hash,
+            "technologies": legacy_analysis.frameworks or legacy_analysis.languages,
+        },
+        modern_source_identity={
+            **(modern_prov.identity.model_dump() if modern_prov.identity else {}),
+            "repository_url": modern_prov.source_url,
+            "commit_sha": modern_prov.commit_sha,
+            "content_hash": modern_prov.content_hash,
+            "technologies": modern_analysis.frameworks or modern_analysis.languages,
+        },
+        legacy_adapter=legacy_adapter_res.model_dump(exclude={"adapter_instance"}),
+        modern_adapter=modern_adapter_res.model_dump(exclude={"adapter_instance"}),
+        legacy_entrypoint=legacy_adapter_res.resolved_entrypoint or "",
+        modern_entrypoint=modern_adapter_res.resolved_entrypoint or "",
+        discovered_rules=discovered_rules,
+        discovered_inputs=discovered_inputs,
+        input_set_identity=input_set_id,
+        rule_set_identity=rule_set_id,
+        evaluation_mode=req.evaluation_mode,
+        policy_identity=hashlib.sha256(f"score:{getattr(req, 'policy_min_equivalence_score', 0.999)}".encode()).hexdigest(),
+        provenance={
+            "legacy_provenance": legacy_prov.model_dump(),
+            "modern_provenance": modern_prov.model_dump(),
+            "input_discovery_provenance": input_discovery_res.provenance,
+        },
+    )
+    spec_fingerprint = repo_spec.specification_fingerprint
 
     # Determine overall status
     errors = []
@@ -218,6 +246,8 @@ def _perform_repository_analysis(
             "legacy_provenance": legacy_prov.model_dump(),
             "modern_provenance": modern_prov.model_dump(),
             "fingerprint": spec_fingerprint,
+            "input_set_identity": input_set_id,
+            "rule_set_identity": rule_set_id,
         },
         diagnostic_message=(
             f"Successfully analyzed repositories ({len(input_discovery_res.test_inputs)} inputs, "
@@ -237,6 +267,7 @@ def _perform_repository_analysis(
         modern_adapter_res,
         input_discovery_res,
         analysis_result,
+        repo_spec,
     )
 
 
@@ -245,6 +276,16 @@ def _run_repository_certification_pipeline(
     current_user: User,
 ) -> WorkflowResult:
     """Executes full repository ingestion, analysis, adapter detection, input discovery, and canonical certification."""
+    # 0. Strict Input Authority: Custom input injection is strictly forbidden in production certification
+    if req.custom_inputs is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "CUSTOM_INPUTS_DISALLOWED_IN_PRODUCTION",
+                "message": "Caller-supplied custom_inputs is forbidden in production repository certification. Repository-discovered inputs are authoritative.",
+            },
+        )
+
     (
         legacy_dir,
         legacy_prov,
@@ -254,6 +295,7 @@ def _run_repository_certification_pipeline(
         modern_adapter_res,
         input_discovery_res,
         analysis_result,
+        repo_spec,
     ) = _perform_repository_analysis(req)
 
     if legacy_adapter_res.status != AdapterResolutionStatus.RESOLVED:
@@ -280,23 +322,19 @@ def _run_repository_certification_pipeline(
             },
         )
 
-    if req.custom_inputs and len(req.custom_inputs) > 0:
-        test_inputs = req.custom_inputs
-        input_source_desc = "User-supplied custom inputs"
-        input_discovery_meta = {"source": input_source_desc, "count": len(test_inputs)}
-    else:
-        if input_discovery_res.status != InputDiscoveryStatus.SUCCESS:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "INPUT_DISCOVERY_FAILED",
-                    "status": input_discovery_res.status.value,
-                    "message": input_discovery_res.diagnostic_message,
-                },
-            )
-        test_inputs = [inp.values for inp in input_discovery_res.test_inputs]
-        input_source_desc = input_discovery_res.discovery_source
-        input_discovery_meta = input_discovery_res.provenance
+    if input_discovery_res.status != InputDiscoveryStatus.SUCCESS or not repo_spec.discovered_inputs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "NO_AUTHORITATIVE_INPUT_SET",
+                "status": input_discovery_res.status.value,
+                "message": "Repository analysis discovered zero legitimate input test cases. Equivalence certification cannot proceed without genuine input evidence.",
+            },
+        )
+
+    test_inputs = repo_spec.discovered_inputs
+    input_source_desc = input_discovery_res.discovery_source
+    input_discovery_meta = input_discovery_res.provenance
 
     # 5. Execution Authorization: Load executable callables ONLY NOW in the authorized execution stage
     legacy_instance = adapter_detector.load_authorized_adapter(
@@ -317,51 +355,13 @@ def _run_repository_certification_pipeline(
     adapter_registry.register_adapter(legacy_instance)
     adapter_registry.register_adapter(modern_instance)
 
-    app_id = analysis_result.application_id
-
-    ref_target = ImplementationTarget(
-        name=legacy_adapter_res.adapter_name or "legacy_ref",
-        version=legacy_prov.resolved_revision or "1.0.0",
-        target_type="adapter",
-        entrypoint=legacy_adapter_res.resolved_entrypoint or "reference",
-        role="reference",
-        source_hash=legacy_prov.content_hash,
-        metadata={"provenance": legacy_prov.model_dump(), "source_url": legacy_prov.source_url},
-    )
-
-    modern_target = ImplementationTarget(
-        name=modern_adapter_res.adapter_name or "modern_tgt",
-        version=modern_prov.resolved_revision or "1.0.0",
-        target_type="adapter",
-        entrypoint=modern_adapter_res.resolved_entrypoint or "target",
-        role="target",
-        source_hash=modern_prov.content_hash,
-        metadata={"provenance": modern_prov.model_dump(), "source_url": modern_prov.source_url},
-    )
-
-    rule_mode = "CONTROLLED" if req.evaluation_mode == "CONTROLLED" else "FULL_BEACON"
-    spec = ApplicationSpec(
-        application_id=app_id,
-        name=f"Repo-Certification-{app_id}",
-        version="1.0.0",
-        domain="general",
-        reference_implementation=ref_target,
-        target_implementations=[modern_target],
-        rule_config=RuleConfig(mode=rule_mode),
-        dataset_config=DatasetConfig(metadata={"custom_inputs": test_inputs}),
-        metadata={
-            "legacy_provenance": legacy_prov.model_dump(),
-            "modern_provenance": modern_prov.model_dump(),
-            "input_discovery": input_discovery_meta,
-            "evaluation_mode": req.evaluation_mode,
-            "specification_fingerprint": analysis_result.specification_fingerprint,
-        },
-    )
+    # 6. Authoritative Bridge: Derive internal ApplicationSpec from RepositoryExecutionSpec
+    spec = build_application_spec_from_repository_execution_spec(repo_spec)
     application_repository.save_application(spec)
 
-    # 6. Execute canonical V2 workflow engine (deterministic threshold engine handles resolution in Part 2)
+    # 7. Execute canonical V2 workflow engine (deterministic threshold engine handles resolution)
     wf_req = WorkflowRunRequest(
-        application_id=app_id,
+        application_id=spec.application_id,
         target_index=0,
         custom_inputs=test_inputs,
         policy_min_equivalence_score=req.policy_min_equivalence_score,
@@ -454,7 +454,7 @@ def analyze_repository_endpoint(
     current_user: User = Depends(get_current_active_user),
 ) -> RepositoryAnalysisResult:
     """Performs non-executing static analysis on legacy and modern repositories."""
-    _, _, _, _, _, _, _, analysis_result = _perform_repository_analysis(req)
+    _, _, _, _, _, _, _, analysis_result, _ = _perform_repository_analysis(req)
     return analysis_result
 
 

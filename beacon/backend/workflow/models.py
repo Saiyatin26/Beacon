@@ -100,9 +100,9 @@ def transition_workflow_state(
             raise WorkflowStateTransitionError("Cannot transition to COMPLETED without threshold_resolution_id.")
         if not run.execution_fingerprint:
             raise WorkflowStateTransitionError("Cannot transition to COMPLETED without Stage-B execution_fingerprint.")
-        if not is_recovery and current_state != WorkflowState.PERSISTING:
-            raise WorkflowStateTransitionError(f"Cannot transition to COMPLETED directly from '{current_state.value}'.")
-        if not run.metadata.get("audit_persisted") and not is_recovery:
+        if current_state != WorkflowState.PERSISTING:
+            raise WorkflowStateTransitionError(f"Cannot transition to COMPLETED directly from '{current_state.value}'. State must be PERSISTING.")
+        if not run.metadata.get("audit_persisted"):
             raise WorkflowStateTransitionError("Cannot transition to COMPLETED without verified audit persistence.")
 
     now_iso = datetime.now(timezone.utc).isoformat()

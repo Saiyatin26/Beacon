@@ -798,7 +798,9 @@ export default function App() {
           {[
             { id: "certify", label: "⚡ Application Certification", desc: "Repository-First V2 Certification" },
             { id: "controlled", label: "⚖️ Controlled Mode", desc: "Business Rules & Behavioral Compliance" },
-            { id: "thresholds", label: "⚡ Dynamic Thresholds", desc: "Evidence-Driven & Bounded Evaluation" },
+            ...(currentUser?.is_system_admin || currentRole === "PROJECT_ADMIN" ? [
+              { id: "thresholds", label: "🛠️ Threshold Calibration (Admin)", desc: "Manual Calibration Boundary" }
+            ] : []),
             { id: "knowledge", label: "📚 Company Knowledge", desc: "Optional RAG Ingestion & Retrieval" },
             { id: "explanation", label: "🤖 Intelligent Explanations", desc: "Evidence Summarization & Q&A" },
             { id: "custom", label: "📥 Custom Certification", desc: "User-Supplied Datasets & Ingestion" },

@@ -1097,8 +1097,8 @@ export default function CertificationTab({
                   label: "Auto Threshold",
                   val: threshMeta.resolved_threshold != null
                     ? Number(threshMeta.resolved_threshold).toFixed(4)
-                    : (threshMeta.final_value != null ? Number(threshMeta.final_value).toFixed(4) : "0.0000"),
-                  color: "#2563eb",
+                    : (threshMeta.final_value != null ? Number(threshMeta.final_value).toFixed(4) : "Not resolved"),
+                  color: (threshMeta.resolved_threshold != null || threshMeta.final_value != null) ? "#2563eb" : "#dc2626",
                 },
                 {
                   label: "Stage-B Finalization",
@@ -1351,7 +1351,7 @@ export default function CertificationTab({
                 <div style={{ fontSize: "12px", color: "#334155", lineHeight: "1.7" }}>
                   <div><strong>Resolution Strategy:</strong> <span style={{ fontFamily: "monospace", fontWeight: "700", color: "#1e40af" }}>{threshMeta.strategy || "EVIDENCE_DERIVED"}</span></div>
                   <div><strong>Difference Metric:</strong> <span style={{ fontFamily: "monospace" }}>{threshMeta.metric || "ABSOLUTE"}</span></div>
-                  <div><strong>Resolved Threshold:</strong> <strong style={{ color: "#059669", fontSize: "14px", fontFamily: "monospace" }}>{threshMeta.resolved_threshold != null ? Number(threshMeta.resolved_threshold).toFixed(4) : (threshMeta.final_value != null ? Number(threshMeta.final_value).toFixed(4) : "0.0000")}</strong></div>
+                  <div><strong>Resolved Threshold:</strong> {(threshMeta.resolved_threshold != null || threshMeta.final_value != null) ? <strong style={{ color: "#059669", fontSize: "14px", fontFamily: "monospace" }}>{Number(threshMeta.resolved_threshold ?? threshMeta.final_value).toFixed(4)}</strong> : <strong style={{ color: "#dc2626", fontSize: "12px" }}>Not resolved (Inconclusive)</strong>}</div>
                   <div><strong>Reference Samples Analyzed:</strong> <strong>{threshMeta.sample_count ?? repCases.length ?? meta.inputs_count ?? 0}</strong> observations</div>
                   <div><strong>Estimator / Outliers:</strong> {threshMeta.estimator || "IQR"} • Policy: {threshMeta.outlier_policy || "NONE"}</div>
                   <div><strong>Resolution Status:</strong> <span style={{ color: "#166534", fontWeight: "600" }}>{threshMeta.resolution_status || "RESOLVED & FROZEN"}</span></div>

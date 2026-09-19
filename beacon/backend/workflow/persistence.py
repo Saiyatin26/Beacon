@@ -246,20 +246,35 @@ class WorkflowPersistenceStore:
                     conn.commit()
                     return False, row_in_prog["workflow_run_id"], "IN_PROGRESS"
 
-            # Claim Stage-B reservation in dedicated table
-            conn.execute(
-                """
-                INSERT INTO v2_stage_b_reservations (execution_fingerprint, workflow_run_id, owner_run_id, status, finalization_state, created_at, updated_at)
-                VALUES (?, ?, ?, 'IN_PROGRESS', 'NOT_STARTED', ?, ?)
-                ON CONFLICT(execution_fingerprint) DO UPDATE SET
-                    workflow_run_id = excluded.workflow_run_id,
-                    owner_run_id = excluded.owner_run_id,
-                    status = 'IN_PROGRESS',
-                    finalization_state = 'NOT_STARTED',
-                    updated_at = excluded.updated_at;
-                """,
-                (execution_fingerprint, workflow_run_id, workflow_run_id, now, now),
-            )
+            # Claim Stage-B reservation in dedicated table with ownership safety (no overwriting another owner)
+            if row_b and row_b["workflow_run_id"] == workflow_run_id:
+                conn.execute(
+                    """
+                    UPDATE v2_stage_b_reservations
+                    SET status = 'IN_PROGRESS', finalization_state = 'NOT_STARTED', updated_at = ?
+                    WHERE execution_fingerprint = ? AND workflow_run_id = ?;
+                    """,
+                    (now, execution_fingerprint, workflow_run_id),
+                )
+            else:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO v2_stage_b_reservations (execution_fingerprint, workflow_run_id, owner_run_id, status, finalization_state, created_at, updated_at)
+                        VALUES (?, ?, ?, 'IN_PROGRESS', 'NOT_STARTED', ?, ?);
+                        """,
+                        (execution_fingerprint, workflow_run_id, workflow_run_id, now, now),
+                    )
+                except sqlite3.IntegrityError:
+                    # Concurrent insert occurred: fetch current owner safely
+                    curr_b = conn.execute(
+                        "SELECT workflow_run_id, status FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
+                        (execution_fingerprint,),
+                    ).fetchone()
+                    conn.commit()
+                    other_id = curr_b["workflow_run_id"] if curr_b else "unknown"
+                    other_st = curr_b["status"] if curr_b else "IN_PROGRESS"
+                    return False, other_id, other_st
 
             # Update current run's Stage-A idempotency record to bind execution_fingerprint
             conn.execute(
@@ -289,37 +304,33 @@ class WorkflowPersistenceStore:
             # 1. Finalize Stage-B reservation if execution_fingerprint is provided
             if execution_fingerprint:
                 row_b = conn.execute(
-                    "SELECT workflow_run_id, owner_run_id, status FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
+                    "SELECT workflow_run_id, owner_run_id, status, finalization_state FROM v2_stage_b_reservations WHERE execution_fingerprint = ?",
                     (execution_fingerprint,),
                 ).fetchone()
 
                 if row_b:
                     existing_b_owner = row_b["workflow_run_id"]
-                    existing_b_status = row_b["status"]
-                    if existing_b_owner != workflow_run_id and existing_b_status == "COMPLETED":
-                        if status == "FAILED":
-                            pass
-                        else:
-                            run_row_b = conn.execute("SELECT state FROM v2_workflow_runs WHERE workflow_run_id = ?", (existing_b_owner,)).fetchone()
-                            if run_row_b and run_row_b["state"] == "COMPLETED":
-                                conn.commit()
-                                raise WorkflowPersistenceConflictError(
-                                    f"Cannot finalize Stage-B reservation for '{execution_fingerprint[:12]}': owned by run '{existing_b_owner}'"
-                                )
-
-                conn.execute(
-                    """
-                    INSERT INTO v2_stage_b_reservations (execution_fingerprint, workflow_run_id, owner_run_id, status, finalization_state, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(execution_fingerprint) DO UPDATE SET
-                        workflow_run_id = excluded.workflow_run_id,
-                        owner_run_id = excluded.owner_run_id,
-                        status = excluded.status,
-                        finalization_state = COALESCE(excluded.finalization_state, v2_stage_b_reservations.finalization_state),
-                        updated_at = excluded.updated_at;
-                    """,
-                    (execution_fingerprint, workflow_run_id, workflow_run_id, status, finalization_state or status, now, now),
-                )
+                    if existing_b_owner != workflow_run_id:
+                        conn.commit()
+                        raise WorkflowPersistenceConflictError(
+                            f"Cannot finalize Stage-B reservation for '{execution_fingerprint[:12]}': actively owned by run '{existing_b_owner}'."
+                        )
+                    conn.execute(
+                        """
+                        UPDATE v2_stage_b_reservations
+                        SET status = ?, finalization_state = ?, updated_at = ?
+                        WHERE execution_fingerprint = ? AND workflow_run_id = ?;
+                        """,
+                        (status, finalization_state or status, now, execution_fingerprint, workflow_run_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO v2_stage_b_reservations (execution_fingerprint, workflow_run_id, owner_run_id, status, finalization_state, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?);
+                        """,
+                        (execution_fingerprint, workflow_run_id, workflow_run_id, status, finalization_state or status, now, now),
+                    )
 
             # 2. Finalize Stage-A record
             row_a = conn.execute(

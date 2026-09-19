@@ -359,3 +359,72 @@ class AdvancedEvaluationResult(BaseModel):
     def model_post_init(self, __context: Any) -> None:
         if not self.result_hash:
             object.__setattr__(self, "result_hash", self.compute_result_hash())
+
+
+class ThresholdStrategyProposal(BaseModel):
+    """Candidate threshold strategy proposed by intelligence, RAG, or heuristics prior to deterministic validation.
+    
+    Advisory only; never directly produces authoritative thresholds without validation.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    strategy: ThresholdStrategy = ThresholdStrategy.EVIDENCE_DERIVED
+    metric: DifferenceMetric = DifferenceMetric.ABSOLUTE_DIFF
+    candidate_parameters: dict[str, Any] = Field(default_factory=dict)
+    estimator: EstimatorType = EstimatorType.IQR_ROBUST
+    outlier_policy: OutlierPolicy = OutlierPolicy.NONE
+    minimum_samples: int = 5
+    reasoning: str = ""
+    confidence: float = 1.0
+    evidence_summary: dict[str, Any] = Field(default_factory=dict)
+    proposal_source: str = "DETERMINISTIC_HEURISTIC"  # "AI_ADVISORY" | "DETERMINISTIC_HEURISTIC"
+
+
+class ThresholdValidationPolicy(BaseModel):
+    """Deterministic validation policy constraining candidate threshold strategy proposals.
+    
+    Enforces that candidate parameters satisfy system invariants before invocation of the ThresholdEngine.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    allowed_strategies: list[ThresholdStrategy] = Field(
+        default_factory=lambda: [ThresholdStrategy.EVIDENCE_DERIVED, ThresholdStrategy.STATISTICAL, ThresholdStrategy.FIXED]
+    )
+    max_k_multiplier: float = 5.0
+    min_k_multiplier: float = 0.1
+    min_required_samples: int = 1
+
+    def validate_proposal(
+        self,
+        proposal: ThresholdStrategyProposal,
+        sample_count: int,
+        policy_id: str,
+    ) -> tuple[bool, Optional[ThresholdPolicy], str]:
+        """Validates candidate proposal against deterministic bounds and produces validated ThresholdPolicy."""
+        if proposal.strategy not in self.allowed_strategies:
+            return False, None, f"Strategy '{proposal.strategy.value}' is not permitted by validation policy."
+
+        k = proposal.candidate_parameters.get("k", 1.5)
+        try:
+            k_val = float(k)
+            if k_val < self.min_k_multiplier or k_val > self.max_k_multiplier:
+                return False, None, f"Multiplier k={k_val} outside allowable range [{self.min_k_multiplier}, {self.max_k_multiplier}]."
+        except (ValueError, TypeError):
+            return False, None, "Multiplier k must be a valid numerical value."
+
+        if sample_count < self.min_required_samples:
+            return False, None, f"Sample count {sample_count} is below required minimum of {self.min_required_samples}."
+
+        validated_policy = ThresholdPolicy(
+            policy_id=policy_id,
+            version="1.0.0",
+            description=f"Validated policy: {proposal.reasoning or 'Evidence-grounded proposal'}",
+            metric=proposal.metric,
+            strategy=proposal.strategy,
+            estimator=proposal.estimator,
+            parameters={"k": k_val},
+            minimum_samples=max(self.min_required_samples, proposal.minimum_samples),
+            outlier_policy=proposal.outlier_policy,
+            minimum_bound=0.0,
+        )
+        return True, validated_policy, "Proposal successfully validated."
