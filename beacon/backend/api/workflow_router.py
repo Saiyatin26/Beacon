@@ -4,9 +4,13 @@ Exposes endpoints to execute, inspect, and recover production-grade end-to-end
 behavioral equivalence certification workflows.
 """
 
+from datetime import datetime, timezone
+import hashlib
+import json
 import logging
+from pathlib import Path
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
 
 from auth import (
     Permission,
@@ -35,6 +39,8 @@ from typing import Any, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from application.repository_service import (
+    RepositoryIdentity,
+    RepositoryProvenance,
     RepositoryService,
     RepositorySourceSpec,
     RepositorySourceType,
@@ -56,6 +62,9 @@ from application.models import (
     RuleConfig,
     DatasetConfig,
     RepositoryExecutionSpec,
+    SourceIngestionMode,
+    AnalysisScope,
+    SourceArtifact,
     build_application_spec_from_repository_execution_spec,
 )
 from application.repository import application_repository
@@ -68,9 +77,13 @@ from certification.policies import certification_policy_resolver
 
 class RepositoryAnalysisRequest(BaseModel):
     """Request payload for repository static analysis and discovery."""
-    legacy_repository: RepositorySourceSpec
-    modern_repository: RepositorySourceSpec
+    legacy_repository: Optional[RepositorySourceSpec] = None
+    modern_repository: Optional[RepositorySourceSpec] = None
     evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "CONTROLLED"
+    source_mode: Union[SourceIngestionMode, str] = SourceIngestionMode.GITHUB_REPOSITORY
+    analysis_scope: Union[AnalysisScope, str] = AnalysisScope.REPOSITORY
+    selected_artifacts: Optional[list[Union[dict[str, Any], str, SourceArtifact]]] = None
+    upload_id: Optional[str] = None
 
 
 class RepositoryAnalysisResult(BaseModel):
@@ -79,6 +92,8 @@ class RepositoryAnalysisResult(BaseModel):
 
     status: str = "READY"
     evaluation_mode: str = "CONTROLLED"
+    source_mode: str = "GITHUB_REPOSITORY"
+    analysis_scope: str = "REPOSITORY"
     application_id: str = ""
     specification_fingerprint: str = ""
     legacy: dict[str, Any] = Field(default_factory=dict)
@@ -95,8 +110,8 @@ class RepositoryAnalysisResult(BaseModel):
 
 class RepositoryCertificationRequest(BaseModel):
     """Primary request payload for repository-first V2 certification."""
-    legacy_repository: RepositorySourceSpec
-    modern_repository: RepositorySourceSpec
+    legacy_repository: Optional[RepositorySourceSpec] = None
+    modern_repository: Optional[RepositorySourceSpec] = None
     evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "CONTROLLED"
     policy_min_equivalence_score: float = 0.999
     policy_min_oracle_coverage: float = 0.0
@@ -105,16 +120,76 @@ class RepositoryCertificationRequest(BaseModel):
     explanation_mode: Literal["deterministic", "llm", "auto"] = "deterministic"
     custom_inputs: Optional[list[dict[str, Any]]] = None
     idempotency_key: Optional[str] = None
+    source_mode: Union[SourceIngestionMode, str] = SourceIngestionMode.GITHUB_REPOSITORY
+    analysis_scope: Union[AnalysisScope, str] = AnalysisScope.REPOSITORY
+    selected_artifacts: Optional[list[Union[dict[str, Any], str, SourceArtifact]]] = None
+    upload_id: Optional[str] = None
 
 
 def _perform_repository_analysis(
     req: Union[RepositoryAnalysisRequest, RepositoryCertificationRequest],
 ) -> tuple[Any, Any, Any, Any, Any, Any, Any, RepositoryAnalysisResult]:
     """Performs safe static ingestion, static analysis, adapter resolution, and input discovery."""
-    # 1. Ingest repositories securely
+    # 1. Ingest repositories or load staged upload sources
     try:
-        legacy_dir, legacy_prov = repository_service.ingest_repository(req.legacy_repository)
-        modern_dir, modern_prov = repository_service.ingest_repository(req.modern_repository)
+        is_upload = (
+            str(getattr(req, "source_mode", "")).upper() in ("UPLOADED_FILES", "UPLOADED", "UPLOAD")
+            or bool(getattr(req, "upload_id", None))
+        )
+        if is_upload and getattr(req, "upload_id", None):
+            upload_id = req.upload_id
+            staged_dir = repository_service.cache_dir.parent / "staged_sources" / upload_id
+            legacy_dir = staged_dir / "legacy"
+            modern_dir = staged_dir / "modern"
+            if not legacy_dir.exists() or not modern_dir.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Staged upload workspace '{upload_id}' not found.",
+                )
+            legacy_identity = RepositoryIdentity(
+                canonical_url=str(legacy_dir),
+                resolved_revision=upload_id,
+                commit_sha=None,
+                content_hash=hashlib.sha256(f"legacy_upload_{upload_id}".encode()).hexdigest(),
+            )
+            legacy_prov = RepositoryProvenance(
+                source_url=f"upload://{upload_id}/legacy",
+                canonical_source_url=f"upload://{upload_id}/legacy",
+                source_type="directory",
+                resolved_revision=upload_id,
+                commit_sha=None,
+                content_hash=legacy_identity.content_hash,
+                retrieval_timestamp=datetime.now(timezone.utc).isoformat(),
+                local_path=str(legacy_dir),
+                identity=legacy_identity,
+            )
+            modern_identity = RepositoryIdentity(
+                canonical_url=str(modern_dir),
+                resolved_revision=upload_id,
+                commit_sha=None,
+                content_hash=hashlib.sha256(f"modern_upload_{upload_id}".encode()).hexdigest(),
+            )
+            modern_prov = RepositoryProvenance(
+                source_url=f"upload://{upload_id}/modern",
+                canonical_source_url=f"upload://{upload_id}/modern",
+                source_type="directory",
+                resolved_revision=upload_id,
+                commit_sha=None,
+                content_hash=modern_identity.content_hash,
+                retrieval_timestamp=datetime.now(timezone.utc).isoformat(),
+                local_path=str(modern_dir),
+                identity=modern_identity,
+            )
+        else:
+            if not req.legacy_repository or not req.modern_repository:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Both legacy_repository and modern_repository must be specified for GITHUB_REPOSITORY source mode.",
+                )
+            legacy_dir, legacy_prov = repository_service.ingest_repository(req.legacy_repository)
+            modern_dir, modern_prov = repository_service.ingest_repository(req.modern_repository)
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error(f"Repository ingestion failed: {exc}", exc_info=True)
         raise HTTPException(
@@ -160,15 +235,38 @@ def _perform_repository_analysis(
         json.dumps(discovered_rules, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     ).hexdigest()
 
+    # Normalize selected artifacts
+    raw_selected = getattr(req, "selected_artifacts", None) or []
+    norm_selected: list[SourceArtifact] = []
+    for item in raw_selected:
+        if isinstance(item, SourceArtifact):
+            norm_selected.append(item)
+        elif isinstance(item, dict):
+            norm_selected.append(SourceArtifact(**item))
+        elif isinstance(item, str):
+            norm_selected.append(
+                SourceArtifact(
+                    artifact_id=item,
+                    filename=Path(item).name,
+                    relative_path=item,
+                    content_hash=hashlib.sha256(item.encode()).hexdigest()[:16],
+                )
+            )
+
     # Build authoritative RepositoryExecutionSpec
     repo_spec = RepositoryExecutionSpec(
         specification_id=app_id,
+        source_mode=getattr(req, "source_mode", SourceIngestionMode.GITHUB_REPOSITORY),
+        analysis_scope=getattr(req, "analysis_scope", AnalysisScope.REPOSITORY),
+        selected_artifacts=norm_selected,
         legacy_source_identity={
             **(legacy_prov.identity.model_dump() if legacy_prov.identity else {}),
             "repository_url": legacy_prov.source_url,
             "commit_sha": legacy_prov.commit_sha,
             "content_hash": legacy_prov.content_hash,
             "technologies": legacy_analysis.frameworks or legacy_analysis.languages,
+            "source_mode": str(getattr(req, "source_mode", SourceIngestionMode.GITHUB_REPOSITORY)),
+            "analysis_scope": str(getattr(req, "analysis_scope", AnalysisScope.REPOSITORY)),
         },
         modern_source_identity={
             **(modern_prov.identity.model_dump() if modern_prov.identity else {}),
@@ -176,6 +274,8 @@ def _perform_repository_analysis(
             "commit_sha": modern_prov.commit_sha,
             "content_hash": modern_prov.content_hash,
             "technologies": modern_analysis.frameworks or modern_analysis.languages,
+            "source_mode": str(getattr(req, "source_mode", SourceIngestionMode.GITHUB_REPOSITORY)),
+            "analysis_scope": str(getattr(req, "analysis_scope", AnalysisScope.REPOSITORY)),
         },
         legacy_adapter=legacy_adapter_res.model_dump(exclude={"adapter_instance"}),
         modern_adapter=modern_adapter_res.model_dump(exclude={"adapter_instance"}),
@@ -187,7 +287,7 @@ def _perform_repository_analysis(
         rule_set_identity=rule_set_id,
         evaluation_mode=req.evaluation_mode,
         policy_identity=certification_policy_resolver.resolve_effective_policy(
-            application_id=repo_app_id,
+            application_id=app_id,
             evaluation_mode=req.evaluation_mode,
         ).compute_policy_fingerprint(),
         provenance={
@@ -218,6 +318,8 @@ def _perform_repository_analysis(
     analysis_result = RepositoryAnalysisResult(
         status=analysis_status,
         evaluation_mode=req.evaluation_mode,
+        source_mode=str(getattr(req, "source_mode", SourceIngestionMode.GITHUB_REPOSITORY)),
+        analysis_scope=str(getattr(req, "analysis_scope", AnalysisScope.REPOSITORY)),
         application_id=app_id,
         specification_fingerprint=spec_fingerprint,
         legacy={
@@ -393,7 +495,7 @@ def _run_repository_certification_pipeline(
         input_discovery_res.model_dump(exclude={"test_inputs"}) if input_discovery_res else input_discovery_meta
     )
     result.metadata["inputs_count"] = len(test_inputs)
-    result.metadata["discovered_rules"] = analysis_result.discovered_rules
+    result.metadata["discovered_rules"] = getattr(analysis_result, "rules", None) or getattr(analysis_result, "discovered_rules", [])
 
     if result.threshold_resolution_id:
         th_res = threshold_persistence.get_resolution(result.threshold_resolution_id)
@@ -444,6 +546,51 @@ def _run_repository_certification_pipeline(
             logger.debug(f"Could not update run metadata: {p_err}")
 
     return result
+
+
+@workflow_router.post(
+    "/sources/upload",
+    response_model=dict[str, Any],
+    status_code=status.HTTP_200_OK,
+    summary="Upload source files or archives for direct file/directory ingestion",
+)
+async def upload_sources_endpoint(
+    legacy_files: list[UploadFile] = File(...),
+    modern_files: list[UploadFile] = File(...),
+    scope: Optional[str] = Form(None),
+    current_user: User = Depends(get_current_active_user),
+) -> dict[str, Any]:
+    """Securely stages uploaded source files or archives and returns deterministic source specifications."""
+    try:
+        import uuid
+        upload_id = f"upl_{uuid.uuid4().hex[:12]}"
+
+        leg_items = []
+        for lf in legacy_files:
+            content = await lf.read()
+            leg_items.append((lf.filename or "legacy_source", content))
+
+        mod_items = []
+        for mf in modern_files:
+            content = await mf.read()
+            mod_items.append((mf.filename or "modern_source", content))
+
+        staged = repository_service.stage_uploaded_sources(
+            upload_id=upload_id,
+            legacy_files=leg_items,
+            modern_files=mod_items,
+            preferred_scope=scope,
+        )
+        return staged
+    except Exception as exc:
+        logger.error(f"Source file upload failed: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "SOURCE_UPLOAD_FAILED",
+                "message": str(exc),
+            },
+        )
 
 
 @workflow_router.post(

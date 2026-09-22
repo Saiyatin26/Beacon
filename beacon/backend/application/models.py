@@ -253,9 +253,9 @@ class RepositoryExecutionSpec(BaseModel):
     specification_id: str = ""
     source_mode: Union[SourceIngestionMode, str] = SourceIngestionMode.GITHUB_REPOSITORY
     analysis_scope: Union[AnalysisScope, str] = AnalysisScope.REPOSITORY
-    selected_artifacts: list[dict[str, Any]] = Field(default_factory=list)
-    legacy_artifacts: list[dict[str, Any]] = Field(default_factory=list)
-    modern_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    selected_artifacts: list[Union[dict[str, Any], SourceArtifact]] = Field(default_factory=list)
+    legacy_artifacts: list[Union[dict[str, Any], SourceArtifact]] = Field(default_factory=list)
+    modern_artifacts: list[Union[dict[str, Any], SourceArtifact]] = Field(default_factory=list)
     legacy_source_identity: dict[str, Any] = Field(default_factory=dict)
     modern_source_identity: dict[str, Any] = Field(default_factory=dict)
     legacy_adapter: dict[str, Any] = Field(default_factory=dict)
@@ -276,7 +276,12 @@ class RepositoryExecutionSpec(BaseModel):
         """Computes authoritative specification fingerprint binding sources, scopes, artifacts, adapters, inputs, rules, and mode."""
         # Deterministically extract and sort selected artifacts identity
         sorted_artifacts = sorted(
-            [f"{a.get('source_side', '')}:{a.get('relative_path', '')}:{a.get('content_hash', '')}" for a in self.selected_artifacts]
+            [
+                f"{a.source_side if hasattr(a, 'source_side') else a.get('source_side', '')}:"
+                f"{a.relative_path if hasattr(a, 'relative_path') else a.get('relative_path', '')}:"
+                f"{a.content_hash if hasattr(a, 'content_hash') else a.get('content_hash', '')}"
+                for a in self.selected_artifacts
+            ]
         ) if self.selected_artifacts else []
 
         canonical_content = json.dumps({
@@ -325,9 +330,12 @@ def build_application_spec_from_repository_execution_spec(
     legacy_adapter_meta = repo_spec.legacy_adapter or {}
     modern_adapter_meta = repo_spec.modern_adapter or {}
 
+    legacy_commit = repo_spec.legacy_source_identity.get("commit_sha") or "1.0.0"
+    modern_commit = repo_spec.modern_source_identity.get("commit_sha") or "1.0.0"
+
     ref_target = ImplementationTarget(
         name=legacy_adapter_meta.get("adapter_name") or legacy_adapter_meta.get("adapter_id") or "legacy_ref",
-        version=repo_spec.legacy_source_identity.get("commit_sha", "1.0.0")[:12],
+        version=str(legacy_commit)[:12],
         target_type="adapter",
         entrypoint=repo_spec.legacy_entrypoint or "reference",
         role=ApplicationRole.REFERENCE,
@@ -340,7 +348,7 @@ def build_application_spec_from_repository_execution_spec(
 
     modern_target = ImplementationTarget(
         name=modern_adapter_meta.get("adapter_name") or modern_adapter_meta.get("adapter_id") or "modern_tgt",
-        version=repo_spec.modern_source_identity.get("commit_sha", "1.0.0")[:12],
+        version=str(modern_commit)[:12],
         target_type="adapter",
         entrypoint=repo_spec.modern_entrypoint or "target",
         role=ApplicationRole.TARGET,
@@ -360,7 +368,10 @@ def build_application_spec_from_repository_execution_spec(
         domain="general",
         reference_implementation=ref_target,
         target_implementations=[modern_target],
-        rule_config=RuleConfig(mode=rule_mode),
+        rule_config=RuleConfig(
+            mode=rule_mode,
+            rules=repo_spec.discovered_rules,
+        ),
         dataset_config=DatasetConfig(
             metadata={
                 "authoritative_input_set": repo_spec.discovered_inputs,

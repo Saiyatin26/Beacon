@@ -50,13 +50,18 @@ export default function CertificationTab({
   userHasPermission,
   onCertifyResult,
 }) {
-  // ── Repository Form State (Empty Defaults, Pure Repo-First) ──────────────────
+  // ── Source Ingestion & Repository Form State ──────────────────────────────
+  const [sourceType, setSourceType] = useState("GITHUB_REPOSITORY"); // GITHUB_REPOSITORY | UPLOADED_FILES
   const [legacyRepoUrl, setLegacyRepoUrl] = useState("");
   const [legacyRevision, setLegacyRevision] = useState("");
   const [legacySubdir, setLegacySubdir] = useState("");
   const [modernRepoUrl, setModernRepoUrl] = useState("");
   const [modernRevision, setModernRevision] = useState("");
   const [modernSubdir, setModernSubdir] = useState("");
+  const [legacyFiles, setLegacyFiles] = useState([]);
+  const [modernFiles, setModernFiles] = useState([]);
+  const [analysisScope, setAnalysisScope] = useState("FILE"); // FILE | DIRECTORY
+  const [stagedUpload, setStagedUpload] = useState(null);
   const [evaluationMode, setEvaluationMode] = useState("CONTROLLED"); // CONTROLLED | FULL
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -80,6 +85,36 @@ export default function CertificationTab({
 
   const _fetch = authFetch || window.fetch;
 
+  const addLegacyFiles = (newFiles) => {
+    const arr = Array.from(newFiles);
+    setLegacyFiles((prev) => [...prev, ...arr]);
+    setStagedUpload(null);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+  };
+
+  const removeLegacyFile = (index) => {
+    setLegacyFiles((prev) => prev.filter((_, i) => i !== index));
+    setStagedUpload(null);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+  };
+
+  const addModernFiles = (newFiles) => {
+    const arr = Array.from(newFiles);
+    setModernFiles((prev) => [...prev, ...arr]);
+    setStagedUpload(null);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+  };
+
+  const removeModernFile = (index) => {
+    setModernFiles((prev) => prev.filter((_, i) => i !== index));
+    setStagedUpload(null);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+  };
+
   const loadRecentRuns = async () => {
     setRunsLoading(true);
     try {
@@ -99,29 +134,67 @@ export default function CertificationTab({
     loadRecentRuns();
   }, []);
 
-  // ── Repository Analysis Handler ─────────────────────────────────────────────
+  // ── Repository / Source Analysis Handler ────────────────────────────────────
   const handleAnalyzeRepositories = async () => {
-    if (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) {
-      setAnalysisError("Both Legacy Reference and Modernized Target repository paths or URLs are required.");
-      return;
+    let activeLegacySpec = {
+      repository_url: legacyRepoUrl.trim(),
+      revision: legacyRevision.trim() || null,
+      subdirectory: legacySubdir.trim() || null,
+    };
+    let activeModernSpec = {
+      repository_url: modernRepoUrl.trim(),
+      revision: modernRevision.trim() || null,
+      subdirectory: modernSubdir.trim() || null,
+    };
+    let selectedArtifacts = null;
+    let uploadId = null;
+
+    if (sourceType === "UPLOADED_FILES") {
+      if (legacyFiles.length === 0 || modernFiles.length === 0) {
+        setAnalysisError("Both Legacy Reference and Modern Target source files must be selected.");
+        return;
+      }
+    } else {
+      if (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) {
+        setAnalysisError("Both Legacy Reference and Modernized Target repository paths or URLs are required.");
+        return;
+      }
     }
+
     setAnalysisBusy(true);
     setAnalysisError(null);
     setAnalysisResult(null);
 
     try {
+      if (sourceType === "UPLOADED_FILES") {
+        const formData = new FormData();
+        legacyFiles.forEach((f) => formData.append("legacy_files", f));
+        modernFiles.forEach((f) => formData.append("modern_files", f));
+        formData.append("scope", analysisScope);
+
+        const upRes = await _fetch(`${apiBase}/api/v2/workflow/sources/upload`, {
+          method: "POST",
+          body: formData,
+        });
+        const upData = await upRes.json();
+        if (!upRes.ok) {
+          throw new Error(upData.detail?.message || upData.detail || "Source upload failed");
+        }
+        setStagedUpload(upData);
+        activeLegacySpec = upData.legacy_source_spec;
+        activeModernSpec = upData.modern_source_spec;
+        selectedArtifacts = [...(upData.legacy_artifacts || []), ...(upData.modern_artifacts || [])];
+        uploadId = upData.upload_id;
+      }
+
       const payload = {
-        legacy_repository: {
-          repository_url: legacyRepoUrl.trim(),
-          revision: legacyRevision.trim() || null,
-          subdirectory: legacySubdir.trim() || null,
-        },
-        modern_repository: {
-          repository_url: modernRepoUrl.trim(),
-          revision: modernRevision.trim() || null,
-          subdirectory: modernSubdir.trim() || null,
-        },
+        legacy_repository: activeLegacySpec,
+        modern_repository: activeModernSpec,
         evaluation_mode: evaluationMode,
+        source_mode: sourceType,
+        analysis_scope: sourceType === "UPLOADED_FILES" ? analysisScope : "REPOSITORY",
+        selected_artifacts: selectedArtifacts,
+        upload_id: uploadId,
       };
 
       const res = await _fetch(`${apiBase}/api/v2/workflow/analyze-repository`, {
@@ -132,7 +205,7 @@ export default function CertificationTab({
 
       const data = await res.json();
       if (!res.ok) {
-        const errMsg = data.detail?.message || data.detail || `Repository analysis failed (HTTP ${res.status})`;
+        const errMsg = data.detail?.message || data.detail || `Source analysis failed (HTTP ${res.status})`;
         throw new Error(typeof errMsg === "object" ? JSON.stringify(errMsg) : errMsg);
       }
       setAnalysisResult(data);
@@ -143,29 +216,74 @@ export default function CertificationTab({
     }
   };
 
-  // ── Repository Certification Execution Handler ──────────────────────────────
+  // ── Source Certification Execution Handler ──────────────────────────────────
   const handleCertifyRepository = async () => {
-    if (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) {
-      setCertifyError("Both Legacy Reference and Modernized Target repository paths or URLs are required.");
-      return;
+    let activeLegacySpec = {
+      repository_url: legacyRepoUrl.trim(),
+      revision: legacyRevision.trim() || null,
+      subdirectory: legacySubdir.trim() || null,
+    };
+    let activeModernSpec = {
+      repository_url: modernRepoUrl.trim(),
+      revision: modernRevision.trim() || null,
+      subdirectory: modernSubdir.trim() || null,
+    };
+    let selectedArtifacts = null;
+    let uploadId = null;
+
+    if (sourceType === "UPLOADED_FILES") {
+      if (legacyFiles.length === 0 || modernFiles.length === 0) {
+        setCertifyError("Both Legacy Reference and Modern Target source files must be selected.");
+        return;
+      }
+    } else {
+      if (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) {
+        setCertifyError("Both Legacy Reference and Modernized Target repository paths or URLs are required.");
+        return;
+      }
     }
+
     setCertifyBusy(true);
     setCertifyError(null);
     setWorkflowResult(null);
 
     try {
+      if (sourceType === "UPLOADED_FILES") {
+        if (!stagedUpload) {
+          const formData = new FormData();
+          legacyFiles.forEach((f) => formData.append("legacy_files", f));
+          modernFiles.forEach((f) => formData.append("modern_files", f));
+          formData.append("scope", analysisScope);
+
+          const upRes = await _fetch(`${apiBase}/api/v2/workflow/sources/upload`, {
+            method: "POST",
+            body: formData,
+          });
+          const upData = await upRes.json();
+          if (!upRes.ok) {
+            throw new Error(upData.detail?.message || upData.detail || "Source upload failed");
+          }
+          setStagedUpload(upData);
+          activeLegacySpec = upData.legacy_source_spec;
+          activeModernSpec = upData.modern_source_spec;
+          selectedArtifacts = [...(upData.legacy_artifacts || []), ...(upData.modern_artifacts || [])];
+          uploadId = upData.upload_id;
+        } else {
+          activeLegacySpec = stagedUpload.legacy_source_spec;
+          activeModernSpec = stagedUpload.modern_source_spec;
+          selectedArtifacts = [...(stagedUpload.legacy_artifacts || []), ...(stagedUpload.modern_artifacts || [])];
+          uploadId = stagedUpload.upload_id;
+        }
+      }
+
       const payload = {
-        legacy_repository: {
-          repository_url: legacyRepoUrl.trim(),
-          revision: legacyRevision.trim() || null,
-          subdirectory: legacySubdir.trim() || null,
-        },
-        modern_repository: {
-          repository_url: modernRepoUrl.trim(),
-          revision: modernRevision.trim() || null,
-          subdirectory: modernSubdir.trim() || null,
-        },
+        legacy_repository: activeLegacySpec,
+        modern_repository: activeModernSpec,
         evaluation_mode: evaluationMode,
+        source_mode: sourceType,
+        analysis_scope: sourceType === "UPLOADED_FILES" ? analysisScope : "REPOSITORY",
+        selected_artifacts: selectedArtifacts,
+        upload_id: uploadId,
         explain: true,
         explanation_mode: "deterministic",
       };
@@ -178,7 +296,7 @@ export default function CertificationTab({
 
       const data = await res.json();
       if (!res.ok) {
-        const errMsg = data.detail?.message || data.detail || `Repository certification failed (HTTP ${res.status})`;
+        const errMsg = data.detail?.message || data.detail || `Certification failed (HTTP ${res.status})`;
         throw new Error(typeof errMsg === "object" ? JSON.stringify(errMsg) : errMsg);
       }
 
@@ -363,130 +481,296 @@ export default function CertificationTab({
                 </button>
               </div>
 
-              {/* Dual Repository Source Inputs */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
-                {/* Legacy Repository */}
-                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-                    <span style={{ fontSize: "14px" }}>🏛️</span>
-                    <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                      Legacy Reference Repository <span style={{ color: "#dc2626" }}>*</span>
-                    </label>
-                  </div>
-                  <input
-                    type="text"
-                    value={legacyRepoUrl}
-                    onChange={(e) => {
-                      setLegacyRepoUrl(e.target.value);
-                      setAnalysisResult(null);
-                      setAnalysisError(null);
-                    }}
-                    placeholder="https://github.com/example/legacy-system"
-                    style={{
-                      width: "100%",
-                      padding: "9px 12px",
-                      borderRadius: "6px",
-                      border: "1px solid #cbd5e1",
-                      fontSize: "13px",
-                      boxSizing: "border-box",
-                      fontFamily: "monospace",
-                    }}
-                  />
-                  <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
-                    Remote Git URL or local repository path.
-                  </span>
-
-                  {showAdvanced && (
-                    <div style={{ marginTop: "10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
-                      <div>
-                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
-                          Branch / Revision Ref
-                        </label>
-                        <input
-                          type="text"
-                          value={legacyRevision}
-                          onChange={(e) => setLegacyRevision(e.target.value)}
-                          placeholder="e.g. main or commit SHA"
-                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", fontFamily: "monospace", boxSizing: "border-box" }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
-                          Subdirectory
-                        </label>
-                        <input
-                          type="text"
-                          value={legacySubdir}
-                          onChange={(e) => setLegacySubdir(e.target.value)}
-                          placeholder="Optional subpath"
-                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", boxSizing: "border-box" }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Modernized Target Repository */}
-                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
-                    <span style={{ fontSize: "14px" }}>🚀</span>
-                    <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
-                      Modernized Target Repository <span style={{ color: "#dc2626" }}>*</span>
-                    </label>
-                  </div>
-                  <input
-                    type="text"
-                    value={modernRepoUrl}
-                    onChange={(e) => {
-                      setModernRepoUrl(e.target.value);
-                      setAnalysisResult(null);
-                      setAnalysisError(null);
-                    }}
-                    placeholder="https://github.com/example/modern-system"
-                    style={{
-                      width: "100%",
-                      padding: "9px 12px",
-                      borderRadius: "6px",
-                      border: "1px solid #cbd5e1",
-                      fontSize: "13px",
-                      boxSizing: "border-box",
-                      fontFamily: "monospace",
-                    }}
-                  />
-                  <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
-                    Modernized target to certify against the legacy reference.
-                  </span>
-
-                  {showAdvanced && (
-                    <div style={{ marginTop: "10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
-                      <div>
-                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
-                          Branch / Revision Ref
-                        </label>
-                        <input
-                          type="text"
-                          value={modernRevision}
-                          onChange={(e) => setModernRevision(e.target.value)}
-                          placeholder="e.g. main or commit SHA"
-                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", fontFamily: "monospace", boxSizing: "border-box" }}
-                        />
-                      </div>
-                      <div>
-                        <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
-                          Subdirectory
-                        </label>
-                        <input
-                          type="text"
-                          value={modernSubdir}
-                          onChange={(e) => setModernSubdir(e.target.value)}
-                          placeholder="Optional subpath"
-                          style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", boxSizing: "border-box" }}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </div>
+              {/* Source Type Selector */}
+              <div style={{ display: "flex", gap: "10px", marginBottom: "16px", background: "#f1f5f9", padding: "4px", borderRadius: "8px" }}>
+                <button
+                  type="button"
+                  onClick={() => { setSourceType("GITHUB_REPOSITORY"); setAnalysisResult(null); setAnalysisError(null); }}
+                  style={{
+                    flex: 1,
+                    padding: "8px 14px",
+                    borderRadius: "6px",
+                    border: "none",
+                    background: sourceType === "GITHUB_REPOSITORY" ? "#ffffff" : "transparent",
+                    color: sourceType === "GITHUB_REPOSITORY" ? "#0f172a" : "#64748b",
+                    fontWeight: "700",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    boxShadow: sourceType === "GITHUB_REPOSITORY" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  🐙 GitHub Repository
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setSourceType("UPLOADED_FILES"); setAnalysisResult(null); setAnalysisError(null); }}
+                  style={{
+                    flex: 1,
+                    padding: "8px 14px",
+                    borderRadius: "6px",
+                    border: "none",
+                    background: sourceType === "UPLOADED_FILES" ? "#ffffff" : "transparent",
+                    color: sourceType === "UPLOADED_FILES" ? "#0f172a" : "#64748b",
+                    fontWeight: "700",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    boxShadow: sourceType === "UPLOADED_FILES" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
+                    transition: "all 0.15s ease",
+                  }}
+                >
+                  📁 Upload / Select Source Files
+                </button>
               </div>
+
+              {/* GITHUB REPOSITORY MODE */}
+              {sourceType === "GITHUB_REPOSITORY" && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+                  {/* Legacy Repository */}
+                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                      <span style={{ fontSize: "14px" }}>🏛️</span>
+                      <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                        Legacy Reference Repository <span style={{ color: "#dc2626" }}>*</span>
+                      </label>
+                    </div>
+                    <input
+                      type="text"
+                      value={legacyRepoUrl}
+                      onChange={(e) => {
+                        setLegacyRepoUrl(e.target.value);
+                        setAnalysisResult(null);
+                        setAnalysisError(null);
+                      }}
+                      placeholder="https://github.com/example/legacy-system"
+                      style={{
+                        width: "100%",
+                        padding: "9px 12px",
+                        borderRadius: "6px",
+                        border: "1px solid #cbd5e1",
+                        fontSize: "13px",
+                        boxSizing: "border-box",
+                        fontFamily: "monospace",
+                      }}
+                    />
+                    <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
+                      Remote Git URL or local repository path.
+                    </span>
+
+                    {showAdvanced && (
+                      <div style={{ marginTop: "10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
+                            Branch / Revision Ref
+                          </label>
+                          <input
+                            type="text"
+                            value={legacyRevision}
+                            onChange={(e) => setLegacyRevision(e.target.value)}
+                            placeholder="e.g. main or commit SHA"
+                            style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", fontFamily: "monospace", boxSizing: "border-box" }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
+                            Subdirectory
+                          </label>
+                          <input
+                            type="text"
+                            value={legacySubdir}
+                            onChange={(e) => setLegacySubdir(e.target.value)}
+                            placeholder="Optional subpath"
+                            style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", boxSizing: "border-box" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Modernized Target Repository */}
+                  <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", marginBottom: "8px" }}>
+                      <span style={{ fontSize: "14px" }}>🚀</span>
+                      <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                        Modernized Target Repository <span style={{ color: "#dc2626" }}>*</span>
+                      </label>
+                    </div>
+                    <input
+                      type="text"
+                      value={modernRepoUrl}
+                      onChange={(e) => {
+                        setModernRepoUrl(e.target.value);
+                        setAnalysisResult(null);
+                        setAnalysisError(null);
+                      }}
+                      placeholder="https://github.com/example/modern-system"
+                      style={{
+                        width: "100%",
+                        padding: "9px 12px",
+                        borderRadius: "6px",
+                        border: "1px solid #cbd5e1",
+                        fontSize: "13px",
+                        boxSizing: "border-box",
+                        fontFamily: "monospace",
+                      }}
+                    />
+                    <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
+                      Modernized target to certify against the legacy reference.
+                    </span>
+
+                    {showAdvanced && (
+                      <div style={{ marginTop: "10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px" }}>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
+                            Branch / Revision Ref
+                          </label>
+                          <input
+                            type="text"
+                            value={modernRevision}
+                            onChange={(e) => setModernRevision(e.target.value)}
+                            placeholder="e.g. main or commit SHA"
+                            style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", fontFamily: "monospace", boxSizing: "border-box" }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: "block", fontSize: "11px", fontWeight: "600", color: "#475569", marginBottom: "2px" }}>
+                            Subdirectory
+                          </label>
+                          <input
+                            type="text"
+                            value={modernSubdir}
+                            onChange={(e) => setModernSubdir(e.target.value)}
+                            placeholder="Optional subpath"
+                            style={{ width: "100%", padding: "6px 8px", borderRadius: "4px", border: "1px solid #cbd5e1", fontSize: "11px", boxSizing: "border-box" }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* UPLOAD / SELECT SOURCE FILES MODE */}
+              {sourceType === "UPLOADED_FILES" && (
+                <div style={{ marginBottom: "16px" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "12px" }}>
+                    {/* Legacy Source Files */}
+                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                        <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                          🏛️ Legacy Reference Sources <span style={{ color: "#dc2626" }}>*</span>
+                        </label>
+                        <span style={{ fontSize: "11px", color: "#64748b" }}>
+                          {legacyFiles.length} file{legacyFiles.length !== 1 ? "s" : ""} selected
+                        </span>
+                      </div>
+                      <input
+                        type="file"
+                        multiple
+                        onChange={(e) => addLegacyFiles(e.target.files)}
+                        style={{ width: "100%", fontSize: "12px", padding: "6px", background: "#ffffff", borderRadius: "6px", border: "1px dashed #94a3b8" }}
+                      />
+                      <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
+                        Select source files (.cbl, .py, .java, etc.) or .zip archive.
+                      </span>
+
+                      {legacyFiles.length > 0 && (
+                        <div style={{ marginTop: "10px", maxHeight: "120px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {legacyFiles.map((file, fIdx) => (
+                            <div key={fIdx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#ffffff", padding: "4px 8px", borderRadius: "4px", border: "1px solid #e2e8f0", fontSize: "11px" }}>
+                              <span style={{ fontFamily: "monospace", color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "200px" }}>
+                                📄 {file.name}
+                              </span>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <span style={{ color: "#64748b", fontSize: "10px" }}>{(file.size / 1024).toFixed(1)} KB</span>
+                                <button
+                                  type="button"
+                                  onClick={() => removeLegacyFile(fIdx)}
+                                  style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontWeight: "bold", fontSize: "12px", padding: "0 2px" }}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Modern Target Source Files */}
+                    <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "14px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
+                        <label style={{ fontSize: "13px", fontWeight: "700", color: "#0f172a" }}>
+                          🚀 Modernized Target Sources <span style={{ color: "#dc2626" }}>*</span>
+                        </label>
+                        <span style={{ fontSize: "11px", color: "#64748b" }}>
+                          {modernFiles.length} file{modernFiles.length !== 1 ? "s" : ""} selected
+                        </span>
+                      </div>
+                      <input
+                        type="file"
+                        multiple
+                        onChange={(e) => addModernFiles(e.target.files)}
+                        style={{ width: "100%", fontSize: "12px", padding: "6px", background: "#ffffff", borderRadius: "6px", border: "1px dashed #94a3b8" }}
+                      />
+                      <span style={{ display: "block", marginTop: "4px", fontSize: "11px", color: "#64748b" }}>
+                        Select source files (.py, .ts, etc.) or .zip archive.
+                      </span>
+
+                      {modernFiles.length > 0 && (
+                        <div style={{ marginTop: "10px", maxHeight: "120px", overflowY: "auto", display: "flex", flexDirection: "column", gap: "4px" }}>
+                          {modernFiles.map((file, fIdx) => (
+                            <div key={fIdx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#ffffff", padding: "4px 8px", borderRadius: "4px", border: "1px solid #e2e8f0", fontSize: "11px" }}>
+                              <span style={{ fontFamily: "monospace", color: "#1e293b", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: "200px" }}>
+                                📄 {file.name}
+                              </span>
+                              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                                <span style={{ color: "#64748b", fontSize: "10px" }}>{(file.size / 1024).toFixed(1)} KB</span>
+                                <button
+                                  type="button"
+                                  onClick={() => removeModernFile(fIdx)}
+                                  style={{ background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontWeight: "bold", fontSize: "12px", padding: "0 2px" }}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Analysis Scope Selector */}
+                  <div style={{ background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "10px 14px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ fontSize: "12px", fontWeight: "700", color: "#334155" }}>
+                      ANALYSIS SCOPE:
+                    </div>
+                    <div style={{ display: "flex", gap: "16px" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#1e293b", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="analysisScope"
+                          value="FILE"
+                          checked={analysisScope === "FILE"}
+                          onChange={(e) => setAnalysisScope(e.target.value)}
+                        />
+                        <strong>FILE Scope</strong> (Direct file-to-file pairing)
+                      </label>
+                      <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", color: "#1e293b", cursor: "pointer" }}>
+                        <input
+                          type="radio"
+                          name="analysisScope"
+                          value="DIRECTORY"
+                          checked={analysisScope === "DIRECTORY"}
+                          onChange={(e) => setAnalysisScope(e.target.value)}
+                        />
+                        <strong>DIRECTORY Scope</strong> (Directory/archive inspection)
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Evaluation Mode Selector */}
               <div style={{ marginBottom: "16px", background: "#ffffff", border: "1px solid #e2e8f0", borderRadius: "8px", padding: "12px 16px" }}>
@@ -564,21 +848,21 @@ export default function CertificationTab({
                 <button
                   type="button"
                   onClick={handleAnalyzeRepositories}
-                  disabled={analysisBusy || !legacyRepoUrl.trim() || !modernRepoUrl.trim()}
+                  disabled={analysisBusy || (sourceType === "GITHUB_REPOSITORY" ? (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) : (legacyFiles.length === 0 || modernFiles.length === 0))}
                   style={{
-                    background: analysisBusy || !legacyRepoUrl.trim() || !modernRepoUrl.trim() ? "#94a3b8" : "#2563eb",
+                    background: analysisBusy || (sourceType === "GITHUB_REPOSITORY" ? (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) : (legacyFiles.length === 0 || modernFiles.length === 0)) ? "#94a3b8" : "#2563eb",
                     color: "#ffffff",
                     border: "none",
                     padding: "10px 22px",
                     borderRadius: "6px",
                     fontWeight: "700",
                     fontSize: "13px",
-                    cursor: analysisBusy || !legacyRepoUrl.trim() || !modernRepoUrl.trim() ? "not-allowed" : "pointer",
+                    cursor: analysisBusy || (sourceType === "GITHUB_REPOSITORY" ? (!legacyRepoUrl.trim() || !modernRepoUrl.trim()) : (legacyFiles.length === 0 || modernFiles.length === 0)) ? "not-allowed" : "pointer",
                     boxShadow: "0 2px 4px rgba(37,99,235,0.25)",
                     transition: "all 0.15s",
                   }}
                 >
-                  {analysisBusy ? "🔍 Analyzing Repositories..." : "🔍 Analyze Repositories"}
+                  {analysisBusy ? "🔍 Analyzing Sources..." : "🔍 Analyze Sources & Discover Rules"}
                 </button>
               </div>
 
@@ -672,12 +956,12 @@ export default function CertificationTab({
                             : "#991b1b",
                       }}
                     >
-                      {analysisResult.status === "READY" && "✅ Analysis Complete — Repositories Validated & Ready for Certification"}
+                      {analysisResult.status === "READY" && "✅ Analysis Complete — Sources Validated & Ready for Certification"}
                       {analysisResult.status === "DISCOVERY_INSUFFICIENT" && "⚠️ Discovery Insufficient — Incomplete Input Evidence"}
-                      {analysisResult.status === "FAILED" && "❌ Repository Analysis Failed"}
+                      {analysisResult.status === "FAILED" && "❌ Source Analysis Failed"}
                     </div>
                     <div style={{ fontSize: "12px", color: "#475569", marginTop: "2px" }}>
-                      Mode: <strong>{analysisResult.evaluation_mode}</strong> • Discovered Rules: <strong>{analysisResult.discovered_rules?.length || 0}</strong> • Validated Inputs: <strong>{analysisResult.discovered_inputs?.length || 0}</strong>
+                      Mode: <strong>{analysisResult.evaluation_mode}</strong> • Source: <strong>{analysisResult.source_mode || sourceType}</strong> • Scope: <strong>{analysisResult.analysis_scope || (sourceType === "UPLOADED_FILES" ? analysisScope : "REPOSITORY")}</strong> • Rules: <strong>{(analysisResult.rules || analysisResult.discovered_rules || []).length}</strong> • Inputs: <strong>{analysisResult.inputs_count || (analysisResult.inputs || analysisResult.discovered_inputs || []).length}</strong>
                     </div>
                   </div>
                   <span
@@ -743,19 +1027,19 @@ export default function CertificationTab({
                     </h4>
                     <span style={{ fontSize: "11px", color: "#64748b" }}>AST Branch & Expression Inference</span>
                   </div>
-                  {analysisResult.discovered_rules && analysisResult.discovered_rules.length > 0 ? (
+                  {(analysisResult.rules?.length > 0 || analysisResult.discovered_rules?.length > 0) ? (
                     <div style={{ maxHeight: "180px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "6px" }}>
                       <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "12px" }}>
                         <thead>
                           <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
                             <th style={{ padding: "6px 10px", color: "#475569" }}>Rule ID</th>
                             <th style={{ padding: "6px 10px", color: "#475569" }}>Description / Invariant</th>
-                            <th style={{ padding: "6px 10px", color: "#475569" }}>Location</th>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Location / Source</th>
                             <th style={{ padding: "6px 10px", color: "#475569" }}>Method</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {analysisResult.discovered_rules.map((rule, rIdx) => (
+                          {(analysisResult.rules || analysisResult.discovered_rules || []).map((rule, rIdx) => (
                             <tr key={rIdx} style={{ borderBottom: "1px solid #f1f5f9" }}>
                               <td style={{ padding: "6px 10px", fontFamily: "monospace", fontWeight: "600", color: "#1e40af" }}>
                                 {rule.rule_id || `rule_${rIdx + 1}`}
@@ -764,7 +1048,7 @@ export default function CertificationTab({
                                 {rule.description || rule.name || "—"}
                               </td>
                               <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#64748b" }}>
-                                {rule.source_file ? `${rule.source_file}:${rule.source_location || 1}` : "—"}
+                                {rule.source_file ? `${rule.source_file}:${rule.source_location || 1}` : (rule.source || "STATIC_AST")}
                               </td>
                               <td style={{ padding: "6px 10px", color: "#475569" }}>
                                 {rule.discovery_method || "AST_ANALYSIS"}

@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import math
 import sqlite3
 import time
 from typing import Any, Optional
@@ -1091,9 +1092,15 @@ class CanonicalV2WorkflowEngine:
         ref_exec_ids = set(bundle.reference_execution_ids) if bundle else set()
 
         for rec in (all_evidence_records or []):
-            if rec.role == "reference" or (rec.execution_id and rec.execution_id in ref_exec_ids):
-                ev_ids.append(rec.record_id)
-                out = rec.output
+            rec_role = getattr(rec, "role", "")
+            rec_exec_id = getattr(rec, "execution_id", "")
+            if rec_role == "reference" or (rec_exec_id and rec_exec_id in ref_exec_ids):
+                rec_id = getattr(rec, "record_id", None) or getattr(rec, "evidence_id", "")
+                if rec_id:
+                    ev_ids.append(rec_id)
+                out = getattr(rec, "output", None)
+                if out is None and hasattr(rec, "payload") and isinstance(rec.payload, dict):
+                    out = rec.payload.get("output")
                 if isinstance(out, (int, float)) and not (isinstance(out, bool) or math.isnan(out) or math.isinf(out)):
                     clean_observations.append(float(out))
                 elif isinstance(out, dict):
@@ -1134,7 +1141,7 @@ class CanonicalV2WorkflowEngine:
                         strategy=ThresholdStrategy.EVIDENCE_DERIVED,
                         metric=DifferenceMetric.ABSOLUTE_DIFF,
                         candidate_parameters={"k": 1.5},
-                        estimator=EstimatorType.IQR,
+                        estimator=EstimatorType.IQR_ROBUST,
                         reasoning=f"Auto-derived proposal: empirical sample count ({obs_count} >= 5) permits robust IQR estimation.",
                         evidence_summary={"sample_count": obs_count},
                         confidence=0.95,
@@ -1145,7 +1152,7 @@ class CanonicalV2WorkflowEngine:
                         strategy=ThresholdStrategy.EVIDENCE_DERIVED,
                         metric=DifferenceMetric.ABSOLUTE_DIFF,
                         candidate_parameters={"k": 1.0, "maximum_bound": 0.0 if is_zero_variance else None},
-                        estimator=EstimatorType.RANGE,
+                        estimator=EstimatorType.RANGE_FRACTION,
                         reasoning=f"Auto-derived proposal: small sample count ({obs_count} < 5) uses RANGE bounded estimation.",
                         evidence_summary={"sample_count": obs_count, "zero_variance": is_zero_variance},
                         confidence=0.80,
@@ -1153,18 +1160,24 @@ class CanonicalV2WorkflowEngine:
 
             if proposal:
                 val_policy = ThresholdValidationPolicy(
-                    allowed_strategies=[ThresholdStrategy.EVIDENCE_DERIVED, ThresholdStrategy.STATISTICAL, ThresholdStrategy.EXACT],
-                    min_k=0.1,
-                    max_k=10.0,
-                    allow_fallback_to_deterministic=True,
+                    allowed_strategies=[
+                        ThresholdStrategy.EVIDENCE_DERIVED,
+                        ThresholdStrategy.STATISTICAL,
+                        ThresholdStrategy.FIXED,
+                    ],
+                    min_k_multiplier=0.1,
+                    max_k_multiplier=10.0,
+                    min_required_samples=1,
                 )
-                th_policy = val_policy.validate_proposal(
+                is_valid, validated_pol, reason = val_policy.validate_proposal(
                     proposal=proposal,
+                    sample_count=obs_count,
                     policy_id=f"POL-{spec.application_id}",
-                    version="1.0.0",
-                    description=f"Validated deterministic threshold policy for {spec.application_id}",
-                    minimum_samples=5 if obs_count >= 5 else 1,
                 )
+                if is_valid and validated_pol:
+                    th_policy = validated_pol
+                else:
+                    logger.warning(f"Threshold proposal validation note: {reason}")
             else:
                 meta_th = (getattr(spec, "metadata", {}) or {}).get("threshold_policy")
                 if meta_th and isinstance(meta_th, dict):

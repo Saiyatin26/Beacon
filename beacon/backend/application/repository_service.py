@@ -20,9 +20,37 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from common.config import settings
 from certification.adapters import compute_implementation_hash
-from ingestion.static_analyzer import PythonAnalyzer
+from ingestion.static_analyzer import PythonAnalyzer, CobolAnalyzer
+from application.models import AnalysisScope, SourceArtifact, SourceIngestionMode
 
 logger = logging.getLogger("beacon.application.repository_service")
+
+
+def _detect_source_language(path: Path) -> Optional[str]:
+    ext = path.suffix.lower()
+    mapping = {
+        ".py": "python",
+        ".cbl": "cobol",
+        ".cob": "cobol",
+        ".cpy": "cobol",
+        ".java": "java",
+        ".c": "c",
+        ".cpp": "cpp",
+        ".cc": "cpp",
+        ".h": "c",
+        ".hpp": "cpp",
+        ".js": "javascript",
+        ".jsx": "javascript",
+        ".ts": "typescript",
+        ".tsx": "typescript",
+        ".json": "json",
+        ".csv": "csv",
+        ".sql": "sql",
+        ".xml": "xml",
+        ".yaml": "yaml",
+        ".yml": "yaml",
+    }
+    return mapping.get(ext)
 
 
 def redact_url_credentials(url: str) -> str:
@@ -122,11 +150,11 @@ class DiscoveredEntrypoint(BaseModel):
 
 
 class DiscoveredInputAsset(BaseModel):
-    """Discovered candidate test or benchmark input asset."""
+    """A discovered input test case or data fixture."""
     file_path: str
     relative_path: str
-    format: str  # json, csv, python
-    case_count: int = 0
+    format: str
+    case_count: int
     sample_values: list[dict[str, Any]] = Field(default_factory=list)
     evidence: dict[str, Any] = Field(default_factory=dict)
 
@@ -164,6 +192,149 @@ class RepositoryService:
         base_dir = Path(getattr(settings, "database_path", "beacon.sqlite3")).resolve().parent
         self.cache_dir = cache_dir or (base_dir / "data" / "repo_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def stage_uploaded_sources(
+        self,
+        upload_id: str,
+        legacy_files: list[tuple[str, bytes]],
+        modern_files: list[tuple[str, bytes]],
+        preferred_scope: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Stages uploaded source files or archives in an isolated deterministic workspace."""
+        if not upload_id or not upload_id.strip():
+            upload_id = hashlib.sha256(f"upload_{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:16]
+
+        base_dir = self.cache_dir.parent / "staged_sources" / upload_id
+        legacy_dir = base_dir / "legacy"
+        modern_dir = base_dir / "modern"
+
+        legacy_dir.mkdir(parents=True, exist_ok=True)
+        modern_dir.mkdir(parents=True, exist_ok=True)
+
+        def _unpack_or_write(target_side_dir: Path, side_label: str, files: list[tuple[str, bytes]]) -> list[SourceArtifact]:
+            target_side_dir = target_side_dir.resolve()
+            artifacts: list[SourceArtifact] = []
+            for raw_fname, fbytes in files:
+                fname = Path(raw_fname).name
+                if not fname:
+                    continue
+                # Handle zip archives
+                if fname.lower().endswith(".zip"):
+                    import zipfile
+                    import io
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(fbytes)) as zf:
+                            for member in zf.infolist():
+                                if member.is_dir():
+                                    continue
+                                dest_path = validate_path_containment(target_side_dir / member.filename, target_side_dir)
+                                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                                mdata = zf.read(member)
+                                dest_path.write_bytes(mdata)
+                                rel_p = str(dest_path.relative_to(target_side_dir)).replace("\\", "/")
+                                chash = hashlib.sha256(mdata).hexdigest()
+                                artifacts.append(
+                                    SourceArtifact(
+                                        artifact_id=hashlib.sha256(f"{side_label}:{rel_p}:{chash}".encode()).hexdigest()[:16],
+                                        filename=dest_path.name,
+                                        relative_path=rel_p,
+                                        language=_detect_source_language(dest_path),
+                                        content_hash=chash,
+                                        source_side=side_label,
+                                        ingestion_mode=SourceIngestionMode.UPLOADED_FILES,
+                                        upload_execution_id=upload_id,
+                                        size_bytes=len(mdata),
+                                        source_provenance={
+                                            "upload_id": upload_id,
+                                            "archive_source": fname,
+                                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                                        },
+                                    )
+                                )
+                    except Exception as zerr:
+                        raise RepositoryIngestionError(f"Failed to unpack archive '{fname}': {zerr}")
+                else:
+                    dest_path = validate_path_containment(target_side_dir / fname, target_side_dir)
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    dest_path.write_bytes(fbytes)
+                    rel_p = str(dest_path.relative_to(target_side_dir)).replace("\\", "/")
+                    chash = hashlib.sha256(fbytes).hexdigest()
+                    artifacts.append(
+                        SourceArtifact(
+                            artifact_id=hashlib.sha256(f"{side_label}:{rel_p}:{chash}".encode()).hexdigest()[:16],
+                            filename=fname,
+                            relative_path=rel_p,
+                            language=_detect_source_language(dest_path),
+                            content_hash=chash,
+                            source_side=side_label,
+                            ingestion_mode=SourceIngestionMode.UPLOADED_FILES,
+                            upload_execution_id=upload_id,
+                            size_bytes=len(fbytes),
+                            source_provenance={
+                                "upload_id": upload_id,
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            },
+                        )
+                    )
+            return artifacts
+
+        legacy_artifacts = _unpack_or_write(legacy_dir, "LEGACY", legacy_files)
+        modern_artifacts = _unpack_or_write(modern_dir, "MODERN", modern_files)
+
+        if not legacy_artifacts:
+            raise RepositoryIngestionError("No valid legacy source files or archives provided.")
+        if not modern_artifacts:
+            raise RepositoryIngestionError("No valid modern source files or archives provided.")
+
+        # Determine AnalysisScope
+        if preferred_scope and preferred_scope.upper() in (AnalysisScope.FILE.value, AnalysisScope.DIRECTORY.value, AnalysisScope.REPOSITORY.value):
+            scope = AnalysisScope(preferred_scope.upper())
+        elif len(legacy_artifacts) == 1 and len(modern_artifacts) == 1:
+            scope = AnalysisScope.FILE
+        else:
+            scope = AnalysisScope.DIRECTORY
+
+        # Resolve target paths
+        legacy_path = (legacy_dir / legacy_artifacts[0].relative_path) if (scope == AnalysisScope.FILE and len(legacy_artifacts) == 1) else legacy_dir
+        modern_path = (modern_dir / modern_artifacts[0].relative_path) if (scope == AnalysisScope.FILE and len(modern_artifacts) == 1) else modern_dir
+
+        # Pairing verification
+        pairings: list[dict[str, Any]] = []
+        if scope == AnalysisScope.FILE:
+            if len(legacy_artifacts) == 1 and len(modern_artifacts) == 1:
+                pairings.append({
+                    "legacy_artifact": legacy_artifacts[0].model_dump(),
+                    "modern_artifact": modern_artifacts[0].model_dump(),
+                    "pairing_status": "EXPLICIT_PAIR",
+                })
+            else:
+                modern_by_stem = {Path(m.relative_path).stem.lower(): m for m in modern_artifacts}
+                for leg in legacy_artifacts:
+                    stem = Path(leg.relative_path).stem.lower()
+                    if stem in modern_by_stem:
+                        pairings.append({
+                            "legacy_artifact": leg.model_dump(),
+                            "modern_artifact": modern_by_stem[stem].model_dump(),
+                            "pairing_status": "STEM_MATCHED",
+                        })
+
+        return {
+            "upload_id": upload_id,
+            "analysis_scope": scope.value,
+            "legacy_path": str(legacy_path),
+            "modern_path": str(modern_path),
+            "legacy_artifacts": [a.model_dump() for a in legacy_artifacts],
+            "modern_artifacts": [a.model_dump() for a in modern_artifacts],
+            "source_pairings": pairings,
+            "legacy_source_spec": {
+                "repository_url": str(legacy_path),
+                "source_type": RepositorySourceType.LOCAL_PATH.value,
+            },
+            "modern_source_spec": {
+                "repository_url": str(modern_path),
+                "source_type": RepositorySourceType.LOCAL_PATH.value,
+            },
+        }
 
     def ingest_repository(self, spec: RepositorySourceSpec) -> tuple[Path, RepositoryProvenance]:
         """Safely ingests, resolves, and hashes an external or local repository."""
@@ -351,7 +522,14 @@ class RepositoryService:
                 except Exception:
                     pass
 
-        # 2. Python AST Analysis for Entrypoints & Invariants
+        # 2. Language Detection & Source Scanning
+        all_candidate_files = [target_dir] if is_single_file else [f for f in target_dir.rglob("*") if f.is_file()]
+        for cf in all_candidate_files:
+            detected_lang = _detect_source_language(cf)
+            if detected_lang:
+                languages.add(detected_lang)
+
+        # 2a. Python AST Analysis for Entrypoints & Invariants
         py_analyzer = PythonAnalyzer()
         py_files = [target_dir] if is_single_file and target_dir.suffix == ".py" else list(target_dir.rglob("*.py"))
         py_files = [
@@ -387,6 +565,7 @@ class RepositoryService:
                                 "line": fn.location.line if fn.location else 1,
                                 "argument_count": len(fn.arguments) if hasattr(fn, "arguments") else 0,
                                 "has_docstring": bool(getattr(fn, "docstring", None)),
+                                "language": "python",
                             },
                         )
                     )
@@ -397,6 +576,45 @@ class RepositoryService:
 
             except Exception as exc:
                 logger.debug(f"Could not parse Python AST for '{rel_p}': {exc}")
+
+        # 2b. COBOL Analysis for Entrypoints & Invariants
+        cobol_analyzer = CobolAnalyzer()
+        cobol_exts = (".cbl", ".cob", ".cpy")
+        cobol_files = [target_dir] if is_single_file and target_dir.suffix.lower() in cobol_exts else (
+            [f for f in target_dir.rglob("*") if f.is_file() and f.suffix.lower() in cobol_exts] if not is_single_file else []
+        )
+
+        for cbl_f in cobol_files:
+            languages.add("cobol")
+            rel_p = str(cbl_f.relative_to(root_dir)).replace("\\", "/") if not is_single_file else cbl_f.name
+            try:
+                code_text = cbl_f.read_text(encoding="utf-8", errors="ignore")
+                ast_res = cobol_analyzer.analyze(code_text, file_name=rel_p)
+
+                for fn in ast_res.functions:
+                    entrypoints.append(
+                        DiscoveredEntrypoint(
+                            name=fn.name,
+                            file_path=str(cbl_f),
+                            relative_path=rel_p,
+                            line_number=fn.location.line if fn.location else 1,
+                            parameters=[],
+                            docstring=None,
+                            has_type_hints=False,
+                            evidence={
+                                "file": rel_p,
+                                "line": fn.location.line if fn.location else 1,
+                                "paragraph": fn.name,
+                                "language": "cobol",
+                            },
+                        )
+                    )
+
+                for comp in ast_res.comparisons:
+                    invariants.append(f"{comp.left} {comp.operator} {comp.right} (line {comp.location.line if comp.location else '?'})")
+
+            except Exception as exc:
+                logger.debug(f"Could not parse COBOL for '{rel_p}': {exc}")
 
         # 3. Input Assets Discovery (JSON fixtures, test datasets)
         candidate_files = [target_dir] if is_single_file and target_dir.suffix in (".json", ".csv") else list(target_dir.rglob("*.json")) + list(target_dir.rglob("*.csv"))

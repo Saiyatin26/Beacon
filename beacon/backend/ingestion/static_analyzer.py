@@ -258,11 +258,86 @@ class _PythonASTVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class CobolAnalyzer(StaticAnalyzer):
+    """Static analyzer for COBOL source programs extracting paragraphs and conditional rules."""
+
+    def analyze(self, source_code: str, file_name: str = "") -> StaticAnalysisResult:
+        import re
+        functions: list[FunctionFact] = []
+        conditions: list[ConditionFact] = []
+        comparisons: list[ComparisonFact] = []
+
+        current_paragraph: Optional[str] = None
+        lines = source_code.splitlines()
+
+        for line_no, raw_line in enumerate(lines, start=1):
+            # Clean comments (column 7 '*' or general '*')
+            if len(raw_line) >= 7 and raw_line[6] in ("*", "/"):
+                continue
+            line = raw_line.strip()
+            if not line or line.startswith("*"):
+                continue
+
+            # Check paragraph header (e.g. 0001-PROCESS-PAYMENT. or PROCESS-PAYMENT.)
+            para_match = re.match(r"^([A-Z0-9\-]+)\.\s*$", line, re.IGNORECASE)
+            if para_match:
+                name = para_match.group(1).upper()
+                if not any(div in name for div in ["DIVISION", "SECTION"]):
+                    current_paragraph = name
+                    functions.append(
+                        FunctionFact(
+                            name=name,
+                            location=SourceLocation(file=file_name, line=line_no, function=name),
+                            arguments=[],
+                            docstring=None,
+                        )
+                    )
+                continue
+
+            # Check conditionals: IF, EVALUATE, WHEN
+            cond_match = re.search(r"\b(IF|EVALUATE|WHEN)\s+(.+?)(?:\s+THEN|\s+ALSO|\.|$)", line, re.IGNORECASE)
+            if cond_match:
+                keyword = cond_match.group(1).upper()
+                expr = cond_match.group(2).strip()
+                loc = SourceLocation(file=file_name, line=line_no, function=current_paragraph)
+                cond_fact = ConditionFact(
+                    expression=expr,
+                    logical_operator="AND" if " AND " in expr.upper() else ("OR" if " OR " in expr.upper() else keyword),
+                    location=loc,
+                )
+                conditions.append(cond_fact)
+
+                # Split comparisons if recognizable
+                cmp_match = re.search(r"([A-Z0-9\-]+)\s*(=|<|>|<=|>=|EQUAL|GREATER|LESS)\s*([A-Z0-9\-'\"]+)", expr, re.IGNORECASE)
+                if cmp_match:
+                    comparisons.append(
+                        ComparisonFact(
+                            left=cmp_match.group(1),
+                            operator=cmp_match.group(2),
+                            right=cmp_match.group(3),
+                            location=loc,
+                        )
+                    )
+
+        return StaticAnalysisResult(
+            file=file_name,
+            language="cobol",
+            functions=functions,
+            conditions=conditions,
+            comparisons=comparisons,
+            assignments=[],
+            returns=[],
+            calls=[],
+        )
+
+
 def get_analyzer(language: str = "python") -> StaticAnalyzer:
     """Factory function to get appropriate StaticAnalyzer instance by language name."""
     lang_lower = language.lower()
-    if lang_lower == "python" or lang_lower == "py":
+    if lang_lower in ("python", "py"):
         return PythonAnalyzer()
+    if lang_lower in ("cobol", "cbl", "cob", "cpy"):
+        return CobolAnalyzer()
     raise NotImplementedError(
-        f"Static analyzer for '{language}' is not implemented yet. Supported: 'python'."
+        f"Static analyzer for '{language}' is not implemented yet. Supported: 'python', 'cobol'."
     )
