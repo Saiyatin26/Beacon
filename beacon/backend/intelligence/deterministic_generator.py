@@ -76,6 +76,9 @@ class DeterministicExplanationGenerator:
                 f"{regression_count or 0} regressions or inconsistencies were detected across {total_inputs or 0} inputs."
             )
 
+        if fallback_reason:
+            exec_summary = f"[Deterministic Fallback Explanation — {fallback_reason}]: {exec_summary}"
+
         # 2. Scope Summary
         scope_summary = {
             "application_id": context.application_id,
@@ -367,7 +370,7 @@ class DeterministicExplanationGenerator:
         # 10. Generation Metadata
         metadata = GenerationMetadata(
             provider="offline",
-            model="deterministic-rule-engine",
+            model="deterministic-fallback" if fallback_reason else "deterministic-rule-engine",
             generation_mode="DETERMINISTIC",
             prompt_version="v1.0",
             schema_version="1.0.0",

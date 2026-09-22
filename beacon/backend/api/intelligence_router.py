@@ -61,11 +61,17 @@ def generate_or_get_explanation(
         return explanation
     except HTTPException:
         raise
+    except RuntimeError as exc:
+        logger.error(f"Provider error generating explanation for cert '{certification_id}': {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=str(exc),
+        )
     except Exception as exc:
         logger.error(f"Diagnostic error generating explanation for cert '{certification_id}': {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate certification explanation.",
+            detail=f"Failed to generate certification explanation: {exc}",
         )
 
 

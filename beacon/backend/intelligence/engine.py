@@ -151,12 +151,13 @@ class IntelligenceEngine:
 
         system_prompt, user_prompt = render_explanation_prompt(context_dict, knowledge_block)
 
+        fallback_reason = "LLM generation or schema validation unfulfilled"
         try:
             llm_resp = self.provider_manager.generate(
                 prompt=user_prompt,
                 system=system_prompt,
                 json_mode=True,
-                preferred_provider=preferred_provider if mode == "llm" else "auto",
+                preferred_provider=preferred_provider,
             )
             elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
@@ -200,17 +201,30 @@ class IntelligenceEngine:
                     saved.audit_status = "PERSISTED" if audit_ok else "FAILED"
                     return saved
                 else:
-                    logger.warning(f"LLM output validation failed: {validation_errors}. Executing deterministic fallback.")
+                    err_details = "; ".join(validation_errors)
+                    logger.warning(f"LLM output validation failed: {err_details}.")
+                    if mode == "llm":
+                        raise RuntimeError(f"LLM output validation failed: {err_details}")
+                    fallback_reason = f"LLM output validation failed: {err_details}"
             else:
-                logger.warning(f"LLM generation failed ({llm_resp.error}). Executing deterministic fallback.")
+                err_msg = llm_resp.error or f"LLM generation failed for provider '{llm_resp.provider_name}'"
+                logger.warning(f"LLM generation failed ({err_msg}).")
+                if mode == "llm":
+                    raise RuntimeError(f"LLM provider error: {err_msg}")
+                fallback_reason = f"LLM provider error: {err_msg}"
 
+        except RuntimeError:
+            raise
         except Exception as exc:
             logger.error(f"Unexpected error during LLM explanation generation: {exc}", exc_info=True)
+            if mode == "llm":
+                raise RuntimeError(f"LLM explanation error: {exc}")
+            fallback_reason = f"Unexpected LLM error: {exc}"
 
         # 4. Guaranteed Deterministic Fallback
         fallback_explanation = self.det_generator.generate_explanation(
             context=context,
-            fallback_reason="LLM generation or schema validation unfulfilled",
+            fallback_reason=fallback_reason,
         )
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         fallback_explanation.generation_metadata.latency_ms = round(elapsed_ms, 2)

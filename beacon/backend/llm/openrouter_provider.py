@@ -49,22 +49,30 @@ class OpenRouterProvider(LLMProvider):
         return bool(self.api_key)
 
     def check_connectivity(self) -> bool:
-        """Checks OpenRouter reachability without exposing credentials or response data."""
+        """Checks OpenRouter reachability and API key authorization without exposing credentials."""
         if not self.is_configured():
             return False
 
         request = urllib.request.Request(
-            f"{self.base_url}/models",
-            headers={"Authorization": f"Bearer {self.api_key}"},
+            f"{self.base_url}/auth/key",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "HTTP-Referer": "https://github.com/Saiyatin26/Beacon",
+                "X-Title": "BEACON Invariant Miner",
+            },
             method="GET",
         )
         try:
             with urllib.request.urlopen(request, timeout=min(self.timeout, 5.0)) as response:
-                response.read(1)
-            logger.info("OpenRouter connectivity check succeeded")
-            return True
-        except Exception:
-            logger.warning("OpenRouter connectivity check failed")
+                if response.status == 200:
+                    logger.info("OpenRouter authentication and connectivity check succeeded.")
+                    return True
+                return False
+        except urllib.error.HTTPError as exc:
+            logger.warning(f"OpenRouter connectivity check rejected with HTTP {exc.code} ({exc.reason}).")
+            return False
+        except Exception as exc:
+            logger.warning(f"OpenRouter connectivity check failed: {exc}")
             return False
 
     def generate(
@@ -151,7 +159,7 @@ class OpenRouterProvider(LLMProvider):
 
         except urllib.error.HTTPError as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = f"OpenRouter HTTP request failed with status {exc.code}."
+            err_msg = f"OpenRouter HTTP request failed with status {exc.code}: {exc.reason}."
             logger.error(err_msg)
             return LLMResponse(
                 raw_text="",

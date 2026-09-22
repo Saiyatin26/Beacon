@@ -236,21 +236,23 @@ class KnowledgePersistenceStore:
             return [KnowledgeChunk(**json.loads(r["payload_json"])) for r in rows]
 
     def list_chunks_for_application(self, application_id: str, ready_only: bool = True) -> list[KnowledgeChunk]:
-        """Retrieves all indexed knowledge chunks for an application scope."""
+        """Retrieves all indexed knowledge chunks for an application scope, including global enterprise documents."""
         with self._get_conn() as conn:
             cursor = conn.cursor()
+            app_normalized = (application_id or "").strip()
             if ready_only:
                 cursor.execute("""
                     SELECT c.payload_json FROM knowledge_chunks c
                     JOIN knowledge_documents d ON c.document_id = d.document_id
-                    WHERE c.application_id = ? AND d.status = 'READY'
+                    WHERE (c.application_id = ? OR c.application_id = 'global' OR ? = 'global') AND d.status = 'READY'
                     ORDER BY c.chunk_index ASC
-                """, (application_id,))
+                """, (app_normalized, app_normalized))
             else:
                 cursor.execute("""
-                    SELECT payload_json FROM knowledge_chunks
-                    WHERE application_id = ? ORDER BY chunk_index ASC
-                """, (application_id,))
+                    SELECT c.payload_json FROM knowledge_chunks c
+                    WHERE (c.application_id = ? OR c.application_id = 'global' OR ? = 'global')
+                    ORDER BY c.chunk_index ASC
+                """, (app_normalized, app_normalized))
             rows = cursor.fetchall()
             return [KnowledgeChunk(**json.loads(r["payload_json"])) for r in rows]
 

@@ -30,12 +30,16 @@ export default function ExplanationMode({
   const [qaLoading, setQaLoading] = useState(false);
   const [qaHistory, setQaHistory] = useState([]);
 
-  // Sync selected cert ID if active result changes
+  // Sync selected cert ID if active result or historical artifacts arrive
   useEffect(() => {
-    if (!selectedCertId && activeResult?.certification_id) {
-      setSelectedCertId(activeResult.certification_id);
+    if (!selectedCertId) {
+      const defaultId =
+        activeResult?.certification_id ||
+        customActiveResult?.certification_id ||
+        (historicalArtifacts.length > 0 ? historicalArtifacts[0].certification_id : "");
+      if (defaultId) setSelectedCertId(defaultId);
     }
-  }, [activeResult, selectedCertId]);
+  }, [activeResult, customActiveResult, historicalArtifacts, selectedCertId]);
 
   // Load explanation when cert ID changes
   useEffect(() => {
@@ -199,6 +203,9 @@ export default function ExplanationMode({
               style={{ width: "100%", padding: "8px 12px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", fontFamily: "monospace" }}
             >
               <option value="">-- Select a Certification Run --</option>
+              {!activeResult && !customActiveResult && historicalArtifacts.length === 0 && (
+                <option value="" disabled>No certification runs available</option>
+              )}
               {activeResult && <option value={activeResult.certification_id}>Active Run: {activeResult.certification_id} ({activeResult.benchmark_id || "benchmark"})</option>}
               {customActiveResult && <option value={customActiveResult.certification_id}>Custom Run: {customActiveResult.certification_id} ({customActiveResult.project_id || "custom"})</option>}
               {historicalArtifacts.map((a) => (
@@ -367,6 +374,66 @@ export default function ExplanationMode({
                 <div style={{ fontSize: "20px", fontWeight: "800", color: "#2563eb" }}>
                   {explanation.rule_impacts?.length || 0}
                 </div>
+              </div>
+            </div>
+
+            {/* Authoritative Provenance Strip (Requirement 22) */}
+            <div
+              style={{
+                marginTop: "16px",
+                padding: "12px 16px",
+                borderRadius: "8px",
+                background: "#f1f5f9",
+                border: "1px solid #cbd5e1",
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                gap: "12px",
+                fontSize: "12px",
+              }}
+            >
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>Certification Run: </span>
+                <span style={{ fontFamily: "monospace", color: "#0f172a", fontWeight: "700" }}>{explanation.certification_id}</span>
+              </div>
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>Deterministic Verdict: </span>
+                <span style={{ fontWeight: "700", color: explanation.overall_verdict.includes("CERTIFIED") && !explanation.overall_verdict.includes("NOT") ? "#059669" : "#dc2626" }}>
+                  {explanation.overall_verdict}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>AI Provider: </span>
+                <span style={{ fontWeight: "700", color: "#1e293b" }}>{explanation.generation_metadata?.provider || "offline"}</span>
+              </div>
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>Model: </span>
+                <span style={{ fontWeight: "700", fontFamily: "monospace", color: "#1e293b" }}>{explanation.generation_metadata?.model || "deterministic"}</span>
+              </div>
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>RAG Knowledge: </span>
+                <span style={{ fontWeight: "700", color: explanation.company_knowledge_context?.citations?.length > 0 ? "#2563eb" : "#64748b" }}>
+                  {explanation.company_knowledge_context?.citations?.length > 0
+                    ? `${explanation.company_knowledge_context.citations.length} sources retrieved`
+                    : "Not Used / No Citations"}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>Grounding: </span>
+                <span style={{ fontWeight: "700", color: "#059669" }}>
+                  {explanation.audit_status === "PERSISTED" ? "VERIFIED (Empirical Grounding)" : explanation.audit_status}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>Fallback Status: </span>
+                <span style={{ fontWeight: "700", color: explanation.generation_metadata?.fallback_occurred ? "#d97706" : "#059669" }}>
+                  {explanation.generation_metadata?.fallback_occurred ? `Fallback Used: ${explanation.generation_metadata.fallback_reason || "Deterministic"}` : "Direct Provider Output"}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: "#64748b", fontWeight: "600" }}>Evidence Context: </span>
+                <span style={{ fontWeight: "700", color: "#1e293b" }}>
+                  {explanation.evidence_traces?.length || 0} traces / {explanation.scope_summary?.evaluated_inputs || 0} inputs
+                </span>
               </div>
             </div>
           </div>

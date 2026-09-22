@@ -90,14 +90,16 @@ class ExplanationContextBuilder:
             except Exception as exc:
                 logger.debug(f"Could not load CertificationArtifact for '{certification_id}': {exc}")
 
-        app_id = (
+        raw_app_id = (
             getattr(artifact, "application_id", None)
             or getattr(artifact, "project_id", None)
             or getattr(artifact, "benchmark_id", None)
             or (getattr(evaluation_result, "application_id", None) if evaluation_result else None)
             or ""
         )
-        proj_id = getattr(artifact, "project_id", None) or getattr(artifact, "application_id", None) or ""
+        app_id = str(raw_app_id) if raw_app_id is not None else ""
+        raw_proj_id = getattr(artifact, "project_id", None) or getattr(artifact, "application_id", None) or ""
+        proj_id = str(raw_proj_id) if raw_proj_id is not None else ""
 
         mode_normalized = (execution_mode or "auto").strip().lower()
         is_strict_v2 = mode_normalized == "v2"
@@ -583,15 +585,19 @@ class ExplanationContextBuilder:
                 if retrieved_context and retrieved_context.retrieved_chunks:
                     citations: list[RetrievedKnowledgeCitation] = []
                     for chunk in retrieved_context.retrieved_chunks:
+                        chunk_text = getattr(chunk, "text", "") or getattr(chunk, "content", "")
+                        chunk_score = getattr(chunk, "relevance_score", 0.0) or getattr(chunk, "score", 0.0)
+                        page_num = getattr(chunk, "page_start", None) or getattr(chunk, "page_number", None)
+                        sec_name = getattr(chunk, "section", None) or getattr(chunk, "heading", None) or getattr(chunk, "section_name", None)
                         citations.append(
                             RetrievedKnowledgeCitation(
                                 chunk_id=chunk.chunk_id,
                                 document_id=chunk.document_id,
                                 filename=chunk.filename,
-                                content_snippet=chunk.content[:300],
-                                relevance_score=chunk.score,
-                                page_number=chunk.page_number,
-                                section_name=chunk.section_name,
+                                content_snippet=chunk_text[:300],
+                                relevance_score=float(chunk_score),
+                                page_number=page_num,
+                                section_name=sec_name,
                             )
                         )
                     company_knowledge_context = CompanyKnowledgeContext(
