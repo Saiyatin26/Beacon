@@ -91,12 +91,13 @@ class ExplanationContextBuilder:
                 logger.debug(f"Could not load CertificationArtifact for '{certification_id}': {exc}")
 
         app_id = (
-            getattr(artifact, "project_id", None)
+            getattr(artifact, "application_id", None)
+            or getattr(artifact, "project_id", None)
             or getattr(artifact, "benchmark_id", None)
             or (getattr(evaluation_result, "application_id", None) if evaluation_result else None)
-            or "default_app"
+            or ""
         )
-        proj_id = getattr(artifact, "project_id", None) or "default_project"
+        proj_id = getattr(artifact, "project_id", None) or getattr(artifact, "application_id", None) or ""
 
         mode_normalized = (execution_mode or "auto").strip().lower()
         is_strict_v2 = mode_normalized == "v2"

@@ -263,8 +263,8 @@ class ExplanationContext(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     certification_id: str
-    application_id: str = "default_app"
-    project_id: str = "default_project"
+    application_id: str = ""
+    project_id: str = ""
     session_id: Optional[str] = None
     authoritative_verdict: str = "NOT_CERTIFIED"
     equivalence_score: Optional[float] = None
@@ -350,8 +350,8 @@ class CertificationExplanation(BaseModel):
 
     explanation_id: str
     certification_id: str
-    application_id: str = "default_app"
-    project_id: str = "default_project"
+    application_id: str = ""
+    project_id: str = ""
     session_id: Optional[str] = None
     generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     explanation_version: str = "1.0.0"

@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 
 export default function KnowledgeMode({ apiBase = "", authFetch, badgeStyle, cardStyle }) {
   // Application Scope State
-  const [appId, setAppId] = useState("default_app");
+  const [appId, setAppId] = useState("");
   
   // Ingestion State
   const [selectedFile, setSelectedFile] = useState(null);
@@ -65,7 +65,7 @@ export default function KnowledgeMode({ apiBase = "", authFetch, badgeStyle, car
     try {
       const formData = new FormData();
       formData.append("file", selectedFile);
-      formData.append("application_id", appId.trim() || "default_app");
+      formData.append("application_id", appId.trim());
       formData.append("chunk_size", parseInt(chunkSize, 10) || 500);
       formData.append("chunk_overlap", parseInt(chunkOverlap, 10) || 100);
 
@@ -155,7 +155,7 @@ export default function KnowledgeMode({ apiBase = "", authFetch, badgeStyle, car
 
     try {
       const payload = {
-        application_id: appId.trim() || "default_app",
+        application_id: appId.trim(),
         query: query.trim(),
         top_k: parseInt(topK, 10) || 5,
         min_relevance_score: parseFloat(minScore) || 0.01,
@@ -246,7 +246,7 @@ export default function KnowledgeMode({ apiBase = "", authFetch, badgeStyle, car
           type="text"
           value={appId}
           onChange={(e) => setAppId(e.target.value)}
-          placeholder="e.g. app_retail_pricing"
+          placeholder="Application ID (from repository analysis)..."
           style={{
             padding: "8px 12px",
             borderRadius: "6px",

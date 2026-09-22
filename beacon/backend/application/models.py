@@ -319,7 +319,6 @@ def build_application_spec_from_repository_execution_spec(
             metadata={
                 "authoritative_input_set": repo_spec.discovered_inputs,
                 "discovered_inputs": repo_spec.discovered_inputs,
-                "custom_inputs": repo_spec.discovered_inputs,
                 "input_set_identity": repo_spec.input_set_identity,
             }
         ),

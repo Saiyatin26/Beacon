@@ -153,18 +153,16 @@ class CertificationContext(BaseModel):
     """Authoritative execution context for a single benchmark certification run.
     Serves as the single source of truth for the UI, API, and audit trail.
     """
-    model_config = {"protected_namespaces": ()}
-
-    benchmark_id: str = "retail_discount_pricing"
+    benchmark_id: str = ""
     benchmark_version: str = "1.0.0"
-    benchmark_name: str = "Retail & Wholesale Discount Pricing Engine"
+    benchmark_name: str = ""
     benchmark_provenance: str = "CONTROLLED"  # "CONTROLLED", "REALISTIC_SYNTHETIC", "PUBLIC_STATUTORY", "AUTHENTIC_PUBLIC_MIGRATION"
-    dataset_id: str = "default"
+    dataset_id: str = ""
     dataset_version: str = "1.0.0"
     dataset_checksum: str = ""
     evaluation_mode: str = "CONTROLLED"  # "CONTROLLED" or "FULL_BEACON"
-    modernization_variant_id: str = "clean_v2"
-    modernization_variant_name: str = "Clean Modernization"
+    modernization_variant_id: str = ""
+    modernization_variant_name: str = ""
     modernization_provenance: str = "INDEPENDENT_REIMPLEMENTATION"  # "INDEPENDENT_REIMPLEMENTATION", "CONTROLLED_MUTATION"
     legacy_implementation_id: str = ""
     legacy_implementation_hash: str = ""
@@ -393,7 +391,7 @@ class CertificationMetrics(BaseModel):
     critical_failures: int = 0
     non_critical_failures: int = 0
     oracles_exercised: int = 0
-    oracle_coverage_pct: float = 0.0
+    oracle_coverage_pct: Optional[float] = None
     overall_equivalence_score: float = 0.0
 
 

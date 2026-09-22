@@ -470,7 +470,7 @@ class CanonicalV2WorkflowEngine:
             (spec.metadata and (spec.metadata.get("specification_fingerprint") or spec.metadata.get("discovered_inputs") or spec.metadata.get("authoritative_input_set")))
             or (spec.dataset_config and spec.dataset_config.metadata and (spec.dataset_config.metadata.get("authoritative_input_set") or spec.dataset_config.metadata.get("discovered_inputs")))
         )
-        if is_repo_spec and request.custom_inputs:
+        if request.custom_inputs:
             return self._fail_run(
                 run,
                 WorkflowErrorCode.INVALID_INPUT,
@@ -486,12 +486,6 @@ class CanonicalV2WorkflowEngine:
             authoritative_inputs = spec.metadata.get("discovered_inputs")
         elif authoritative_inputs is None and spec.dataset_config and spec.dataset_config.metadata and spec.dataset_config.metadata.get("discovered_inputs"):
             authoritative_inputs = spec.dataset_config.metadata.get("discovered_inputs")
-        elif authoritative_inputs is None and request.custom_inputs:
-            authoritative_inputs = request.custom_inputs
-        elif authoritative_inputs is None and spec.dataset_config and spec.dataset_config.metadata and spec.dataset_config.metadata.get("custom_inputs"):
-            authoritative_inputs = spec.dataset_config.metadata.get("custom_inputs")
-        elif authoritative_inputs is None and spec.metadata and spec.metadata.get("custom_inputs"):
-            authoritative_inputs = spec.metadata.get("custom_inputs")
 
         if is_repo_spec and (not authoritative_inputs or len(authoritative_inputs) == 0):
             return self._fail_run(
@@ -534,11 +528,6 @@ class CanonicalV2WorkflowEngine:
         effective_cert_policy = certification_policy_resolver.resolve_effective_policy(
             application_id=spec.application_id,
             evaluation_mode=eval_mode,
-            configured_policy=request.policy_override or {
-                "min_equivalence_score": request.policy_min_equivalence_score,
-                "min_oracle_coverage": request.policy_min_oracle_coverage,
-                "allow_warnings": request.allow_warnings,
-            },
         )
         policy_fp = effective_cert_policy.compute_policy_fingerprint()
 
@@ -1283,11 +1272,6 @@ class CanonicalV2WorkflowEngine:
             cert_policy = certification_policy_resolver.resolve_effective_policy(
                 application_id=spec.application_id,
                 evaluation_mode=eval_mode,
-                configured_policy=request.policy_override or {
-                    "min_equivalence_score": request.policy_min_equivalence_score,
-                    "min_oracle_coverage": request.policy_min_oracle_coverage,
-                    "allow_warnings": request.allow_warnings,
-                },
             )
 
         # 3. Execution Context Cross-Binding

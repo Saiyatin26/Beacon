@@ -166,11 +166,6 @@ Phase 13 establishes a production-grade, step-by-step guided certification inter
 ```
 beacon/
 ├── benchmarks/            Phase 12 — External & Public Benchmark Suites
-│   ├── loan_demo/                 Core Loan Underwriting Benchmark (CONTROLLED)
-│   ├── medical_triage/            Clinical Triage Decision Benchmark (CONTROLLED)
-│   ├── retail_discount_pricing/   Multi-Tier Pricing Engine (REALISTIC_SYNTHETIC)
-│   └── payroll_tax_calculator/    Progressive Tax Engine (REALISTIC_SYNTHETIC)
-├── legacy_sample/         Sample legacy app + synthetic trace generator
 ├── backend/
 │   ├── common/            Shared config, SQLite/Atlas client, Pydantic models
 │   ├── ingestion/         Static AST parsing + dynamic runtime tracer

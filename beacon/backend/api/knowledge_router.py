@@ -43,7 +43,7 @@ knowledge_router = APIRouter(tags=["v2-company-knowledge-rag"])
 )
 async def upload_document(
     file: UploadFile = File(...),
-    application_id: str = Form("default_app"),
+    application_id: str = Form(...),
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(100),
     current_user: User = Depends(get_current_active_user),

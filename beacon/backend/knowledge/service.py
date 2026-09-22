@@ -54,14 +54,16 @@ class KnowledgeService:
         self,
         content: bytes,
         filename: str,
-        application_id: str = "default_app",
+        application_id: str,
         chunk_size: int = 500,
         chunk_overlap: int = 100,
     ) -> DocumentMetadata:
         """Ingests, validates, stores, extracts, chunks, and indexes a PDF/DOCX company document."""
         # 1. Validate application_id and filename before any filesystem access
         from .security import validate_application_id
-        app_id = validate_application_id(application_id if application_id else "default_app")
+        if not application_id:
+            raise ValueError("application_id must be provided.")
+        app_id = validate_application_id(application_id)
         safe_fn = sanitize_filename(filename)
         now_str = datetime.now(timezone.utc).isoformat()
 

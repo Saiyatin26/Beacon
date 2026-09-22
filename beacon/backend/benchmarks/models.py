@@ -176,7 +176,7 @@ class BenchmarkExecutionManifest(BaseModel):
     total_cases: int = 0
     violations: int = 0
     errors: int = 0
-    oracle_coverage_pct: float = 0.0
+    oracle_coverage_pct: Optional[float] = None
     equivalence_score: float = 0.0
     certification_status: str = "NOT_CERTIFIED"
     artifact_hash: str = ""

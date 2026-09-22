@@ -59,7 +59,7 @@ class StaticEvidenceItem(BaseModel):
     left: Optional[str] = None
     right: Optional[Any] = None
     strength: float = 0.7  # Static evidence weight metadata
-    source_location_id: Optional[str] = None  # e.g. "legacy_loan_approval.py:14"
+    source_location_id: Optional[str] = None  # e.g. "legacy_source.py:14"
 
 
 class DynamicEvidenceItem(BaseModel):

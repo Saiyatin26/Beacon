@@ -65,8 +65,10 @@ def is_valid_state_transition(current: WorkflowState, target: WorkflowState, is_
     if current == target:
         return True
     if is_recovery:
-        # In recovery, an uncompleted in-flight run may transition strictly to COMPLETED, FAILED, or INCONCLUSIVE.
-        # However, COMPLETED is strictly forbidden from early uncertified stages (must have reached CERTIFYING, EXPLAINING, or PERSISTING).
+        # In recovery, an uncompleted in-flight run may transition strictly to PERSISTING, COMPLETED, FAILED, or INCONCLUSIVE.
+        # However, COMPLETED and PERSISTING are strictly forbidden from early uncertified stages (must have reached CERTIFYING, EXPLAINING, or PERSISTING).
+        if target == WorkflowState.PERSISTING:
+            return current in (WorkflowState.CERTIFYING, WorkflowState.EXPLAINING)
         if target == WorkflowState.COMPLETED:
             return current in (WorkflowState.CERTIFYING, WorkflowState.EXPLAINING, WorkflowState.PERSISTING)
         return target in (WorkflowState.FAILED, WorkflowState.INCONCLUSIVE)
@@ -212,15 +214,12 @@ class WorkflowRunRequest(BaseModel):
 
     def compute_request_fingerprint(self) -> str:
         """Computes deterministic SHA-256 fingerprint over all material request fields."""
-        inputs_repr = self.authoritative_input_set if self.authoritative_input_set is not None else (self.custom_inputs or [])
+        inputs_repr = self.authoritative_input_set or []
         payload = {
             "application_id": self.application_id,
             "target_index": self.target_index,
             "input_count": len(inputs_repr) if isinstance(inputs_repr, list) else 0,
             "sample_count": self.sample_count,
-            "policy_min_equivalence_score": round(self.policy_min_equivalence_score, 6),
-            "policy_min_oracle_coverage": round(self.policy_min_oracle_coverage, 6),
-            "allow_warnings": self.allow_warnings,
             "explain": self.explain,
             "explanation_mode": self.explanation_mode,
             "use_company_knowledge": self.use_company_knowledge,

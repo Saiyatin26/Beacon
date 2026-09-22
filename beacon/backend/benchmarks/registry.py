@@ -70,198 +70,22 @@ class BenchmarkRegistry:
         self._modern_adapters.clear()
         self._discovered_oracle_sets.clear()
 
-        # 1. Register Built-in Loan Demo Benchmark (Controlled synthetic baseline)
-        self._register_builtin_loan_benchmark()
-
-        # 2. Register Built-in Medical Triage Benchmark (Controlled clinical triage model)
-        self._register_builtin_medical_benchmark()
-
-        # 3. Discover External Benchmarks in benchmarks/ directory
+        # Discover External Benchmarks in benchmarks/ directory
         if self._benchmarks_dir.exists():
             for bench_path in self._benchmarks_dir.iterdir():
                 if bench_path.is_dir() and (bench_path / "metadata.json").exists():
                     self._load_external_benchmark(bench_path)
 
-        # 4. Register benchmark-scoped V1 compatibility adapter aliases
-        self._register_benchmark_adapter_aliases()
-
-        # 5. Pre-load Controlled Baseline OracleSets into Oracle Registry
+        # Pre-load Controlled Baseline OracleSets into Oracle Registry
         for b_id in list(self._specs.keys()):
             try:
                 self.resolve_controlled_oracle_set(b_id)
             except Exception as exc:
                 logger.debug(f"Controlled oracle set pre-load note for {b_id}: {exc}")
 
-    def _register_benchmark_adapter_aliases(self):
-        """Registers benchmark-scoped V1 adapter aliases for backward compatibility."""
-        alias_map = {
-            "retail_discount_legacy": "retail_pricing_legacy",
-            "retail_discount_modern_clean": "retail_pricing_modern_clean",
-            "retail_discount_modern_buggy_threshold": "retail_pricing_modern_buggy_threshold",
-            "retail_discount_modern_buggy_operator": "retail_pricing_modern_buggy_operator",
-            "payroll_tax_legacy": "payroll_legacy",
-            "payroll_tax_modern_clean": "payroll_modern_clean",
-            "payroll_tax_modern_buggy_bracket": "payroll_modern_buggy_bracket",
-            "payroll_tax_modern_buggy_deduction": "payroll_modern_buggy_deduction",
-        }
-        for alias_name, target_adapter_name in alias_map.items():
-            target_adp = adapter_registry.get_adapter(target_adapter_name)
-            if target_adp and not adapter_registry.get_adapter(alias_name):
-                alias_adp = FunctionAdapter(
-                    target_fn=getattr(target_adp, "target_fn", getattr(target_adp, "_target_fn", None)),
-                    name=alias_name,
-                    version=target_adp.version,
-                    role=getattr(target_adp, "role", "target"),
-                    output_normalizer=getattr(target_adp, "output_normalizer", None),
-                )
-                alias_adp.implementation_hash = getattr(target_adp, "implementation_hash", "")
-                adapter_registry.register_adapter(alias_adp)
-
     def resolve_controlled_oracle_set(self, benchmark_id: str) -> OracleSet:
         """Resolves/pre-loads the controlled baseline OracleSet for a benchmark."""
         return self.get_or_create_oracle_set(benchmark_id, mode="CONTROLLED")
-
-    def _register_builtin_loan_benchmark(self):
-        spec = BenchmarkSpec(
-            benchmark_id="loan_demo",
-            name="Loan Approval Invariant Mining Benchmark",
-            domain="Financial Services & Underwriting",
-            description="Core demonstration benchmark mining loan decision invariants against debt, income, and credit score rules.",
-            source="BEACON Controlled Benchmark Suite",
-            source_repository="https://github.com/Saiyatin26/Beacon",
-            source_url="https://github.com/Saiyatin26/Beacon/legacy_sample",
-            source_version="1.0.0",
-            source_license="Apache-2.0",
-            license="Apache-2.0",
-            language="Python",
-            legacy_version="1.0.0",
-            modernized_version="2.0.0",
-            provenance_category=ProvenanceCategory.CONTROLLED,
-            modernization_provenance={
-                "clean_v2": ModernizationProvenance.INDEPENDENT_REIMPLEMENTATION,
-                "buggy_v2": ModernizationProvenance.CONTROLLED_MUTATION,
-            },
-            input_schema={
-                "credit_score": "int",
-                "debt_ratio": "float",
-                "annual_income": "float",
-            },
-            output_schema={
-                "decision": "str",
-                "approved": "bool",
-            },
-            dataset_source="Controlled synthetic loan underwriting scenarios with known boundary conditions",
-            dataset_license="Apache-2.0",
-            dataset_version="1.0.0",
-            adapter_version="1.0.0",
-            legacy_adapter_id="loan_approval_legacy",
-            modernized_adapters={
-                "clean_v2": "loan_approval_modern_equiv",
-                "buggy_v2": "loan_approval_modern_buggy",
-            },
-            field_bounds={
-                "credit_score": (400, 820),
-                "debt_ratio": (0.0, 0.9),
-                "annual_income": (10000, 150000),
-            },
-            reproducibility_manifest=ReproducibilityManifest(
-                benchmark_id="loan_demo",
-                benchmark_version="1.0.0",
-                adapter_version="1.0.0",
-            ),
-            tags=["loan", "underwriting", "baseline", "controlled"],
-        )
-        self._specs[spec.benchmark_id] = spec
-
-        try:
-            import legacy_loan_approval
-            import modern_loan_approval
-            import modern_clean_loan_approval
-
-            leg_fn = legacy_loan_approval.evaluate_loan
-            mod_clean_fn = modern_clean_loan_approval.evaluate_loan
-            mod_buggy_fn = modern_loan_approval.evaluate_loan
-
-            leg_adp = LegacyAdapter(target_fn=leg_fn, name="loan_approval_legacy", version="1.0.0")
-            mod_clean_adp = ModernizedAdapter(target_fn=mod_clean_fn, name="loan_approval_modern_equiv", version="2.0.0")
-            mod_buggy_adp = ModernizedAdapter(target_fn=mod_buggy_fn, name="loan_approval_modern_buggy", version="2.0.0-buggy")
-
-            leg_file = ROOT_DIR / "legacy_sample" / "legacy_loan_approval.py"
-            mod_clean_file = ROOT_DIR / "legacy_sample" / "modern_clean_loan_approval.py"
-            mod_buggy_file = ROOT_DIR / "legacy_sample" / "modern_loan_approval.py"
-
-            leg_adp.implementation_hash = compute_implementation_hash(leg_file)
-            mod_clean_adp.implementation_hash = compute_implementation_hash(mod_clean_file)
-            mod_buggy_adp.implementation_hash = compute_implementation_hash(mod_buggy_file)
-            spec.legacy_implementation_hash = leg_adp.implementation_hash
-
-            self._legacy_adapters[spec.benchmark_id] = leg_adp
-            self._modern_adapters[(spec.benchmark_id, "clean_v2")] = mod_clean_adp
-            self._modern_adapters[(spec.benchmark_id, "buggy_v2")] = mod_buggy_adp
-
-            adapter_registry.register_adapter(leg_adp)
-            adapter_registry.register_adapter(mod_clean_adp)
-            adapter_registry.register_adapter(mod_buggy_adp)
-        except Exception as exc:
-            logger.warning(f"Could not bind loan demo adapters: {exc}")
-
-    def _register_builtin_medical_benchmark(self):
-        medical_bench_dir = self._benchmarks_dir / "medical_triage"
-        if medical_bench_dir.exists() and (medical_bench_dir / "metadata.json").exists():
-            self._load_external_benchmark(medical_bench_dir)
-            return
-
-        spec = BenchmarkSpec(
-            benchmark_id="medical_triage",
-            name="Emergency Medical Triage Decision Benchmark",
-            domain="Healthcare & Critical Care",
-            description="Clinical triage priority scoring evaluating vital signs, oxygen saturation, and heart rate thresholds.",
-            source="Clinical Guideline Triage Rules (Controlled Model)",
-            source_repository="https://github.com/Saiyatin26/Beacon",
-            source_url="https://github.com/Saiyatin26/Beacon/benchmarks/medical_triage",
-            source_version="1.0.0",
-            source_license="MIT",
-            license="MIT",
-            language="Python",
-            legacy_version="1.0.0",
-            modernized_version="2.0.0",
-            provenance_category=ProvenanceCategory.CONTROLLED,
-            modernization_provenance={
-                "clean_v2": ModernizationProvenance.INDEPENDENT_REIMPLEMENTATION,
-                "buggy_v2": ModernizationProvenance.CONTROLLED_MUTATION,
-            },
-            input_schema={
-                "heart_rate": "int",
-                "systolic_bp": "int",
-                "spo2": "float",
-                "is_responsive": "bool",
-            },
-            output_schema={
-                "triage_priority": "str",
-                "requires_icu": "bool",
-            },
-            dataset_source="Controlled synthetic clinical vital signs evaluating oxygen and BP thresholds",
-            dataset_license="MIT",
-            dataset_version="1.0.0",
-            adapter_version="1.0.0",
-            legacy_adapter_id="medical_triage_legacy",
-            modernized_adapters={
-                "clean_v2": "medical_triage_modern_clean",
-                "buggy_v2": "medical_triage_modern_buggy",
-            },
-            field_bounds={
-                "heart_rate": (40, 200),
-                "systolic_bp": (60, 220),
-                "spo2": (70.0, 100.0),
-            },
-            reproducibility_manifest=ReproducibilityManifest(
-                benchmark_id="medical_triage",
-                benchmark_version="1.0.0",
-                adapter_version="1.0.0",
-            ),
-            tags=["medical", "healthcare", "triage", "controlled"],
-        )
-        self._specs[spec.benchmark_id] = spec
 
     def _load_external_benchmark(self, bench_dir: Path):
         meta_file = bench_dir / "metadata.json"
@@ -372,12 +196,6 @@ class BenchmarkRegistry:
 
     def get_legacy_adapter(self, benchmark_id: str) -> Optional[ImplementationAdapter]:
         """Resolves the legacy ImplementationAdapter for a benchmark."""
-        if benchmark_id not in self._legacy_adapters:
-            if benchmark_id == "loan_demo":
-                self._register_builtin_loan_benchmark()
-            elif benchmark_id == "medical_triage":
-                self._register_builtin_medical_benchmark()
-
         if benchmark_id in self._legacy_adapters:
             adp = self._legacy_adapters[benchmark_id]
             adapter_registry.register_adapter(adp)
@@ -390,12 +208,6 @@ class BenchmarkRegistry:
 
     def get_modernized_adapter(self, benchmark_id: str, variant: str = "clean_v2") -> Optional[ImplementationAdapter]:
         """Resolves a modernized ImplementationAdapter variant for a benchmark."""
-        if (benchmark_id, variant) not in self._modern_adapters:
-            if benchmark_id == "loan_demo":
-                self._register_builtin_loan_benchmark()
-            elif benchmark_id == "medical_triage":
-                self._register_builtin_medical_benchmark()
-
         if (benchmark_id, variant) in self._modern_adapters:
             adp = self._modern_adapters[(benchmark_id, variant)]
             adapter_registry.register_adapter(adp)
@@ -436,20 +248,7 @@ class BenchmarkRegistry:
         if file_path.exists():
             return load_dataset_file(file_path, spec.input_schema, benchmark_id=benchmark_id)
 
-        # Fallback for loan demo / medical triage synthetic generation
-        from certification.input_generator import generate_certification_test_suite
-        oracles = self.get_or_create_oracle_set(benchmark_id).oracles
-        inputs = generate_certification_test_suite(
-            oracles=oracles,
-            field_bounds=spec.field_bounds,
-            n_diverse_samples=50,
-            seed=42,
-        )
-        # Compute deterministic checksum over synthetic input JSON
-        canonical_str = "".join(inp.input_id for inp in inputs)
-        import hashlib
-        checksum = hashlib.sha256(canonical_str.encode("utf-8")).hexdigest()
-        return inputs, checksum
+        raise FileNotFoundError(f"Dataset file not found for benchmark '{benchmark_id}': {file_path}")
 
     def validate_benchmark(
         self,
@@ -658,137 +457,29 @@ class BenchmarkRegistry:
             return orc_set
 
         # CONTROLLED Mode Baseline
+        # CONTROLLED Mode Baseline
         set_id = f"SET-{benchmark_id.upper()}-CONTROLLED"
         existing = oracle_registry.get_oracle_set(set_id)
         if existing:
             return existing
 
-        from common.models import CandidateInvariant
-        from oracle.compiler import compile_candidate_to_oracle
+        bench_dir = self._benchmarks_dir / benchmark_id
+        oracle_file = bench_dir / "oracle_set.json"
+        if oracle_file.exists():
+            with open(oracle_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            oracle_set = OracleSet.model_validate(data)
+            oracle_registry.register_oracle_set(oracle_set)
+            return oracle_set
 
-        candidates: list[CandidateInvariant] = []
-
-        if benchmark_id == "retail_discount_pricing":
-            c1 = CandidateInvariant(
-                invariant_id="INV-RETAIL-1",
-                condition="customer_tier == 'VIP' and order_amount >= 500.0 and coupon_code == 'NONE' and items_count < 50",
-                consequence="discount_applied_pct == 0.20",
-                source_file="retail_pricing.py",
-                domain="E-Commerce & Retail Supply Chain",
-                severity="critical",
-                confidence=1.0,
-                status="graduated",
-            )
-            c2 = CandidateInvariant(
-                invariant_id="INV-RETAIL-2",
-                condition="order_amount >= 1500.0 and is_express_shipping == False",
-                consequence="shipping_cost == 0.0",
-                source_file="retail_pricing.py",
-                domain="E-Commerce & Retail Supply Chain",
-                severity="high",
-                confidence=0.95,
-                status="graduated",
-            )
-            c3 = CandidateInvariant(
-                invariant_id="INV-RETAIL-3",
-                condition="order_amount >= 10.0 and items_count >= 1",
-                consequence="approved_for_fulfillment == True",
-                source_file="retail_pricing.py",
-                domain="E-Commerce & Retail Supply Chain",
-                severity="high",
-                confidence=0.95,
-                status="graduated",
-            )
-            candidates = [c1, c2, c3]
-
-        elif benchmark_id == "payroll_tax_calculator":
-            c1 = CandidateInvariant(
-                invariant_id="INV-PAYROLL-1",
-                condition="tax_bracket == 'EXEMPT'",
-                consequence="federal_tax == 0.0",
-                source_file="payroll_calculator.py",
-                domain="Public Finance & Human Resources",
-                severity="critical",
-                confidence=1.0,
-                status="graduated",
-            )
-            c2 = CandidateInvariant(
-                invariant_id="INV-PAYROLL-2",
-                condition="gross_salary >= 1000.0",
-                consequence="eligible_for_payroll == True",
-                source_file="payroll_calculator.py",
-                domain="Public Finance & Human Resources",
-                severity="high",
-                confidence=0.95,
-                status="graduated",
-            )
-            c3 = CandidateInvariant(
-                invariant_id="INV-PAYROLL-3",
-                condition="tax_bracket == 'EXEMPT' and gross_salary >= 1000.0",
-                consequence="state_tax == 0.0",
-                source_file="payroll_calculator.py",
-                domain="Public Finance & Human Resources",
-                severity="high",
-                confidence=0.95,
-                status="graduated",
-            )
-            candidates = [c1, c2, c3]
-
-        elif benchmark_id == "medical_triage":
-            c1 = CandidateInvariant(
-                invariant_id="INV-MED-1",
-                condition="spo2 < 90.0",
-                consequence="triage_priority == 'CRITICAL'",
-                source_file="medical_triage.py",
-                domain="Healthcare & Critical Care",
-                severity="critical",
-                confidence=1.0,
-                status="graduated",
-            )
-            candidates = [c1]
-
-        else: # loan_demo
-            c1 = CandidateInvariant(
-                invariant_id="INV-LOAN-1",
-                condition="credit_score >= 700",
-                consequence="approved == True",
-                source_file="legacy_loan_approval.py",
-                domain="Financial Services & Underwriting",
-                severity="high",
-                confidence=0.95,
-                status="graduated",
-            )
-            candidates = [c1]
-
-        # Compile and register oracles with explicit CONTROLLED_ORACLE_SET provenance
-        oracles: list[OracleDefinition] = []
-        for cand in candidates:
-            prov = OracleProvenance(
-                invariant_id=cand.invariant_id,
-                source_file=cand.source_file,
-                source_lines=cand.source_lines,
-                evidence_ids=cand.evidence_ids,
-                execution_ids=cand.execution_ids,
-                evidence_source="CONTROLLED_ORACLE_SET",
-                mining_method="manual_baseline_specification",
-                confidence=cand.confidence,
-                severity=cand.severity,
-                domain=cand.domain or "default",
-                generation_method="offline",
-                generation_timestamp=datetime.now(timezone.utc).isoformat(),
-            )
-            oracle = compile_candidate_to_oracle(cand, provenance=prov)
-            registered_oracle = oracle_registry.register_oracle(oracle)
-            oracles.append(registered_oracle)
-
-        hashes = [o.content_hash for o in oracles]
-        set_hash = compute_oracle_set_hash(hashes)
+        # If no controlled oracle set file exists for this benchmark, produce empty controlled baseline
+        set_hash = compute_oracle_set_hash([])
         oracle_set = OracleSet(
             oracle_set_id=set_id,
             name=f"{benchmark_id} Controlled Baseline Oracle Set",
-            domain=oracles[0].domain if oracles else "default",
-            oracle_ids=[o.oracle_id for o in oracles],
-            oracles=oracles,
+            domain="default",
+            oracle_ids=[],
+            oracles=[],
             oracle_set_hash=set_hash,
         )
         oracle_registry.register_oracle_set(oracle_set)
@@ -838,16 +529,13 @@ class BenchmarkRegistry:
         pref_prov = (preferred_provider or model_provider or "auto").lower().strip()
 
         # 1. Locate Legacy Source File
+        bench_dir = self._benchmarks_dir / benchmark_id
+        legacy_dir = bench_dir / "legacy"
         source_path: Optional[Path] = None
-        if benchmark_id == "loan_demo":
-            source_path = Path(__file__).resolve().parents[2] / "legacy_sample" / "legacy_loan_approval.py"
-        else:
-            bench_dir = self._benchmarks_dir / benchmark_id
-            legacy_dir = bench_dir / "legacy"
-            if legacy_dir.exists():
-                py_files = list(legacy_dir.glob("*.py"))
-                if py_files:
-                    source_path = py_files[0]
+        if legacy_dir.exists():
+            py_files = sorted(list(legacy_dir.glob("*.py")))
+            if py_files:
+                source_path = py_files[0]
 
         if not source_path or not source_path.exists():
             raise FileNotFoundError(f"Legacy source file not found for benchmark '{benchmark_id}'")
@@ -865,19 +553,11 @@ class BenchmarkRegistry:
         )
 
         # 3. Dynamic Execution Tracing
-        traces = []
-        if benchmark_id == "loan_demo":
-            trace_file = Path(__file__).resolve().parents[2] / "legacy_sample" / "trace_log.json"
-            if trace_file.exists():
-                from ingestion.trace_loader import load_traces
-                traces = load_traces(trace_file)
-
-        if not traces:
-            from ingestion.runtime_tracer import PythonRuntimeTracer
-            dataset_inputs = self.get_input_dataset(benchmark_id)
-            sample_dicts = [inp.values for inp in dataset_inputs] if dataset_inputs else []
-            tracer = PythonRuntimeTracer()
-            traces = tracer.trace_batch(legacy_fn, sample_dicts) if sample_dicts else []
+        from ingestion.runtime_tracer import PythonRuntimeTracer
+        dataset_inputs = self.get_input_dataset(benchmark_id)
+        sample_dicts = [inp.values for inp in dataset_inputs] if dataset_inputs else []
+        tracer = PythonRuntimeTracer()
+        traces = tracer.trace_batch(legacy_fn, sample_dicts) if sample_dicts else []
         log_operational_event(
             event="full_beacon_observation_completed",
             logger_name="beacon.execution",

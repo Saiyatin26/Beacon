@@ -111,7 +111,7 @@ class ExecutionEvidence(BaseModel):
     error_cases: int = 0
     counterexample_count: int = 0
     oracles_exercised: int = 0
-    oracle_coverage_pct: float = 0.0
+    oracle_coverage_pct: Optional[float] = None
     equivalence_score: float = 0.0
     input_set_id: str = ""
     input_set_hash: str = ""

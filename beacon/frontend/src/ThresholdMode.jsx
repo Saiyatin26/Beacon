@@ -14,8 +14,8 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
   const [fallbackStrategy, setFallbackStrategy] = useState("FIXED");
   const [fallbackValue, setFallbackValue] = useState("0.10");
 
-  // Sample Observations Input
-  const [sampleInput, setSampleInput] = useState("100.0, 101.2, 99.8, 100.5, 101.0, 99.5, 100.2");
+  // Authoritative Observations Input
+  const [sampleInput, setSampleInput] = useState("");
   
   // Resolution State
   const [isResolving, setIsResolving] = useState(false);
@@ -23,11 +23,11 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
   const [resolveError, setResolveError] = useState(null);
 
   // Evaluation Sandbox State (Simulation / Preview)
-  const [refVal, setRefVal] = useState("100.0");
-  const [tarVal, setTarVal] = useState("100.12");
+  const [refVal, setRefVal] = useState("");
+  const [tarVal, setTarVal] = useState("");
   const [evalVerdict, setEvalVerdict] = useState(null);
   // Authoritative Evaluation Context State
-  const [appId, setAppId] = useState("default_app");
+  const [appId, setAppId] = useState("");
   const [refSessionId, setRefSessionId] = useState("");
   const [tarSessionId, setTarSessionId] = useState("");
   const [oracleSetId, setOracleSetId] = useState("");
@@ -43,6 +43,12 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
         .split(",")
         .map((s) => parseFloat(s.trim()))
         .filter((n) => !isNaN(n));
+
+      if (strategy !== "FIXED" && numbers.length === 0) {
+        setResolveError("Awaiting authoritative threshold observations");
+        setIsResolving(false);
+        return;
+      }
 
       const policyPayload = {
         policy_id: `policy_${strategy.toLowerCase()}_v1`,
@@ -161,7 +167,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
       };
 
       const evalReq = {
-        application_id: appId.trim() || "default_app",
+        application_id: appId.trim(),
         reference_session_id: refSessionId.trim(),
         target_session_id: tarSessionId.trim(),
         oracle_set_id: oracleSetId.trim(),
@@ -190,7 +196,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
   };
 
   useEffect(() => {
-    handleResolveThreshold();
+    // Await authoritative threshold resolution
   }, []);
 
   return (
@@ -356,6 +362,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   rows={2}
                   value={sampleInput}
                   onChange={(e) => setSampleInput(e.target.value)}
+                  placeholder="Awaiting authoritative threshold observations or enter comma-separated numbers..."
                   style={{ width: "100%", padding: "8px 12px", borderRadius: "8px", border: "1px solid #cbd5e1", fontSize: "13px", fontFamily: "monospace" }}
                 />
               </div>
@@ -424,7 +431,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                 </div>
               </div>
             ) : (
-              <div style={{ color: "#94a3b8", fontSize: "13px" }}>No threshold resolved yet.</div>
+              <div style={{ color: "#94a3b8", fontSize: "13px" }}>Awaiting authoritative threshold resolution</div>
             )}
           </div>
 
@@ -447,6 +454,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                 <input
                   type="text"
                   value={refVal}
+                  placeholder="Reference value (optional preview)..."
                   onChange={(e) => {
                     setRefVal(e.target.value);
                     evaluateSimulationPreview();
@@ -461,6 +469,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                 <input
                   type="text"
                   value={tarVal}
+                  placeholder="Target value (optional preview)..."
                   onChange={(e) => {
                     setTarVal(e.target.value);
                     evaluateSimulationPreview();
@@ -521,7 +530,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   type="text"
                   value={appId}
                   onChange={(e) => setAppId(e.target.value)}
-                  placeholder="e.g. app_medical_triage"
+                  placeholder="e.g. repository_application_id"
                   style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
                 />
               </div>
@@ -533,7 +542,7 @@ export default function ThresholdMode({ apiBase = "", authFetch, badgeStyle, car
                   type="text"
                   value={oracleSetId}
                   onChange={(e) => setOracleSetId(e.target.value)}
-                  placeholder="e.g. os_triage_v1"
+                  placeholder="e.g. oset_id"
                   style={{ width: "100%", padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
                 />
               </div>

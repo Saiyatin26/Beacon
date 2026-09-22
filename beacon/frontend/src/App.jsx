@@ -1063,47 +1063,33 @@ export default function App() {
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr 1fr", gap: "12px", marginBottom: "16px" }}>
                 <div>
                   <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Legacy Implementation Adapter</label>
-                  <select
+                  <input
+                    type="text"
                     value={customLegacyAdapterId}
                     onChange={(e) => { setCustomLegacyAdapterId(e.target.value); invalidateCustomState(); }}
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
-                  >
-                    <option value="">-- Select Adapter --</option>
-                    <option value="retail_discount_legacy">retail_discount_legacy (v1.0.0)</option>
-                    <option value="loan_approval_legacy">loan_approval_legacy (v1.0.0)</option>
-                    <option value="payroll_tax_legacy">payroll_tax_legacy (v1.0.0)</option>
-                    <option value="medical_triage_legacy">medical_triage_legacy (v1.0.0)</option>
-                  </select>
+                    placeholder="e.g. adapter_legacy_v1"
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff", boxSizing: "border-box" }}
+                  />
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Modernized Implementation Variant</label>
-                  <select
+                  <input
+                    type="text"
                     value={customModernAdapterId}
                     onChange={(e) => { setCustomModernAdapterId(e.target.value); invalidateCustomState(); }}
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
-                  >
-                    <option value="">-- Select Variant --</option>
-                    <option value="retail_discount_modern_clean">retail_discount_modern_clean (v2.0.0 Clean)</option>
-                    <option value="retail_discount_modern_buggy_threshold">retail_discount_modern_buggy_threshold (v2.0.0 Buggy)</option>
-                    <option value="loan_approval_modern_equiv">loan_approval_modern_equiv (v2.0.0 Clean)</option>
-                    <option value="loan_approval_modern_buggy">loan_approval_modern_buggy (v2.0.0 Buggy)</option>
-                    <option value="payroll_tax_modern_clean">payroll_tax_modern_clean (v2.0.0 Clean)</option>
-                    <option value="payroll_tax_modern_buggy_bracket">payroll_tax_modern_buggy_bracket (v2.0.0 Buggy)</option>
-                  </select>
+                    placeholder="e.g. adapter_modern_v2"
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff", boxSizing: "border-box" }}
+                  />
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Explicit OracleSet Binding</label>
-                  <select
+                  <input
+                    type="text"
                     value={customOracleSetId}
                     onChange={(e) => { setCustomOracleSetId(e.target.value); invalidateCustomState(); }}
-                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
-                  >
-                    <option value="">-- Select OracleSet --</option>
-                    <option value="SET-RETAIL-CONTROLLED-v1">SET-RETAIL-CONTROLLED-v1 (Retail Pricing)</option>
-                    <option value="SET-LOAN-CONTROLLED-v1">SET-LOAN-CONTROLLED-v1 (Loan Approval)</option>
-                    <option value="SET-PAYROLL-CONTROLLED-v1">SET-PAYROLL-CONTROLLED-v1 (Payroll Tax)</option>
-                    <option value="SET-MEDICAL-CONTROLLED-v1">SET-MEDICAL-CONTROLLED-v1 (Medical Triage)</option>
-                  </select>
+                    placeholder="e.g. OSET-DISCOVERED"
+                    style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff", boxSizing: "border-box" }}
+                  />
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Evaluation Mode</label>
@@ -1263,7 +1249,9 @@ export default function App() {
                   <div style={{ background: "#f8fafc", padding: "12px", borderRadius: "8px", border: "1px solid #e2e8f0" }}>
                     <div style={{ fontSize: "11px", color: "#64748b" }}>Oracle Coverage</div>
                     <div style={{ fontSize: "20px", fontWeight: "800", color: "#2563eb" }}>
-                      {((customActiveResult.metrics?.oracle_coverage_pct || 1.0) * 100).toFixed(1)}%
+                      {customActiveResult.metrics?.oracle_coverage_pct != null
+                        ? `${(customActiveResult.metrics.oracle_coverage_pct * 100).toFixed(1)}%`
+                        : "Not available"}
                     </div>
                   </div>
                 </div>
@@ -1477,7 +1465,9 @@ export default function App() {
                     <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
                       <div style={{ fontSize: "11px", color: "#64748b" }}>Oracle Coverage</div>
                       <div style={{ fontSize: "18px", fontWeight: "800", color: "#0f172a" }}>
-                        {(dossierData.execution_evidence.oracle_coverage_pct * 100).toFixed(1)}%
+                        {dossierData.execution_evidence?.oracle_coverage_pct != null
+                          ? `${(dossierData.execution_evidence.oracle_coverage_pct * 100).toFixed(1)}%`
+                          : "Not available"}
                       </div>
                     </div>
                     <div style={{ background: "#f8fafc", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>

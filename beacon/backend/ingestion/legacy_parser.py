@@ -1,25 +1,13 @@
-"""Stage 1 — legacy source parsing.
-
-For the demo, source is Python (legacy_sample/legacy_loan_approval.py), so we
-just read it as text — the candidate generator (Stage 2a) gets the raw source
-directly and the LLM does the structural reasoning itself.
-
-For a real COBOL/Java target, this is where a tree-sitter grammar would parse
-the source into an AST and extract conditionals/branches/call graph
-structurally, feeding that structure alongside the trace log into Stage 2a
-instead of raw text. Left as a TODO since setting up a COBOL grammar is out of
-scope for the demo (architecture doc Section 5, 'Legacy parsing' row).
-"""
+"""Legacy AST parser module."""
 
 from pathlib import Path
 from ingestion.static_analyzer import get_analyzer
+from common.models import StaticAnalysisResult
 
 
 def load_source(path: str | Path) -> str:
     return Path(path).read_text()
 
-
-from common.models import StaticAnalysisResult
 
 def extract_ast_structure(path: str | Path) -> StaticAnalysisResult:
     """Perform real static analysis on source file using static_analyzer module.

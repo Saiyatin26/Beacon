@@ -111,8 +111,6 @@ class AuthRepository:
                 email="alice@retail.corp",
             )
             self.assign_user_to_project(alice.user_id, "proj_retail_pilot", UserRole.CERTIFIER)
-            self.assign_user_to_project(alice.user_id, "benchmark_retail_discount_pricing", UserRole.CERTIFIER)
-            self.assign_user_to_project(alice.user_id, "loan_demo", UserRole.CERTIFIER)
             self.assign_user_to_project(alice.user_id, "regression_proj_g", UserRole.CERTIFIER)
 
             # 3. Viewer (Bob)
@@ -124,7 +122,6 @@ class AuthRepository:
                 email="bob@retail.corp",
             )
             self.assign_user_to_project(bob.user_id, "proj_retail_pilot", UserRole.VIEWER)
-            self.assign_user_to_project(bob.user_id, "benchmark_retail_discount_pricing", UserRole.VIEWER)
 
             # 4. Auditor (Carol)
             carol = self.create_user(
@@ -135,7 +132,6 @@ class AuthRepository:
                 email="carol@audit.org",
             )
             self.assign_user_to_project(carol.user_id, "proj_retail_pilot", UserRole.AUDITOR)
-            self.assign_user_to_project(carol.user_id, "benchmark_retail_discount_pricing", UserRole.AUDITOR)
 
             # 5. Project Admin (Dave)
             dave = self.create_user(

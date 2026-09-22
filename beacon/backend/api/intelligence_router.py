@@ -48,7 +48,7 @@ def generate_or_get_explanation(
         )
 
     # 1. Enforce RBAC Project/Application Authorization
-    app_id = artifact.project_id or (artifact.benchmark_id or "default_app")
+    app_id = getattr(artifact, "application_id", None) or getattr(artifact, "project_id", None) or getattr(artifact, "benchmark_id", None) or ""
     verify_user_project_permission(current_user, app_id, Permission.VIEW)
 
     try:
@@ -86,7 +86,7 @@ def get_persisted_explanation(
             detail=f"Certification artifact '{certification_id}' not found.",
         )
 
-    app_id = artifact.project_id or (artifact.benchmark_id or "default_app")
+    app_id = getattr(artifact, "application_id", None) or getattr(artifact, "project_id", None) or getattr(artifact, "benchmark_id", None) or ""
     verify_user_project_permission(current_user, app_id, Permission.VIEW)
 
     explanation = intelligence_persistence.get_explanation(certification_id)
@@ -127,7 +127,7 @@ def ask_certification_question(
             detail=f"Certification artifact '{certification_id}' not found.",
         )
 
-    app_id = artifact.project_id or (artifact.benchmark_id or "default_app")
+    app_id = getattr(artifact, "application_id", None) or getattr(artifact, "project_id", None) or getattr(artifact, "benchmark_id", None) or ""
     verify_user_project_permission(current_user, app_id, Permission.VIEW)
 
     if not req.question or not req.question.strip():

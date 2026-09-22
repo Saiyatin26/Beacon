@@ -10,7 +10,6 @@ from typing import Any, Literal, Optional
 logger = logging.getLogger(__name__)
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-sys.path.append(str(Path(__file__).resolve().parents[2] / "legacy_sample"))
 
 from fastapi import FastAPI, HTTPException, Request, Response, Depends, Query, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -284,65 +283,7 @@ def api_v2_repositories_certify(
 
 
 
-class DemoRunRequest(BaseModel):
-    implementation: Literal["buggy", "equivalent", "clean"] = "buggy"
-    project_id: str = "loan_demo"
 
-
-class DriftRequest(BaseModel):
-    baseline_run_id: str
-    implementation: Literal["buggy", "equivalent", "clean"] = "buggy"
-    project_id: str = "loan_demo"
-
-
-# ==============================================================================
-# V1 Demo / Local Sample Compatibility Fixtures & Helpers
-# ==============================================================================
-_DEMO_ROOT = Path(__file__).resolve().parents[2]
-_DEMO_SAMPLE_DIR = _DEMO_ROOT / "legacy_sample"
-_DEMO_FIELD_BOUNDS = {
-    "credit_score": (400, 820),
-    "debt_ratio": (0.0, 0.9),
-    "annual_income": (10_000, 150_000),
-}
-
-
-def _sample_traces():
-    import generate_traces
-    trace_path = _DEMO_SAMPLE_DIR / "trace_log.json"
-    if not trace_path.exists():
-        import json
-        trace_path.write_text(json.dumps(generate_traces.generate_traces(), indent=2))
-    return load_traces(trace_path)
-
-
-from ingestion.legacy_parser import extract_ast_structure
-from evidence.builder import build_evidence_package
-from mining.pipeline import run_mining_pipeline
-
-def _sample_oracles():
-    import legacy_loan_approval
-    traces = _sample_traces()
-    legacy_file = str(_DEMO_SAMPLE_DIR / "legacy_loan_approval.py")
-    static_result = extract_ast_structure(legacy_file)
-    evidence_pkg = build_evidence_package(static_result, traces)
-    
-    graduated, unconfirmed = run_mining_pipeline(
-        evidence_package=evidence_pkg,
-        legacy_fn=legacy_loan_approval.evaluate_loan,
-        field_bounds=_DEMO_FIELD_BOUNDS,
-        already_validated=[],
-        use_atlas=False,
-        use_llm=False
-    )
-    return [synthesize_oracle(invariant) for invariant in graduated], graduated
-
-def _implementation(name: str):
-    import modern_loan_approval
-    import modern_clean_loan_approval
-    if name == "buggy":
-        return modern_loan_approval.evaluate_loan
-    return modern_clean_loan_approval.evaluate_loan
 
 
 
@@ -615,77 +556,7 @@ def get_run(
     return run
 
 
-@app.post("/demo/run")
-def run_demo(
-    request: DemoRunRequest,
-    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
-):
-    """Mine local rules, certify a sample implementation, and persist the report.
-    Disabled in production/staging environments.
-    """
-    if settings.beacon_env in ("production", "staging"):
-        raise HTTPException(
-            status_code=403,
-            detail="Demo endpoints are disabled in production and staging environments.",
-        )
-    oracles, invariants = _sample_oracles()
-    if not oracles:
-        raise HTTPException(status_code=500, detail="No validated sample invariants were produced")
-    import legacy_loan_approval
-    run = certify(
-        oracles=oracles,
-        modern_fn=_implementation(request.implementation),
-        legacy_fn=legacy_loan_approval.evaluate_loan,
-        field_bounds=_DEMO_FIELD_BOUNDS,
-        domain_of={oracle.invariant_id: "Loan approval" for oracle in oracles},
-    )
-    local_store.save_run(run, project_id=request.project_id)
-    return {
-        "run": run.model_dump(mode="json"),
-        "implementation": request.implementation,
-        "invariants": [invariant.model_dump(mode="json") for invariant in invariants],
-    }
 
-
-@app.get("/demo/invariants")
-def list_demo_invariants(
-    current_user: User = Depends(require_project_permission(Permission.VIEW)),
-):
-    if settings.beacon_env in ("production", "staging"):
-        raise HTTPException(
-            status_code=403,
-            detail="Demo endpoints are disabled in production and staging environments.",
-        )
-    _, invariants = _sample_oracles()
-    return {"invariants": [invariant.model_dump(mode="json") for invariant in invariants]}
-
-
-@app.post("/drift/demo")
-def check_demo_drift(
-    request: DriftRequest,
-    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
-):
-    if settings.beacon_env in ("production", "staging"):
-        raise HTTPException(
-            status_code=403,
-            detail="Demo endpoints are disabled in production and staging environments.",
-        )
-    baseline = local_store.get_run(request.baseline_run_id)
-    if baseline is None:
-        raise HTTPException(status_code=404, detail="Baseline certification run not found")
-    oracles, _ = _sample_oracles()
-    results = [run_oracle(oracle, _implementation(request.implementation), _DEMO_FIELD_BOUNDS) for oracle in oracles]
-    score = equivalence_score(results, {oracle.invariant_id: oracle for oracle in oracles})
-    delta_pct = round((baseline["equivalence_score"] - score) * 100, 2)
-    sample = DriftSample(
-        run_timestamp=datetime.now(timezone.utc).isoformat(),
-        equivalence_score=score,
-        baseline_score=baseline["equivalence_score"],
-        delta_pct=delta_pct,
-        alert=delta_pct > settings.drift_alert_delta_pct,
-    )
-    local_store.save_drift_sample(sample)
-    return sample.model_dump(mode="json")
 
 
 @app.get("/drift")
@@ -1800,31 +1671,13 @@ def resolve_oracle_set(
     if orc_set is not None:
         return orc_set
 
-    # Check if oracle_set_id maps to a benchmark specification
-    bench_map = {
-        # Human-friendly aliases
-        "SET-RETAIL-CONTROLLED-v1": "retail_discount_pricing",
-        "SET-LOAN-CONTROLLED-v1": "loan_approval",
-        "SET-PAYROLL-CONTROLLED-v1": "payroll_tax",
-        "SET-MEDICAL-CONTROLLED-v1": "medical_triage",
-        # Direct benchmark IDs
-        "retail_discount_pricing": "retail_discount_pricing",
-        "loan_approval": "loan_approval",
-        "payroll_tax": "payroll_tax",
-        "medical_triage": "medical_triage",
-        # Actual generated IDs from benchmark_registry.resolve_controlled_oracle_set()
-        "SET-RETAIL_DISCOUNT_PRICING-CONTROLLED": "retail_discount_pricing",
-        "SET-LOAN_DEMO-CONTROLLED": "loan_demo",
-        "SET-LOAN_APPROVAL-CONTROLLED": "loan_approval",
-        "SET-MEDICAL_TRIAGE-CONTROLLED": "medical_triage",
-        "SET-PAYROLL_TAX-CONTROLLED": "payroll_tax",
-    }
-    bench_id = bench_map.get(oracle_set_id)
-    if bench_id:
+    # Check if oracle_set_id corresponds directly to a registered benchmark
+    bench = benchmark_registry.get_benchmark(oracle_set_id)
+    if bench:
         try:
             use_llm = (mode.upper() == "FULL_BEACON" and allow_external_llm)
             orc_set = benchmark_registry.get_or_create_oracle_set(
-                bench_id,
+                bench.benchmark_id,
                 mode=mode,
                 preferred_provider=preferred_provider,
                 use_llm=use_llm,
@@ -1846,19 +1699,15 @@ def discover_custom_oracle_set(
     """Uses the existing evidence/discovery -> validation/grounding pipeline to obtain a compatible OracleSet.
     If no compatible validated OracleSet can be established, returns (None, reasons).
     """
-    bench_map = {
-        "retail_discount_legacy": "retail_discount_pricing",
-        "retail_pricing_legacy": "retail_discount_pricing",
-        "loan_approval_legacy": "loan_demo",
-        "loan_legacy": "loan_demo",
-        "payroll_tax_legacy": "payroll_tax_calculator",
-        "payroll_legacy": "payroll_tax_calculator",
-        "medical_triage_legacy": "medical_triage",
-    }
-    bench_id = bench_map.get(legacy_adapter_id)
-    if not bench_id:
+    matched_spec = None
+    for spec in benchmark_registry.list_benchmarks():
+        if spec.legacy_adapter_id == legacy_adapter_id:
+            matched_spec = spec
+            break
+    if not matched_spec:
         return None, [f"No registered discovery pipeline for legacy adapter '{legacy_adapter_id}'."]
 
+    bench_id = matched_spec.benchmark_id
     try:
         use_llm = bool(allow_external_llm and preferred_provider in ("openrouter", "anthropic"))
         candidate_orc_set = benchmark_registry.get_or_create_oracle_set(
@@ -1889,9 +1738,9 @@ def list_custom_oracle_sets(domain: Optional[str] = None):
     from oracle.registry import registry as oracle_reg
     sets = oracle_reg.list_oracle_sets(domain=domain)
     if not sets:
-        for bid in ["retail_discount_pricing", "loan_approval", "payroll_tax", "medical_triage"]:
+        for spec in benchmark_registry.list_benchmarks():
             try:
-                s = benchmark_registry.get_or_create_oracle_set(bid, mode="CONTROLLED")
+                s = benchmark_registry.get_or_create_oracle_set(spec.benchmark_id, mode="CONTROLLED")
                 if s:
                     oracle_reg.register_oracle_set(s)
             except Exception:

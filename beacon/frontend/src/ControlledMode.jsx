@@ -23,9 +23,8 @@ export default function ControlledMode({ apiBase = "", authFetch, badgeStyle, ca
   const [validationResult, setValidationResult] = useState(null);
   const [evaluating, setEvaluating] = useState(false);
   const [evaluationResult, setEvaluationResult] = useState(null);
-  const [evaluationId, setEvaluationId] = useState("eval_demo_001");
+  const [evaluationId, setEvaluationId] = useState("");
   const [naturalLanguageInput, setNaturalLanguageInput] = useState("");
-  const [interpretingNl, setInterpretingNl] = useState(false);
   const [nlNotice, setNlNotice] = useState(null);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -578,6 +577,7 @@ export default function ControlledMode({ apiBase = "", authFetch, badgeStyle, ca
                   type="text"
                   value={evaluationId}
                   onChange={(e) => setEvaluationId(e.target.value)}
+                  placeholder="Awaiting authoritative execution ID..."
                   style={{ width: "100%", padding: "6px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px" }}
                 />
               </div>

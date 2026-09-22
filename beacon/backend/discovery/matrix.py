@@ -75,8 +75,8 @@ class ObservationMatrixBuilder:
         ref_facts.sort(key=lambda x: x.input_id)
         tgt_facts.sort(key=lambda x: x.input_id)
 
-        session_id = getattr(bundle, "session_id", "default_session")
-        app_id = getattr(bundle, "application_id", "default_app")
+        session_id = getattr(bundle, "session_id", "")
+        app_id = getattr(bundle, "application_id", "")
 
         return ObservationMatrix(
             session_id=session_id,

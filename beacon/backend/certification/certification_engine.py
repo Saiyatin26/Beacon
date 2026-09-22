@@ -234,7 +234,7 @@ class CertificationEngine:
                     matching_case_count=equiv_inp,
                     regression_case_count=diff_inp,
                     oracle_count=len(oracle_summaries),
-                    oracle_coverage_pct=1.0 if oracle_summaries else 0.0,
+                    oracle_coverage_pct=(1.0 if (oracle_summaries and total_inp > 0) else (0.0 if oracle_summaries else None)),
                     overall_equivalence_score=score,
                 ),
                 domain_scores={},
@@ -715,7 +715,7 @@ class CertificationEngine:
         r_cases = sum(1 for c in cases_to_save if c.classification == "MODERN_REGRESSION")
         e_errors = sum(1 for c in cases_to_save if c.classification in ("ERROR", "EXECUTION_ERROR"))
         c_count = len(phase9_report.regressions)
-        coverage_pct = round(oracles_exercised_count / oracle_count, 4) if oracle_count > 0 else 0.0
+        coverage_pct = round(oracles_exercised_count / oracle_count, 4) if oracle_count > 0 else None
 
         metrics = CertificationMetrics(
             unique_input_count=u_inputs,
