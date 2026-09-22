@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from common.config import settings
 from certification.adapters import compute_implementation_hash
-from ingestion.static_analyzer import PythonAnalyzer, CobolAnalyzer
+from ingestion.static_analyzer import PythonAnalyzer, CobolAnalyzer, ShellAnalyzer
 from application.models import AnalysisScope, SourceArtifact, SourceIngestionMode
 
 logger = logging.getLogger("beacon.application.repository_service")
@@ -30,6 +30,8 @@ def _detect_source_language(path: Path) -> Optional[str]:
     ext = path.suffix.lower()
     mapping = {
         ".py": "python",
+        ".sh": "shell",
+        ".bash": "shell",
         ".cbl": "cobol",
         ".cob": "cobol",
         ".cpy": "cobol",
@@ -615,6 +617,44 @@ class RepositoryService:
 
             except Exception as exc:
                 logger.debug(f"Could not parse COBOL for '{rel_p}': {exc}")
+
+        # 2c. Shell Script Analysis for Entrypoints & Invariants
+        shell_analyzer = ShellAnalyzer()
+        shell_exts = (".sh", ".bash")
+        shell_files = [target_dir] if is_single_file and target_dir.suffix.lower() in shell_exts else (
+            [f for f in target_dir.rglob("*") if f.is_file() and f.suffix.lower() in shell_exts] if not is_single_file else []
+        )
+
+        for sh_f in shell_files:
+            languages.add("shell")
+            rel_p = str(sh_f.relative_to(root_dir)).replace("\\", "/") if not is_single_file else sh_f.name
+            try:
+                code_text = sh_f.read_text(encoding="utf-8", errors="ignore")
+                ast_res = shell_analyzer.analyze(code_text, file_name=rel_p)
+
+                for fn in ast_res.functions:
+                    entrypoints.append(
+                        DiscoveredEntrypoint(
+                            name=fn.name,
+                            file_path=str(sh_f),
+                            relative_path=rel_p,
+                            line_number=fn.location.line if fn.location else 1,
+                            parameters=fn.parameters if hasattr(fn, "parameters") else [],
+                            docstring=None,
+                            has_type_hints=False,
+                            evidence={
+                                "file": rel_p,
+                                "line": fn.location.line if fn.location else 1,
+                                "language": "shell",
+                            },
+                        )
+                    )
+
+                for comp in ast_res.comparisons:
+                    invariants.append(f"{comp.left} {comp.operator} {comp.right} (line {comp.location.line if comp.location else '?'})")
+
+            except Exception as exc:
+                logger.debug(f"Could not parse Shell script for '{rel_p}': {exc}")
 
         # 3. Input Assets Discovery (JSON fixtures, test datasets)
         candidate_files = [target_dir] if is_single_file and target_dir.suffix in (".json", ".csv") else list(target_dir.rglob("*.json")) + list(target_dir.rglob("*.csv"))

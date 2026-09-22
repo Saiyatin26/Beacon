@@ -205,7 +205,9 @@ export default function CertificationTab({
 
       const data = await res.json();
       if (!res.ok) {
-        const errMsg = data.detail?.message || data.detail || `Source analysis failed (HTTP ${res.status})`;
+        const errMsg = data.detail?.error
+          ? `[${data.detail.error}] ${data.detail.message || ""}`
+          : (data.detail?.message || data.detail || `Source analysis failed (HTTP ${res.status})`);
         throw new Error(typeof errMsg === "object" ? JSON.stringify(errMsg) : errMsg);
       }
       setAnalysisResult(data);
@@ -296,7 +298,9 @@ export default function CertificationTab({
 
       const data = await res.json();
       if (!res.ok) {
-        const errMsg = data.detail?.message || data.detail || `Certification failed (HTTP ${res.status})`;
+        const errMsg = data.detail?.error
+          ? `[${data.detail.error}] ${data.detail.message || ""}`
+          : (data.detail?.message || data.detail || `Certification failed (HTTP ${res.status})`);
         throw new Error(typeof errMsg === "object" ? JSON.stringify(errMsg) : errMsg);
       }
 

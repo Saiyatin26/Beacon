@@ -331,6 +331,117 @@ class CobolAnalyzer(StaticAnalyzer):
         )
 
 
+class ShellAnalyzer(StaticAnalyzer):
+    """Static analyzer for Shell / Bash scripts extracting functions, conditions, comparisons, and assignments."""
+
+    def analyze(self, source_code: str, file_name: str = "") -> StaticAnalysisResult:
+        import re
+        functions: list[FunctionFact] = []
+        conditions: list[ConditionFact] = []
+        comparisons: list[ComparisonFact] = []
+        assignments: list[AssignmentFact] = []
+        returns: list[ReturnFact] = []
+        calls: list[FunctionCallFact] = []
+
+        current_function: Optional[str] = None
+        lines = source_code.splitlines()
+
+        assign_pattern = re.compile(r"^\s*([a-zA-Z0-9_]+)=(.*)$")
+        cond_pattern = re.compile(r"^\s*(?:if|elif)\s+\[{1,2}\s*(.+?)\s*\]{1,2}")
+        cmp_pattern = re.compile(r"^(.+?)\s*(==|!=|<=|>=|<|>|-eq|-ne|-lt|-le|-gt|-ge|=)\s*(.+)$")
+        exit_pattern = re.compile(r"^\s*(?:exit|return)\s*([0-9]*)")
+
+        detected_params: list[str] = []
+
+        for line_no, raw_line in enumerate(lines, start=1):
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+
+            # Check function definition: foo() { or function foo {
+            fn_match = re.match(r"^(?:function\s+([a-zA-Z0-9_\-]+)(?:\s*\(\s*\))?|([a-zA-Z0-9_\-]+)\s*\(\s*\))\s*\{?", line)
+            if fn_match:
+                name = fn_match.group(1) or fn_match.group(2)
+                if name not in ("if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac"):
+                    current_function = name
+                    functions.append(
+                        FunctionFact(
+                            name=name,
+                            parameters=[],
+                            location=SourceLocation(file=file_name, line=line_no, function=name),
+                        )
+                    )
+                    continue
+
+            # Check conditionals: if [ ... ], elif [ ... ], if [[ ... ]], elif [[ ... ]]
+            cond_m = cond_pattern.search(line)
+            if cond_m:
+                expr = cond_m.group(1).strip()
+                loc = SourceLocation(file=file_name, line=line_no, function=current_function)
+                cond_fact = ConditionFact(
+                    expression=expr,
+                    logical_operator="AND" if " && " in expr or " -a " in expr else ("OR" if " || " in expr or " -o " in expr else None),
+                    location=loc,
+                )
+                conditions.append(cond_fact)
+
+                # Extract comparison
+                cmp_m = cmp_pattern.match(expr)
+                if cmp_m:
+                    comparisons.append(
+                        ComparisonFact(
+                            left=cmp_m.group(1).strip(),
+                            operator=cmp_m.group(2).strip(),
+                            right=cmp_m.group(3).strip(),
+                            location=loc,
+                        )
+                    )
+                continue
+
+            # Check variable assignments: foo=$1, file_name=$1
+            asgn_m = assign_pattern.match(line)
+            if asgn_m:
+                target = asgn_m.group(1).strip()
+                val = asgn_m.group(2).strip()
+                loc = SourceLocation(file=file_name, line=line_no, function=current_function)
+                assignments.append(
+                    AssignmentFact(target=target, value=val, location=loc)
+                )
+                if re.match(r"^\$[0-9]+$", val):
+                    detected_params.append(val)
+                continue
+
+            # Check exit/return
+            exit_m = exit_pattern.match(line)
+            if exit_m:
+                val = exit_m.group(1).strip() or "0"
+                returns.append(
+                    ReturnFact(value=val, location=SourceLocation(file=file_name, line=line_no, function=current_function))
+                )
+                continue
+
+        # If no explicit functions defined in a procedural shell script, register the script entrypoint
+        if not functions:
+            functions.append(
+                FunctionFact(
+                    name="<main>",
+                    parameters=sorted(list(set(detected_params))) if detected_params else ["$@"],
+                    location=SourceLocation(file=file_name, line=1, function="<main>"),
+                )
+            )
+
+        return StaticAnalysisResult(
+            file=file_name,
+            language="shell",
+            functions=functions,
+            conditions=conditions,
+            comparisons=comparisons,
+            assignments=assignments,
+            returns=returns,
+            calls=calls,
+        )
+
+
 def get_analyzer(language: str = "python") -> StaticAnalyzer:
     """Factory function to get appropriate StaticAnalyzer instance by language name."""
     lang_lower = language.lower()
@@ -338,6 +449,9 @@ def get_analyzer(language: str = "python") -> StaticAnalyzer:
         return PythonAnalyzer()
     if lang_lower in ("cobol", "cbl", "cob", "cpy"):
         return CobolAnalyzer()
+    if lang_lower in ("shell", "sh", "bash"):
+        return ShellAnalyzer()
     raise NotImplementedError(
-        f"Static analyzer for '{language}' is not implemented yet. Supported: 'python', 'cobol'."
+        f"Static analyzer for '{language}' is not implemented yet. Supported: 'python', 'cobol', 'shell'."
     )
+

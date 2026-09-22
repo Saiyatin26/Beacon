@@ -15,20 +15,6 @@ from ingestion.trace_loader import load_traces
 from ingestion.runtime_tracer import PythonRuntimeTracer, RuntimeTracer
 
 
-DEFAULT_BOUNDARY_INPUTS = [
-    {"credit_score": 450, "debt_ratio": 0.20, "annual_income": 50000.0},
-    {"credit_score": 499, "debt_ratio": 0.50, "annual_income": 45000.0},
-    {"credit_score": 550, "debt_ratio": 0.50, "annual_income": 50000.0},
-    {"credit_score": 580, "debt_ratio": 0.47, "annual_income": 50000.0},
-    {"credit_score": 599, "debt_ratio": 0.41, "annual_income": 45000.0},
-    {"credit_score": 600, "debt_ratio": 0.50, "annual_income": 45000.0},
-    {"credit_score": 601, "debt_ratio": 0.50, "annual_income": 45000.0},
-    {"credit_score": 650, "debt_ratio": 0.30, "annual_income": 60000.0},
-    {"credit_score": 750, "debt_ratio": 0.20, "annual_income": 90000.0},
-    {"credit_score": 520, "debt_ratio": 0.45, "annual_income": 15000.0},
-]
-
-
 class TraceProvider(ABC):
     """Abstract base class for trace providers."""
 
@@ -39,7 +25,7 @@ class TraceProvider(ABC):
 
 
 class SyntheticTraceProvider(TraceProvider):
-    """Loads or generates deterministic synthetic trace records."""
+    """Loads verifiable trace records from a provided trace file."""
 
     def __init__(self, trace_file_path: Optional[str | Path] = None):
         self.trace_file_path = Path(trace_file_path) if trace_file_path else None
@@ -47,11 +33,7 @@ class SyntheticTraceProvider(TraceProvider):
     def get_traces(self) -> list[TraceEvent]:
         if self.trace_file_path and self.trace_file_path.exists():
             return load_traces(self.trace_file_path)
-        else:
-            # Fallback to generating traces dynamically
-            from generate_traces import generate_traces
-            raw_traces = generate_traces()
-            return [TraceEvent(inputs=r["inputs"], output=r["output"]) for r in raw_traces]
+        raise FileNotFoundError(f"Trace file not found: {self.trace_file_path}")
 
 
 class RuntimeTraceProvider(TraceProvider):
@@ -64,8 +46,10 @@ class RuntimeTraceProvider(TraceProvider):
         tracer: Optional[RuntimeTracer] = None,
     ):
         self.target_func = target_func
-        self.inputs_batch = inputs_batch if inputs_batch is not None else DEFAULT_BOUNDARY_INPUTS
+        self.inputs_batch = inputs_batch or []
         self.tracer = tracer or PythonRuntimeTracer()
 
     def get_traces(self) -> list[TraceEvent]:
+        if not self.inputs_batch:
+            return []
         return self.tracer.trace_batch(self.target_func, self.inputs_batch)
