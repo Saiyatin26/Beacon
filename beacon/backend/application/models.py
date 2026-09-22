@@ -34,6 +34,39 @@ class ImplementationType(str, Enum):
     CLI_EXECUTABLE = "cli_executable"
 
 
+class SourceIngestionMode(str, Enum):
+    """Supported source ingestion modes for BEACON."""
+    GITHUB_REPOSITORY = "GITHUB_REPOSITORY"
+    UPLOADED_FILES = "UPLOADED_FILES"
+
+
+class AnalysisScope(str, Enum):
+    """Analysis scope for static analysis and certification."""
+    REPOSITORY = "REPOSITORY"
+    DIRECTORY = "DIRECTORY"
+    FILE = "FILE"
+
+
+class SourceArtifact(BaseModel):
+    """Deterministic identity and metadata for an ingested source file or artifact."""
+    artifact_id: str = ""
+    filename: str
+    relative_path: str
+    language: Optional[str] = None
+    content_hash: str = ""
+    source_side: str = "LEGACY"  # "LEGACY" or "MODERN"
+    ingestion_mode: Union[SourceIngestionMode, str] = SourceIngestionMode.UPLOADED_FILES
+    source_provenance: dict[str, Any] = Field(default_factory=dict)
+    upload_execution_id: str = ""
+    size_bytes: int = 0
+    revision_fingerprint: Optional[str] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.artifact_id:
+            raw_id = f"{self.source_side}:{self.relative_path}:{self.content_hash}"
+            object.__setattr__(self, "artifact_id", hashlib.sha256(raw_id.encode("utf-8")).hexdigest()[:16])
+
+
 class ImplementationTarget(BaseModel):
     """Generic description of an implementation target (reference or target candidate)."""
     model_config = {"arbitrary_types_allowed": True}
@@ -214,10 +247,15 @@ class ApplicationSpec(BaseModel):
 
 
 class RepositoryExecutionSpec(BaseModel):
-    """Authoritative execution specification synthesized from real repository analysis."""
+    """Authoritative execution specification synthesized from real repository or source file analysis."""
     model_config = {"arbitrary_types_allowed": True}
 
     specification_id: str = ""
+    source_mode: Union[SourceIngestionMode, str] = SourceIngestionMode.GITHUB_REPOSITORY
+    analysis_scope: Union[AnalysisScope, str] = AnalysisScope.REPOSITORY
+    selected_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    legacy_artifacts: list[dict[str, Any]] = Field(default_factory=list)
+    modern_artifacts: list[dict[str, Any]] = Field(default_factory=list)
     legacy_source_identity: dict[str, Any] = Field(default_factory=dict)
     modern_source_identity: dict[str, Any] = Field(default_factory=dict)
     legacy_adapter: dict[str, Any] = Field(default_factory=dict)
@@ -235,8 +273,16 @@ class RepositoryExecutionSpec(BaseModel):
     creation_timestamp: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def compute_fingerprint(self) -> str:
-        """Computes authoritative specification fingerprint binding sources, adapters, inputs, rules, and mode."""
+        """Computes authoritative specification fingerprint binding sources, scopes, artifacts, adapters, inputs, rules, and mode."""
+        # Deterministically extract and sort selected artifacts identity
+        sorted_artifacts = sorted(
+            [f"{a.get('source_side', '')}:{a.get('relative_path', '')}:{a.get('content_hash', '')}" for a in self.selected_artifacts]
+        ) if self.selected_artifacts else []
+
         canonical_content = json.dumps({
+            "source_mode": str(self.source_mode),
+            "analysis_scope": str(self.analysis_scope),
+            "selected_artifacts": sorted_artifacts,
             "legacy_source": self.legacy_source_identity,
             "modern_source": self.modern_source_identity,
             "legacy_adapter": self.legacy_adapter,

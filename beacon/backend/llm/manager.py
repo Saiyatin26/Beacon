@@ -6,6 +6,7 @@ from typing import Any, Optional
 from common.config import settings
 from .anthropic_provider import AnthropicProvider
 from .base import LLMProvider, LLMResponse
+from .gemini_provider import GeminiProvider
 from .offline_provider import OfflineProvider
 from .ollama_provider import OllamaProvider
 from .openrouter_provider import OpenRouterProvider
@@ -15,17 +16,18 @@ logger = logging.getLogger(__name__)
 
 class ProviderManager:
     """Manages LLM providers with automatic fallback priority:
-    OpenRouter (Primary) -> Anthropic (Supported) -> Ollama (Local) -> Offline (Deterministic)
+    OpenRouter (Primary) -> Gemini (Supported) -> Anthropic (Supported) -> Ollama (Local) -> Offline (Deterministic)
     """
 
     def __init__(self):
         self.providers: dict[str, LLMProvider] = {
             "openrouter": OpenRouterProvider(),
+            "gemini": GeminiProvider(),
             "anthropic": AnthropicProvider(),
             "ollama": OllamaProvider(),
             "offline": OfflineProvider(),
         }
-        self.fallback_priority = ["openrouter", "anthropic", "ollama", "offline"]
+        self.fallback_priority = ["openrouter", "gemini", "anthropic", "ollama", "offline"]
 
     def get_provider(self, name: str) -> Optional[LLMProvider]:
         return self.providers.get(name.lower().strip())
@@ -50,6 +52,11 @@ class ProviderManager:
                     requested_provider=mode,
                     success=False,
                     error=f"Explicitly requested provider '{mode}' is not configured or available.",
+                    metadata={
+                        "requested_provider": mode,
+                        "actual_provider": provider.name,
+                        "fallback_used": False,
+                    },
                 )
             
             resp = provider.generate(prompt, system=system, json_mode=json_mode)
@@ -57,13 +64,16 @@ class ProviderManager:
             if resp.success or not settings.allow_auto_fallback:
                 resp.fallback_chain = [mode]
                 resp.metadata["provider_config"] = f"{resp.provider_name}:{resp.model_name}"
+                resp.metadata["requested_provider"] = mode
+                resp.metadata["actual_provider"] = resp.provider_name
+                resp.metadata["fallback_used"] = resp.fallback_occurred
                 return resp
             
             logger.warning(
                 f"Explicit provider '{mode}' failed ({resp.error}). Falling back via auto chain."
             )
 
-        # Auto Mode / Fallback Chain: OpenRouter -> Anthropic -> Ollama -> Offline
+        # Auto Mode / Fallback Chain: OpenRouter -> Gemini -> Anthropic -> Ollama -> Offline
         fallback_chain: list[str] = []
         last_error: Optional[str] = None
 
@@ -79,11 +89,15 @@ class ProviderManager:
                 resp = provider.generate(prompt, system=system, json_mode=json_mode)
                 resp.requested_provider = mode
                 if resp.success and (resp.parsed_json is not None or not json_mode):
-                    resp.fallback_occurred = len(fallback_chain) > 1
+                    fallback_used = (mode != "auto" and resp.provider_name.lower() != mode) or (mode == "auto" and len(fallback_chain) > 1)
+                    resp.fallback_occurred = fallback_used
                     resp.fallback_chain = list(fallback_chain)
                     if resp.fallback_occurred and last_error:
                         resp.fallback_reason = last_error
                     resp.metadata["provider_config"] = f"{resp.provider_name}:{resp.model_name}"
+                    resp.metadata["requested_provider"] = mode
+                    resp.metadata["actual_provider"] = resp.provider_name
+                    resp.metadata["fallback_used"] = resp.fallback_occurred
                     return resp
                 else:
                     last_error = resp.error or "Invalid response / failed JSON parsing"
@@ -101,6 +115,9 @@ class ProviderManager:
         offline_resp.fallback_reason = last_error or "Configured model path unavailable"
         offline_resp.metadata["prior_error"] = last_error or "Configured model path unavailable"
         offline_resp.metadata["provider_config"] = f"{offline_resp.provider_name}:{offline_resp.model_name}"
+        offline_resp.metadata["requested_provider"] = mode
+        offline_resp.metadata["actual_provider"] = offline_resp.provider_name
+        offline_resp.metadata["fallback_used"] = True
         return offline_resp
 
     def get_status(self) -> dict[str, Any]:
@@ -114,6 +131,12 @@ class ProviderManager:
                     "model": settings.openrouter_model,
                     "configured": self.providers["openrouter"].is_configured(),
                     "role": "Primary Cloud Provider",
+                },
+                "gemini": {
+                    "available": self.providers["gemini"].check_connectivity(),
+                    "model": settings.gemini_model,
+                    "configured": self.providers["gemini"].is_configured(),
+                    "role": "Supported Cloud Provider",
                 },
                 "anthropic": {
                     "available": self.providers["anthropic"].is_available(),

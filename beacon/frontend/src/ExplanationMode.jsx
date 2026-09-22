@@ -245,6 +245,7 @@ export default function ExplanationMode({
             >
               <option value="auto">Auto Provider Chain</option>
               <option value="openrouter">OpenRouter (Cloud)</option>
+              <option value="gemini">Google Gemini</option>
               <option value="anthropic">Anthropic Claude</option>
               <option value="ollama">Ollama (Local)</option>
               <option value="offline">Offline (Rule Engine)</option>

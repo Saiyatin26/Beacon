@@ -1113,6 +1113,7 @@ export default function App() {
                     <option value="offline">offline (Deterministic Offline Engine)</option>
                     <option value="ollama">ollama (Local Private LLM)</option>
                     <option value="openrouter">openrouter (OpenRouter Cloud)</option>
+                    <option value="gemini">gemini (Google Gemini Cloud)</option>
                     <option value="anthropic">anthropic (Direct Anthropic Cloud)</option>
                   </select>
                 </div>
@@ -1127,7 +1128,7 @@ export default function App() {
                     onChange={(e) => { setCustomAllowExternalLLM(e.target.checked); invalidateCustomState(); }}
                   />
                   <span>
-                    <strong>Explicit Cloud LLM Consent:</strong> Allow sending dataset inputs and traces to external cloud providers (OpenRouter/Anthropic) when in FULL_BEACON mode.
+                    <strong>Explicit Cloud LLM Consent:</strong> Allow sending dataset inputs and traces to external cloud providers (OpenRouter/Gemini/Anthropic) when in FULL_BEACON mode.
                   </span>
                 </label>
                 <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", marginLeft: "24px" }}>
