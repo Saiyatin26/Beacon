@@ -92,7 +92,13 @@ def verify_execution_authority_chain(
             error_code=WorkflowErrorCode.EVALUATION_FAILED,
         )
     eval_fp = (getattr(eval_result, "metadata", {}) or {}).get("execution_fingerprint")
-    if eval_fp and eval_fp != execution_fingerprint:
+    if not eval_fp:
+        return AuthorityChainVerificationResult(
+            is_valid=False,
+            failure_reason="EvaluationResult is missing mandatory execution_fingerprint binding.",
+            error_code=WorkflowErrorCode.EVALUATION_FAILED,
+        )
+    if eval_fp != execution_fingerprint:
         return AuthorityChainVerificationResult(
             is_valid=False,
             failure_reason=f"EvaluationResult execution fingerprint mismatch: expected '{execution_fingerprint}', found '{eval_fp}'.",
@@ -128,7 +134,13 @@ def verify_execution_authority_chain(
             error_code=WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
         )
     oset_fp = (getattr(oracle_set, "metadata", {}) or {}).get("execution_fingerprint")
-    if oset_fp and oset_fp != execution_fingerprint:
+    if not oset_fp:
+        return AuthorityChainVerificationResult(
+            is_valid=False,
+            failure_reason="OracleSet is missing mandatory execution_fingerprint binding.",
+            error_code=WorkflowErrorCode.ORACLE_AUTHORITY_MISSING,
+        )
+    if oset_fp != execution_fingerprint:
         return AuthorityChainVerificationResult(
             is_valid=False,
             failure_reason=f"OracleSet execution fingerprint mismatch: expected '{execution_fingerprint}', found '{oset_fp}'.",
@@ -150,14 +162,20 @@ def verify_execution_authority_chain(
             error_code=WorkflowErrorCode.THRESHOLD_FINGERPRINT_MISMATCH,
         )
     thresh_fp = getattr(threshold_res, "provenance", {}).get("execution_fingerprint")
-    if thresh_fp and thresh_fp != execution_fingerprint:
+    if not thresh_fp:
+        return AuthorityChainVerificationResult(
+            is_valid=False,
+            failure_reason="ThresholdResolution is missing mandatory execution_fingerprint binding in provenance.",
+            error_code=WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
+        )
+    if thresh_fp != execution_fingerprint:
         return AuthorityChainVerificationResult(
             is_valid=False,
             failure_reason=f"ThresholdResolution execution fingerprint mismatch: expected '{execution_fingerprint}', found '{thresh_fp}'.",
             error_code=WorkflowErrorCode.THRESHOLD_AUTHORITY_MISSING,
         )
     thresh_oset_id = getattr(threshold_res, "provenance", {}).get("oracle_set_id")
-    if thresh_oset_id and thresh_oset_id != oset_id:
+    if not thresh_oset_id or thresh_oset_id != oset_id:
         return AuthorityChainVerificationResult(
             is_valid=False,
             failure_reason=f"ThresholdResolution oracle set id mismatch: expected '{oset_id}', found '{thresh_oset_id}'.",
@@ -178,6 +196,19 @@ def verify_execution_authority_chain(
                 failure_reason=f"CertificationArtifact '{artifact.certification_id}' failed cryptographic content hash verification.",
                 error_code=WorkflowErrorCode.CERTIFICATION_FAILED,
             )
+        art_fp = getattr(artifact.context, "execution_fingerprint", None) if artifact.context else None
+        if not art_fp:
+            return AuthorityChainVerificationResult(
+                is_valid=False,
+                failure_reason="CertificationArtifact context is missing mandatory execution_fingerprint binding.",
+                error_code=WorkflowErrorCode.CERTIFICATION_FAILED,
+            )
+        if art_fp != execution_fingerprint:
+            return AuthorityChainVerificationResult(
+                is_valid=False,
+                failure_reason=f"CertificationArtifact execution fingerprint mismatch: expected '{execution_fingerprint}', found '{art_fp}'.",
+                error_code=WorkflowErrorCode.CERTIFICATION_FAILED,
+            )
         art_bench_id = getattr(artifact.context, "benchmark_id", None) if artifact.context else None
         if art_bench_id and art_bench_id != application_id:
             return AuthorityChainVerificationResult(
@@ -186,14 +217,14 @@ def verify_execution_authority_chain(
                 error_code=WorkflowErrorCode.CERTIFICATION_FAILED,
             )
         art_thresh_id = artifact.threshold_resolution_id or (artifact.context.threshold_resolution_id if artifact.context else None)
-        if art_thresh_id != threshold_res.resolution_id:
+        if not art_thresh_id or art_thresh_id != threshold_res.resolution_id:
             return AuthorityChainVerificationResult(
                 is_valid=False,
                 failure_reason=f"CertificationArtifact threshold resolution mismatch ('{art_thresh_id}' vs '{threshold_res.resolution_id}').",
                 error_code=WorkflowErrorCode.CERTIFICATION_FAILED,
             )
         art_oset_id = artifact.oracle_set_id or (artifact.context.oracle_set_id if artifact.context else None)
-        if art_oset_id and art_oset_id != oset_id:
+        if not art_oset_id or art_oset_id != oset_id:
             return AuthorityChainVerificationResult(
                 is_valid=False,
                 failure_reason=f"CertificationArtifact oracle set mismatch ('{art_oset_id}' vs '{oset_id}').",

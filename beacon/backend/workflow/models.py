@@ -170,6 +170,7 @@ def compute_execution_fingerprint(
 class WorkflowErrorCode(str, Enum):
     """Machine-readable, unambiguous error taxonomy for V2 workflow failures."""
     INVALID_INPUT = "INVALID_INPUT"
+    NO_AUTHORITATIVE_INPUT_SET = "NO_AUTHORITATIVE_INPUT_SET"
     PREFLIGHT_FAILED = "PREFLIGHT_FAILED"
     APPLICATION_NOT_FOUND = "APPLICATION_NOT_FOUND"
     ADAPTER_RESOLUTION_FAILED = "ADAPTER_RESOLUTION_FAILED"

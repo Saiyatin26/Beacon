@@ -21,6 +21,8 @@ from .models import (
 from .normalizer import rule_normalizer
 from .validator import rule_validator
 
+from common.config import settings
+
 logger = logging.getLogger("beacon.rules.registry")
 
 
@@ -32,8 +34,8 @@ class RulePersistenceError(RuntimeError):
 class RuleRegistry:
     """Thread-safe, SQLite-backed repository for BusinessRule lifecycle and versioning."""
 
-    def __init__(self, db_path: str = "beacon.sqlite3") -> None:
-        self._db_path = db_path
+    def __init__(self, db_path: Optional[str] = None) -> None:
+        self._db_path = str(db_path) if db_path and db_path != "beacon.sqlite3" else str(settings.database_path)
         self._lock = threading.Lock()
         self._memory_rules: dict[str, dict[int, BusinessRule]] = {}
         self._init_db()

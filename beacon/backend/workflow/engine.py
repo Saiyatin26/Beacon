@@ -465,15 +465,27 @@ class CanonicalV2WorkflowEngine:
                 f"Application '{request.application_id}' not found in registry.",
             )
 
-        ref_adapter, target_adapter = self.app_resolver.resolve_adapters(
-            spec=spec,
-            target_index=request.target_index,
-        )
-
         # Resolve authoritative input set (prioritizing discovered/authoritative inputs over caller overrides)
+        is_repo_spec = bool(
+            (spec.metadata and (spec.metadata.get("specification_fingerprint") or spec.metadata.get("discovered_inputs") or spec.metadata.get("authoritative_input_set")))
+            or (spec.dataset_config and spec.dataset_config.metadata and (spec.dataset_config.metadata.get("authoritative_input_set") or spec.dataset_config.metadata.get("discovered_inputs")))
+        )
+        if is_repo_spec and request.custom_inputs:
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.INVALID_INPUT,
+                "Caller-supplied custom_inputs cannot override repository-discovered inputs in production certification.",
+            )
+
         authoritative_inputs = request.authoritative_input_set
-        if authoritative_inputs is None and spec.metadata and spec.metadata.get("discovered_inputs"):
+        if authoritative_inputs is None and spec.metadata and spec.metadata.get("authoritative_input_set"):
+            authoritative_inputs = spec.metadata.get("authoritative_input_set")
+        elif authoritative_inputs is None and spec.dataset_config and spec.dataset_config.metadata and spec.dataset_config.metadata.get("authoritative_input_set"):
+            authoritative_inputs = spec.dataset_config.metadata.get("authoritative_input_set")
+        elif authoritative_inputs is None and spec.metadata and spec.metadata.get("discovered_inputs"):
             authoritative_inputs = spec.metadata.get("discovered_inputs")
+        elif authoritative_inputs is None and spec.dataset_config and spec.dataset_config.metadata and spec.dataset_config.metadata.get("discovered_inputs"):
+            authoritative_inputs = spec.dataset_config.metadata.get("discovered_inputs")
         elif authoritative_inputs is None and request.custom_inputs:
             authoritative_inputs = request.custom_inputs
         elif authoritative_inputs is None and spec.dataset_config and spec.dataset_config.metadata and spec.dataset_config.metadata.get("custom_inputs"):
@@ -481,14 +493,27 @@ class CanonicalV2WorkflowEngine:
         elif authoritative_inputs is None and spec.metadata and spec.metadata.get("custom_inputs"):
             authoritative_inputs = spec.metadata.get("custom_inputs")
 
+        if is_repo_spec and (not authoritative_inputs or len(authoritative_inputs) == 0):
+            return self._fail_run(
+                run,
+                WorkflowErrorCode.NO_AUTHORITATIVE_INPUT_SET,
+                f"No authoritative input set discovered for repository specification '{spec.application_id}'.",
+            )
+
+        ref_adapter, target_adapter = self.app_resolver.resolve_adapters(
+            spec=spec,
+            target_index=request.target_index,
+        )
+
         test_inputs = self.app_resolver.resolve_inputs(
             spec=spec,
             custom_inputs=authoritative_inputs,
         )
         if not test_inputs or len(test_inputs) == 0:
+            err_code = WorkflowErrorCode.NO_AUTHORITATIVE_INPUT_SET if is_repo_spec else WorkflowErrorCode.INVALID_INPUT
             return self._fail_run(
                 run,
-                WorkflowErrorCode.INVALID_INPUT,
+                err_code,
                 f"No test inputs could be resolved for application '{spec.application_id}'.",
             )
 
@@ -1049,6 +1074,12 @@ class CanonicalV2WorkflowEngine:
                 f"OracleSet '{oset_id}' contains zero rules/oracles (empty oracle authority forbidden).",
             )
 
+        # Bind execution identity to OracleSet metadata
+        new_meta = dict(getattr(oracle_set, "metadata", {}) or {})
+        new_meta["execution_fingerprint"] = run.execution_fingerprint
+        oracle_set = oracle_set.model_copy(update={"metadata": new_meta})
+        self.rec_persistence.save_oracle_set(oracle_set)
+
         run.oracle_set_id = oset_id
         run.oracle_set_hash = oset_hash
         timings["oracle_resolution_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
@@ -1603,7 +1634,7 @@ class CanonicalV2WorkflowEngine:
             eval_res = self.eval_persistence.get_evaluation_result(run.evaluation_id) if run.evaluation_id else None
             oset = self.rec_persistence.get_oracle_set(run.oracle_set_id) if run.oracle_set_id else None
             res = self.thresh_persistence.get_resolution(run.threshold_resolution_id) if run.threshold_resolution_id else None
-            cases = self.cert_repo.get_cases(run.certification_id)
+            cases = self.cert_repo.list_certification_cases(run.certification_id)
             audit_events = audit_logger.list_events(certification_id=run.certification_id)
 
             # Strict cross-binding and integrity verification via central verifier

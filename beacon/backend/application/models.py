@@ -5,6 +5,7 @@ strictly separating Application (the actual system under test) from
 Benchmark (pre-packaged demonstration scenarios).
 """
 
+from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
@@ -316,6 +317,8 @@ def build_application_spec_from_repository_execution_spec(
         rule_config=RuleConfig(mode=rule_mode),
         dataset_config=DatasetConfig(
             metadata={
+                "authoritative_input_set": repo_spec.discovered_inputs,
+                "discovered_inputs": repo_spec.discovered_inputs,
                 "custom_inputs": repo_spec.discovered_inputs,
                 "input_set_identity": repo_spec.input_set_identity,
             }
@@ -323,6 +326,8 @@ def build_application_spec_from_repository_execution_spec(
         metadata={
             "specification_id": repo_spec.specification_id,
             "specification_fingerprint": repo_spec.specification_fingerprint,
+            "authoritative_input_set": repo_spec.discovered_inputs,
+            "discovered_inputs": repo_spec.discovered_inputs,
             "legacy_provenance": repo_spec.legacy_source_identity,
             "modern_provenance": repo_spec.modern_source_identity,
             "legacy_adapter": legacy_adapter_meta,

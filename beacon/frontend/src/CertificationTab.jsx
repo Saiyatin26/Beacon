@@ -990,7 +990,7 @@ export default function CertificationTab({
         const finalizationState = meta.finalization_state || "COMPLETED";
         const oracleSetId = meta.oracle_set_id || workflowResult.oracle_set_id || "—";
         const oracleSetHash = meta.oracle_set_hash || workflowResult.oracle_set_hash || "—";
-        const oracleCoverage = meta.oracle_coverage != null ? `${(meta.oracle_coverage * 100).toFixed(1)}%` : "100.0%";
+        const oracleCoverage = meta.oracle_coverage != null ? `${(meta.oracle_coverage * 100).toFixed(1)}%` : "Not available";
 
         return (
           <div>
@@ -1087,8 +1087,8 @@ export default function CertificationTab({
                 },
                 {
                   label: "Regressions",
-                  val: workflowResult.regressions_count ?? workflowResult.regressions?.length ?? 0,
-                  color: (workflowResult.regressions_count ?? 0) > 0 ? "#dc2626" : "#059669",
+                  val: workflowResult.regressions_count ?? (workflowResult.regressions ? workflowResult.regressions.length : "—"),
+                  color: (workflowResult.regressions_count > 0 || (workflowResult.regressions && workflowResult.regressions.length > 0)) ? "#dc2626" : ((workflowResult.regressions_count === 0 || (workflowResult.regressions && workflowResult.regressions.length === 0)) ? "#059669" : "#64748b"),
                 },
                 {
                   label: "Auto Threshold",
@@ -1327,7 +1327,7 @@ export default function CertificationTab({
                   </span>
                 </div>
                 <div style={{ fontSize: "12px", color: "#334155", lineHeight: "1.7" }}>
-                  <div><strong>Reconciliation Status:</strong> <span style={{ color: "#166534", fontWeight: "600" }}>VALIDATED</span></div>
+                  <div><strong>Reconciliation Status:</strong> <span style={{ color: (meta.oracle_reconciliation_status === "VALIDATED" || meta.oracle_coverage != null) ? "#166534" : "#dc2626", fontWeight: "600" }}>{meta.oracle_reconciliation_status || (meta.oracle_coverage != null ? "VALIDATED" : "NOT_AVAILABLE")}</span></div>
                   <div><strong>Oracle Coverage:</strong> <strong style={{ color: "#1e40af" }}>{oracleCoverage}</strong></div>
                   <div><strong>Oracle Set ID:</strong> <span style={{ fontFamily: "monospace", color: "#0f172a" }}>{oracleSetId}</span></div>
                   <div><strong>Oracle Hash (SHA-256):</strong> <span style={{ fontFamily: "monospace", color: "#475569", fontSize: "11px" }}>{oracleSetHash ? (oracleSetHash.length > 28 ? oracleSetHash.slice(0, 24) + "..." : oracleSetHash) : "—"}</span></div>

@@ -19,6 +19,9 @@ from .models import (
 logger = logging.getLogger("beacon.knowledge.persistence")
 
 
+from common.config import settings
+
+
 class KnowledgePersistenceError(RuntimeError):
     """Raised when storing or querying knowledge artifacts in SQLite fails."""
     pass
@@ -27,8 +30,8 @@ class KnowledgePersistenceError(RuntimeError):
 class KnowledgePersistenceStore:
     """Manages SQLite storage for Phase 9 knowledge documents and retrieval chunks."""
 
-    def __init__(self, db_path: str = "beacon.sqlite3"):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        self.db_path = str(db_path) if db_path and db_path != "beacon.sqlite3" else str(settings.database_path)
         self._init_db()
 
     def _get_conn(self) -> sqlite3.Connection:
