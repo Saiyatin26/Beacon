@@ -194,6 +194,8 @@ class OutputEvaluator:
                     difference_type=DifferenceType.EVIDENCE_MISSING,
                     differences=[diff],
                     evidence_references=evidence_refs,
+                    deviation=1.0,
+                    agreement=0.0,
                     details={"message": "Outputs match superficially but evidence capture status was insufficient."},
                 )
 
@@ -205,8 +207,26 @@ class OutputEvaluator:
                 target_value=target_payload,
                 comparison_method=f"structural_{out_policy.arrays}",
                 evidence_references=evidence_refs,
+                deviation=0.0,
+                agreement=1.0,
                 details={"message": "Outputs are structurally equivalent under configured policy."},
             )
+
+        # Normative Mathematical Contract: Compute d_i in [0, 1]
+        field_deviations: list[float] = []
+        for diff in differences:
+            rf = diff.reference_value
+            tf = diff.target_value
+            if isinstance(rf, (int, float)) and isinstance(tf, (int, float)) and not isinstance(rf, bool) and not isinstance(tf, bool):
+                abs_err = abs(float(rf) - float(tf))
+                scale = max(abs(float(rf)), abs(float(tf)), 1e-9)
+                d_f = min(1.0, abs_err / scale)
+                field_deviations.append(d_f)
+            else:
+                field_deviations.append(1.0)
+
+        calc_deviation = max(field_deviations) if len(field_deviations) == 1 else (sum(field_deviations) / len(field_deviations) if field_deviations else 1.0)
+        calc_deviation = min(1.0, max(0.0, calc_deviation))
 
         primary_diff_type = differences[0].difference_type
         return DimensionResult(
@@ -219,7 +239,9 @@ class OutputEvaluator:
             difference_type=primary_diff_type,
             differences=differences,
             evidence_references=evidence_refs,
-            details={"total_differences": len(differences)},
+            deviation=round(calc_deviation, 6),
+            agreement=round(1.0 - calc_deviation, 6),
+            details={"total_differences": len(differences), "calculated_deviation": round(calc_deviation, 6)},
         )
 
 

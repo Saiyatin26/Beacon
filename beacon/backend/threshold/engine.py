@@ -150,7 +150,7 @@ class ThresholdEngine:
                 policy_hash=policy_hash,
             )
 
-        # 5. EVIDENCE_DERIVED / STATISTICAL Strategy
+        # 5. EVIDENCE_DERIVED, DYNAMIC_PERCENTILE, BOOTSTRAP, or STATISTICAL Strategy
         sample_count = len(clean_observations)
         ev_ids = evidence_ids_canonical
 
@@ -204,10 +204,17 @@ class ThresholdEngine:
             clean_observations, active_policy.outlier_policy
         )
 
-        # Apply Estimator
-        raw_threshold = self._compute_estimator_threshold(
-            filtered_observations, active_policy.estimator, active_policy.parameters
-        )
+        # Apply Strategy
+        if active_policy.strategy == ThresholdStrategy.EVIDENCE_DERIVED:
+            raw_threshold = self._compute_evidence_derived(filtered_observations, active_policy.parameters)
+        elif active_policy.strategy == ThresholdStrategy.DYNAMIC_PERCENTILE:
+            raw_threshold = self._compute_dynamic_percentile(filtered_observations, active_policy.parameters)
+        elif active_policy.strategy == ThresholdStrategy.BOOTSTRAP:
+            raw_threshold = self._compute_bootstrap(filtered_observations, active_policy.parameters)
+        else:
+            raw_threshold = self._compute_estimator_threshold(
+                filtered_observations, active_policy.estimator, active_policy.parameters
+            )
 
         # Apply Minimum and Maximum Bounds
         final_threshold = raw_threshold
@@ -267,6 +274,81 @@ class ThresholdEngine:
             return clipped, outliers_count
 
         return list(values), 0
+
+    @staticmethod
+    def _compute_median(values: Sequence[float]) -> float:
+        """Computes deterministic median of a non-empty sequence."""
+        if not values:
+            return 0.0
+        sorted_vals = sorted(values)
+        n = len(sorted_vals)
+        mid = n // 2
+        if n % 2 == 1:
+            return sorted_vals[mid]
+        return (sorted_vals[mid - 1] + sorted_vals[mid]) / 2.0
+
+    @staticmethod
+    def _compute_quantile(sorted_vals: Sequence[float], q: float) -> float:
+        """Computes quantile using linear interpolation."""
+        if not sorted_vals:
+            return 0.0
+        n = len(sorted_vals)
+        if n == 1:
+            return sorted_vals[0]
+        pos = q * (n - 1)
+        idx = int(pos)
+        frac = pos - idx
+        if idx >= n - 1:
+            return sorted_vals[-1]
+        return sorted_vals[idx] + frac * (sorted_vals[idx + 1] - sorted_vals[idx])
+
+    def _compute_evidence_derived(self, values: list[float], params: dict[str, Any]) -> float:
+        """Strategy A (Normative Patent Spec): Robust Median / MAD Estimator.
+
+        m = median(X)
+        MAD = median(|x_i - m|)
+        sigma_robust = 1.4826 * MAD
+        raw_threshold = m + k * sigma_robust
+        """
+        if not values:
+            return 0.0
+        m = self._compute_median(values)
+        abs_devs = [abs(x - m) for x in values]
+        mad = self._compute_median(abs_devs)
+        sigma_robust = 1.4826 * mad
+        k = float(params.get("k", 1.5))
+        return m + k * sigma_robust
+
+    def _compute_dynamic_percentile(self, values: list[float], params: dict[str, Any]) -> float:
+        """Strategy B (Normative Patent Spec): Dynamic Empirical Percentile Q_p(X)."""
+        if not values:
+            return 0.0
+        p = float(params.get("percentile", 95.0))
+        q = min(1.0, max(0.0, p / 100.0 if p > 1.0 else p))
+        sorted_vals = sorted(values)
+        return self._compute_quantile(sorted_vals, q)
+
+    def _compute_bootstrap(self, values: list[float], params: dict[str, Any]) -> float:
+        """Strategy C (Normative Patent Spec): Deterministic Bootstrap Resampling Confidence Bound."""
+        if not values:
+            return 0.0
+        import random
+        iterations = int(params.get("bootstrap_iterations", 1000))
+        conf = float(params.get("confidence", 0.95))
+        conf_q = min(1.0, max(0.0, conf / 100.0 if conf > 1.0 else conf))
+
+        # Deterministic pseudo-random seed guarantees strict reproducibility
+        seed_val = int(params.get("seed", 42))
+        rng = random.Random(seed_val)
+
+        n = len(values)
+        estimates: list[float] = []
+        for _ in range(iterations):
+            sample = [values[rng.randint(0, n - 1)] for _ in range(n)]
+            estimates.append(self._compute_median(sample))
+
+        estimates.sort()
+        return self._compute_quantile(estimates, conf_q)
 
     def _compute_estimator_threshold(
         self, values: list[float], estimator: EstimatorType, params: dict[str, Any]

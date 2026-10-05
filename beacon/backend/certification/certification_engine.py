@@ -86,6 +86,11 @@ class CertificationEngine:
             res_id = getattr(threshold_resolution, "resolution_id", None) if threshold_resolution else (getattr(context, "threshold_resolution_id", None) if context else None)
             res_fp = getattr(threshold_resolution, "fingerprint", None) if threshold_resolution else (getattr(context, "threshold_resolution_fingerprint", None) if context else None)
 
+            dim_scores: dict[str, float] = {}
+            score = 0.0
+            obs_dev = 1.0
+            cov = 1.0
+
             if evaluation_result is None:
                 final_status = CertificationStatus.INCONCLUSIVE
                 is_certified = False
@@ -100,35 +105,52 @@ class CertificationEngine:
                 equiv_inp = 0
                 diff_inp = 0
                 if getattr(evaluation_result, "summary", None):
-                    total_inp = evaluation_result.summary.total_inputs
-                    equiv_inp = evaluation_result.summary.equivalent_inputs
-                    diff_inp = evaluation_result.summary.different_inputs
+                    summ = evaluation_result.summary
+                    total_inp = summ.total_inputs
+                    equiv_inp = summ.equivalent_inputs
+                    diff_inp = summ.different_inputs
+                    score = float(getattr(summ, "behavioral_score", 1.0 if total_inp > 0 and diff_inp == 0 else 0.0))
+                    obs_dev = float(getattr(summ, "observed_deviation", round(1.0 - score, 6)))
+                    cov = float(getattr(summ, "coverage", 1.0))
+                    dim_scores = dict(getattr(summ, "dimension_scores", {}))
                 elif getattr(evaluation_result, "input_results", None):
                     total_inp = len(evaluation_result.input_results)
                     equiv_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.EQUIVALENT)
                     diff_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.DIFFERENT)
+                    score = float(equiv_inp) / float(total_inp) if total_inp > 0 else 0.0
+                    obs_dev = round(1.0 - score, 6)
+                    cov = 1.0
 
-                # Strict Phase 8 Threshold Authority Enforcement
+                min_cov = float(getattr(cert_policy, "min_coverage", getattr(cert_policy, "min_oracle_coverage", 0.8)))
+
+                # Strict Predicate Evaluation (Normative Patent Contract)
                 if not threshold_resolution or not res_id or not res_fp or not str(res_id).strip() or not str(res_fp).strip():
                     final_status = CertificationStatus.INCONCLUSIVE
                     is_certified = False
-                    score = 0.0
                     blocking_reasons = ["Phase 8 ThresholdResolution authority missing, unanchored, or unverified"]
+                elif getattr(threshold_resolution, "status", None) == "INSUFFICIENT_EVIDENCE":
+                    final_status = CertificationStatus.INCONCLUSIVE
+                    is_certified = False
+                    blocking_reasons = ["Phase 8 ThresholdResolution has insufficient evidence samples and no verified fallback"]
+                elif cov < min_cov:
+                    final_status = CertificationStatus.INSUFFICIENT_COVERAGE
+                    is_certified = False
+                    blocking_reasons = [f"Coverage ({cov:.4f}) is below minimum required threshold ({min_cov:.4f})"]
                 else:
-                    eff_thresh = getattr(threshold_resolution, "effective_threshold", 0.0)
-                    if diff_inp > 0:
-                        if float(diff_inp) / float(total_inp) <= float(eff_thresh) if total_inp > 0 else False:
-                            final_status = CertificationStatus.CERTIFIED_WITH_WARNINGS if getattr(cert_policy, "allow_warnings", True) else CertificationStatus.NOT_CERTIFIED
-                            is_certified = (final_status in (CertificationStatus.CERTIFIED, CertificationStatus.CERTIFIED_WITH_WARNINGS))
+                    eff_thresh = float(getattr(threshold_resolution, "effective_threshold", 0.0))
+                    if obs_dev <= eff_thresh:
+                        if diff_inp > 0 and getattr(cert_policy, "allow_warnings", True):
+                            final_status = CertificationStatus.CERTIFIED_WITH_WARNINGS
                         else:
-                            final_status = CertificationStatus.NOT_CERTIFIED
-                            is_certified = False
-                        score = float(equiv_inp) / float(total_inp) if total_inp > 0 else 0.0
-                    else:
-                        final_status = CertificationStatus.CERTIFIED
+                            final_status = CertificationStatus.CERTIFIED
                         is_certified = True
-                        score = 1.0 if total_inp > 0 else 1.0
-                    blocking_reasons = []
+                        blocking_reasons = []
+                    else:
+                        final_status = CertificationStatus.NOT_CERTIFIED
+                        is_certified = False
+                        blocking_reasons = [
+                            f"Observed deviation ({obs_dev:.6f}) exceeds resolved dynamic threshold ({eff_thresh:.6f})"
+                        ]
 
             oracle_summaries = []
             if oracle_set and hasattr(oracle_set, "rules"):
@@ -228,16 +250,19 @@ class CertificationEngine:
                 timestamp=timestamp,
                 status=final_status,
                 certified=is_certified,
-                score=score,
+                score=round(score, 6),
+                observed_deviation=round(obs_dev, 6),
+                resolved_threshold=round(getattr(threshold_resolution, "effective_threshold", 0.0), 6) if threshold_resolution else None,
+                coverage=round(cov, 6),
                 metrics=CertificationMetrics(
                     unique_input_count=total_inp,
                     matching_case_count=equiv_inp,
                     regression_case_count=diff_inp,
                     oracle_count=len(oracle_summaries),
-                    oracle_coverage_pct=(1.0 if (oracle_summaries and total_inp > 0) else (0.0 if oracle_summaries else None)),
-                    overall_equivalence_score=score,
+                    oracle_coverage_pct=round(cov, 4),
+                    overall_equivalence_score=round(score, 6),
                 ),
-                domain_scores={},
+                domain_scores=dim_scores,
                 oracle_summaries=oracle_summaries,
                 regressions=constructed_regressions,
                 reference_inconsistencies=[],

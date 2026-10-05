@@ -550,7 +550,7 @@ def get_run(
     if run_proj and not current_user.is_system_admin:
         memberships = auth_repository.get_user_memberships(current_user.user_id)
         user_projects = {m.project_id for m in memberships}
-        if run_proj not in user_projects and run_proj not in ("loan_approval", "proj-default"):
+        if run_proj not in user_projects and run_proj not in ("proj-default", "default_project"):
             raise HTTPException(status_code=404, detail="Certification run not found")
 
     return run
@@ -567,8 +567,6 @@ def list_drift_samples(
 ):
     all_samples = local_store.list_drift_samples(benchmark_id=benchmark_id, limit=max(1, min(limit, 500)))
     if benchmark_id:
-        if benchmark_id in ("loan", "loan_approval"):
-            return {"samples": [s for s in all_samples if s.get("benchmark_id") in ("loan", "loan_approval", None)]}
         return {"samples": [s for s in all_samples if s.get("benchmark_id") == benchmark_id]}
     return {"samples": all_samples}
 
@@ -589,8 +587,8 @@ class CertificationRunRequest(BaseModel):
     discovery_mode: Literal["CONTROLLED", "FULL_BEACON"] = "CONTROLLED"
     preferred_provider: Optional[str] = "auto"
     use_llm: bool = False
-    legacy_target: Optional[str] = "loan_approval_legacy"
-    modernized_target: Optional[str] = "loan_approval_modern_equiv"
+    legacy_target: Optional[str] = None
+    modernized_target: Optional[str] = None
     legacy_version: Optional[str] = None
     modernized_version: Optional[str] = None
     oracle_set_id: Optional[str] = None
@@ -885,18 +883,24 @@ def run_certification_v1(
                 detail=f"Frozen OracleSet '{request.oracle_set_id}' not found in registry.",
             )
 
-        legacy_adp = adapter_registry.get_adapter(request.legacy_target or "loan_approval_legacy", request.legacy_version)
+        if not request.legacy_target:
+            raise HTTPException(
+                status_code=400,
+                detail="Legacy implementation adapter ('legacy_target') must be specified.",
+            )
+        legacy_adp = adapter_registry.get_adapter(request.legacy_target, request.legacy_version)
         if legacy_adp is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Legacy implementation adapter '{request.legacy_target}' not found in adapter registry.",
             )
 
-        mod_target_name = request.modernized_target or "loan_approval_modern_equiv"
-        if request.implementation == "buggy" and mod_target_name in ("loan_approval_modern_equiv", "loan_approval_modern"):
-            mod_target_name = "loan_approval_modern_buggy"
-        elif request.implementation == "equivalent" and mod_target_name == "loan_approval_modern_buggy":
-            mod_target_name = "loan_approval_modern_equiv"
+        if not request.modernized_target:
+            raise HTTPException(
+                status_code=400,
+                detail="Modernized implementation adapter ('modernized_target') must be specified.",
+            )
+        mod_target_name = request.modernized_target
 
         modern_adp = adapter_registry.get_adapter(mod_target_name, request.modernized_version)
         if modern_adp is None:

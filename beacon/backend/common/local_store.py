@@ -62,7 +62,7 @@ class LocalStore:
 
     def save_run(self, run: CertificationRun, project_id: str | None = None) -> None:
         payload = run.model_dump(mode="json")
-        resolved_proj = project_id or payload.get("project_id") or "loan_approval"
+        resolved_proj = project_id or payload.get("project_id") or "default_project"
         payload["project_id"] = resolved_proj
         with self._connect() as connection:
             connection.execute(

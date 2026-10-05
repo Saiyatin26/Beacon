@@ -22,7 +22,9 @@ class ThresholdStrategy(str, Enum):
     RELATIVE = "RELATIVE"                # Relative numerical difference (|target - reference| / |reference| <= tol)
     PERCENTAGE = "PERCENTAGE"            # Percentage numerical difference (|target - reference| / |reference| * 100 <= tol)
     STATISTICAL = "STATISTICAL"          # Statistical tolerance based on variance / stddev / IQR
-    EVIDENCE_DERIVED = "EVIDENCE_DERIVED"# Derived from historical / reference evidence variation
+    EVIDENCE_DERIVED = "EVIDENCE_DERIVED"# Derived from historical / reference evidence variation (Median / MAD)
+    DYNAMIC_PERCENTILE = "DYNAMIC_PERCENTILE"# Dynamic percentile Q_p of reference deviations
+    BOOTSTRAP = "BOOTSTRAP"              # Deterministic bootstrap resampling confidence bound
 
 
 class ThresholdStatus(str, Enum):

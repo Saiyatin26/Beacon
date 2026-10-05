@@ -564,6 +564,18 @@ class BehavioralEvaluationEngine:
         else:
             input_verdict = EvaluationVerdict.NOT_APPLICABLE
 
+        valid_devs = [dr.deviation for dr in dim_results.values() if dr.deviation is not None]
+        if valid_devs:
+            item_dev = sum(valid_devs) / len(valid_devs)
+        elif input_verdict == EvaluationVerdict.EQUIVALENT:
+            item_dev = 0.0
+        elif input_verdict in (EvaluationVerdict.DIFFERENT, EvaluationVerdict.ERROR):
+            item_dev = 1.0
+        else:
+            item_dev = 0.0
+        item_dev = min(1.0, max(0.0, item_dev))
+        item_agreement = 1.0 - item_dev
+
         return InputEvaluationResult(
             input_id=item.input_id,
             verdict=input_verdict,
@@ -573,6 +585,8 @@ class BehavioralEvaluationEngine:
             boundary_category=item.boundary_category,
             reference_evidence_ids=[r.evidence_id for r in item.reference_records],
             target_evidence_ids=[r.evidence_id for r in item.target_records],
+            observed_deviation=round(item_dev, 6),
+            agreement=round(item_agreement, 6),
         )
 
     def _compute_summary(
@@ -583,7 +597,7 @@ class BehavioralEvaluationEngine:
         total_items: int,
         selected_dimensions: Optional[list[BehaviorDimension]] = None,
     ) -> EvaluationSummary:
-        """Computes summary metrics, counts, and rollups across all input evaluations."""
+        """Computes summary metrics, counts, and rollups across all input evaluations according to the normative mathematical contract."""
         equiv_count = sum(1 for r in input_results if r.verdict == EvaluationVerdict.EQUIVALENT)
         diff_count = sum(1 for r in input_results if r.verdict == EvaluationVerdict.DIFFERENT)
         inconcl_count = sum(1 for r in input_results if r.verdict == EvaluationVerdict.INCONCLUSIVE)
@@ -608,7 +622,7 @@ class BehavioralEvaluationEngine:
         else:
             overall_verdict = EvaluationVerdict.INCONCLUSIVE
 
-        # Dimension breakdown summaries
+        # Dimension breakdown summaries & Normative Dimension Scoring
         dim_summaries: dict[BehaviorDimension, DimensionEvaluationSummary] = {}
         target_dims = selected_dimensions or list(BehaviorDimension)
         for dim in BehaviorDimension:
@@ -628,14 +642,38 @@ class BehavioralEvaluationEngine:
                 else:
                     dim_verdict = EvaluationVerdict.NOT_APPLICABLE
 
+                # Normative contract: MeanDeviation_d and DimensionScore_d = 1 - MeanDeviation_d
+                n_d = len(dim_results)
+                if n_d > 0:
+                    devs = []
+                    for dr in dim_results:
+                        if dr.deviation is not None:
+                            devs.append(dr.deviation)
+                        elif dr.verdict == EvaluationVerdict.EQUIVALENT:
+                            devs.append(0.0)
+                        elif dr.verdict in (EvaluationVerdict.DIFFERENT, EvaluationVerdict.ERROR, EvaluationVerdict.INCONCLUSIVE):
+                            devs.append(1.0)
+                        else:
+                            devs.append(0.0)
+                    mean_dev = sum(devs) / n_d
+                    dim_score = max(0.0, min(1.0, 1.0 - mean_dev))
+                    is_available = True
+                else:
+                    mean_dev = None
+                    dim_score = None
+                    is_available = False
+
                 dim_summaries[dim] = DimensionEvaluationSummary(
                     dimension=dim,
-                    total_evaluated=len(dim_results),
+                    total_evaluated=n_d,
                     equivalent_count=d_equiv,
                     different_count=d_diff,
                     inconclusive_count=d_inconcl,
                     not_applicable_count=d_na,
                     overall_verdict=dim_verdict,
+                    mean_deviation=round(mean_dev, 6) if mean_dev is not None else None,
+                    dimension_score=round(dim_score, 6) if dim_score is not None else None,
+                    is_available=is_available,
                 )
             else:
                 dim_summaries[dim] = DimensionEvaluationSummary(
@@ -646,6 +684,9 @@ class BehavioralEvaluationEngine:
                     inconclusive_count=0,
                     not_applicable_count=0,
                     overall_verdict=EvaluationVerdict.NOT_APPLICABLE,
+                    mean_deviation=None,
+                    dimension_score=None,
+                    is_available=False,
                 )
 
         # Difference counts
@@ -657,7 +698,40 @@ class BehavioralEvaluationEngine:
             diff_by_type[t_name] = diff_by_type.get(t_name, 0) + 1
             diff_by_dim[d_name] = diff_by_dim.get(d_name, 0) + 1
 
-        coverage = (len(input_results) / total_items) if total_items > 0 else 1.0
+        # Dynamic Behavioral Score Calculation (Patent-Facing Spec)
+        available_dims = [
+            dim for dim in target_dims
+            if dim_summaries[dim].is_available and dim_summaries[dim].dimension_score is not None
+        ]
+        dim_scores: dict[str, float] = {}
+        scoring_weights: dict[str, float] = {}
+        if available_dims:
+            weight_val = round(1.0 / len(available_dims), 6)
+            for dim in available_dims:
+                d_val = dim_summaries[dim].dimension_score
+                if d_val is not None:
+                    dim_scores[dim.value] = d_val
+                    scoring_weights[dim.value] = weight_val
+            # Normalize weights to sum exactly to 1.0
+            total_w = sum(scoring_weights.values())
+            if total_w > 0.0:
+                scoring_weights = {k: v / total_w for k, v in scoring_weights.items()}
+            behavioral_score = sum(scoring_weights[k] * dim_scores[k] for k in dim_scores)
+            behavioral_score = max(0.0, min(1.0, behavioral_score))
+        else:
+            behavioral_score = 1.0 if not input_results else 0.0
+
+        observed_dev = max(0.0, min(1.0, 1.0 - behavioral_score))
+        percentage_score = round(100.0 * behavioral_score, 2)
+
+        # Coverage: ObservedComparableCells / RequiredComparableCells
+        req_cells = total_items * len(target_dims) if total_items > 0 else 0
+        obs_cells = sum(
+            len([dr for dr in r.dimension_results.values() if dr.verdict != EvaluationVerdict.NOT_APPLICABLE])
+            for r in input_results
+        )
+        coverage = (obs_cells / req_cells) if req_cells > 0 else 1.0
+        coverage = max(0.0, min(1.0, coverage))
 
         return EvaluationSummary(
             total_inputs=total_items,
@@ -673,6 +747,12 @@ class BehavioralEvaluationEngine:
             differences_by_type=diff_by_type,
             differences_by_dimension=diff_by_dim,
             coverage_ratio=coverage,
+            dimension_scores=dim_scores,
+            behavioral_score=round(behavioral_score, 6),
+            observed_deviation=round(observed_dev, 6),
+            percentage_score=percentage_score,
+            scoring_weights={k: round(v, 6) for k, v in scoring_weights.items()},
+            coverage=round(coverage, 6),
         )
 
     def _compute_evaluation_hash(
@@ -736,6 +816,9 @@ class BehavioralEvaluationEngine:
                 "not_applicable_inputs": result.summary.not_applicable_inputs,
                 "overall_verdict": result.summary.overall_verdict.value if hasattr(result.summary.overall_verdict, "value") else str(result.summary.overall_verdict),
                 "total_differences": result.summary.total_differences,
+                "behavioral_score": round(float(getattr(result.summary, "behavioral_score", 1.0)), 6),
+                "observed_deviation": round(float(getattr(result.summary, "observed_deviation", 0.0)), 6),
+                "coverage": round(float(getattr(result.summary, "coverage", 1.0)), 6),
             },
             "inputs": canonical_inputs,
             "differences": canonical_diffs,

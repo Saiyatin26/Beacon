@@ -114,6 +114,8 @@ class DimensionResult(BaseModel):
     difference_type: Optional[DifferenceType] = None
     differences: list[BehaviorDifference] = Field(default_factory=list)
     evidence_references: list[str] = Field(default_factory=list)
+    deviation: Optional[float] = None  # Normalized deviation d_{di} in [0, 1]
+    agreement: Optional[float] = None  # Agreement a_{di} = 1 - d_{di} in [0, 1]
     details: dict[str, Any] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
@@ -121,6 +123,10 @@ class DimensionResult(BaseModel):
             object.__setattr__(self, "verdict", self.status)
         elif self.verdict and not self.status:
             object.__setattr__(self, "status", self.verdict)
+        if self.deviation is not None and self.agreement is None:
+            object.__setattr__(self, "agreement", max(0.0, min(1.0, 1.0 - self.deviation)))
+        elif self.agreement is not None and self.deviation is None:
+            object.__setattr__(self, "deviation", max(0.0, min(1.0, 1.0 - self.agreement)))
 
 
 class DimensionEvaluationSummary(BaseModel):
@@ -134,6 +140,9 @@ class DimensionEvaluationSummary(BaseModel):
     inconclusive_count: int = 0
     not_applicable_count: int = 0
     overall_verdict: EvaluationVerdict = EvaluationVerdict.NOT_APPLICABLE
+    mean_deviation: Optional[float] = None  # MeanDeviation_d = (1 / N_d) * sum(d_di)
+    dimension_score: Optional[float] = None  # DimensionScore_d = 1 - MeanDeviation_d
+    is_available: bool = True  # If N_d == 0, dimension is marked unavailable (not score 1)
 
 
 class InputEvaluationResult(BaseModel):
@@ -148,6 +157,8 @@ class InputEvaluationResult(BaseModel):
     boundary_category: Optional[str] = None
     reference_evidence_ids: list[str] = Field(default_factory=list)
     target_evidence_ids: list[str] = Field(default_factory=list)
+    observed_deviation: Optional[float] = None  # Aggregated deviation for this input in [0, 1]
+    agreement: Optional[float] = None  # Aggregated agreement = 1 - observed_deviation
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -176,6 +187,14 @@ class EvaluationSummary(BaseModel):
     differences_by_type: dict[str, int] = Field(default_factory=dict)
     differences_by_dimension: dict[str, int] = Field(default_factory=dict)
     coverage_ratio: float = 1.0
+
+    # Dynamic Behavioral Scoring Normative Contract (Patent-Facing Spec)
+    dimension_scores: dict[str, float] = Field(default_factory=dict)
+    behavioral_score: float = 1.0  # Dynamic Behavioral Score in [0.0, 1.0]
+    observed_deviation: float = 0.0  # 1.0 - behavioral_score
+    percentage_score: float = 100.0  # 100.0 * behavioral_score
+    scoring_weights: dict[str, float] = Field(default_factory=dict)
+    coverage: float = 1.0  # ObservedComparableCells / RequiredComparableCells
 
     @property
     def divergent_inputs(self) -> int:
@@ -241,6 +260,9 @@ class EvaluationRequest(BaseModel):
 def compute_evaluation_result_hash(eval_res: EvaluationResult) -> str:
     """Computes deterministic canonical SHA-256 fingerprint over all material behavioral evaluation findings."""
     diff_inputs = getattr(eval_res.summary, "different_inputs", getattr(eval_res.summary, "divergent_inputs", 0))
+    beh_score = getattr(eval_res.summary, "behavioral_score", 1.0)
+    obs_dev = getattr(eval_res.summary, "observed_deviation", 0.0)
+    cov = getattr(eval_res.summary, "coverage", 1.0)
     material_data = {
         "evaluation_id": eval_res.evaluation_id,
         "bundle_id": eval_res.bundle_id or "",
@@ -252,6 +274,9 @@ def compute_evaluation_result_hash(eval_res: EvaluationResult) -> str:
         "equivalent_inputs": eval_res.summary.equivalent_inputs,
         "different_inputs": diff_inputs,
         "total_differences": eval_res.summary.total_differences,
+        "behavioral_score": round(float(beh_score), 6),
+        "observed_deviation": round(float(obs_dev), 6),
+        "coverage": round(float(cov), 6),
         "input_results": [
             {
                 "input_id": item.input_id,

@@ -66,18 +66,6 @@ class OfflineProvider(LLMProvider):
                 "source_lines": lines,
             })
 
-        # If no regex matched from prompt sections, provide fallback candidate if evidence is present
-        if not candidates and "correlated_conditions" in prompt:
-            candidates.append({
-                "condition": "credit_score < 600 and debt_ratio > 0.4",
-                "consequence": "REJECT",
-                "domain": "loan_approval",
-                "severity": "critical",
-                "rationale": "Synthesized fallback rule from evidence package summary.",
-                "supporting_evidence_ids": [],
-                "source_lines": [14],
-            })
-
         latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
         raw_text = json.dumps(candidates, indent=2)
 

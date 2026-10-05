@@ -424,6 +424,9 @@ class CertificationArtifact(BaseModel):
     certification_policy_hash: str = ""
     threshold_resolution_id: Optional[str] = None
     threshold_resolution_fingerprint: Optional[str] = None
+    observed_deviation: Optional[float] = None
+    resolved_threshold: Optional[float] = None
+    coverage: Optional[float] = None
     certification_engine_version: str = "1.0.0"
     timestamp: str = ""
     reproducibility_state: Literal["FULLY_REPRODUCIBLE", "LEGACY_PARTIAL"] = "FULLY_REPRODUCIBLE"

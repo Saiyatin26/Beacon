@@ -625,8 +625,6 @@ export default function App() {
     }
   };
 
-  // Run Legacy Loan Demo (isolated)
-
   return (
     <div style={{ minHeight: "100vh", background: "#f8fafc", color: "#1e293b", fontFamily: "'Inter', sans-serif" }}>
       {/* Top Header */}
