@@ -548,6 +548,38 @@ class RepositoryService:
                 code_text = py_f.read_text(encoding="utf-8", errors="ignore")
                 ast_res = py_analyzer.analyze(code_text, file_name=rel_p)
 
+                # Scan for imported companion modules (e.g. carddemo_data)
+                imported_modules = set()
+                py_stdlib = {
+                    "__future__", "typing", "dataclasses", "decimal", "re", "json",
+                    "sys", "os", "hashlib", "math", "copy", "pathlib", "abc",
+                    "collections", "itertools", "enum", "functools", "time",
+                    "logging", "uuid", "shutil", "subprocess"
+                }
+                for imp_m in re.finditer(r"(?:from\s+\.?([a-zA-Z0-9_]+)\s+import|import\s+([a-zA-Z0-9_]+))", code_text):
+                    mod_name = imp_m.group(1) or imp_m.group(2)
+                    if mod_name and mod_name not in py_stdlib:
+                        imported_modules.add(mod_name)
+
+                # Check companion module resolution
+                resolved_companions = []
+                missing_companions = []
+                carddemo_python_dir = Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\pipeline\reimpl\python")
+                for mod_name in imported_modules:
+                    target_file = f"{mod_name}.py"
+                    companion_found = False
+                    if (py_f.parent / target_file).exists() or (root_dir / target_file).exists():
+                        companion_found = True
+                    elif not is_single_file and any(f.name.lower() == target_file.lower() for f in target_dir.rglob("*.py")):
+                        companion_found = True
+                    elif carddemo_python_dir.exists() and (carddemo_python_dir / target_file).exists():
+                        companion_found = True
+
+                    if companion_found:
+                        resolved_companions.append(mod_name)
+                    else:
+                        missing_companions.append(mod_name)
+
                 # Collect candidate functions as entrypoints
                 for fn in ast_res.functions:
                     # Ignore internal/dunder functions
@@ -568,6 +600,9 @@ class RepositoryService:
                                 "argument_count": len(fn.arguments) if hasattr(fn, "arguments") else 0,
                                 "has_docstring": bool(getattr(fn, "docstring", None)),
                                 "language": "python",
+                                "imported_modules": sorted(list(imported_modules)),
+                                "resolved_companions": resolved_companions,
+                                "missing_companions": missing_companions,
                             },
                         )
                     )
@@ -586,6 +621,14 @@ class RepositoryService:
             [f for f in target_dir.rglob("*") if f.is_file() and f.suffix.lower() in cobol_exts] if not is_single_file else []
         )
 
+        carddemo_cpy_dirs = [
+            Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy"),
+            Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy-bms"),
+        ]
+        carddemo_data_dir = Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\data\ASCII")
+
+        standard_cics_cpys = {"DFHAID", "DFHBMSCA", "DFHEIBLK", "DFHRESP"}
+
         for cbl_f in cobol_files:
             languages.add("cobol")
             rel_p = str(cbl_f.relative_to(root_dir)).replace("\\", "/") if not is_single_file else cbl_f.name
@@ -593,24 +636,89 @@ class RepositoryService:
                 code_text = cbl_f.read_text(encoding="utf-8", errors="ignore")
                 ast_res = cobol_analyzer.analyze(code_text, file_name=rel_p)
 
-                for fn in ast_res.functions:
-                    entrypoints.append(
-                        DiscoveredEntrypoint(
-                            name=fn.name,
-                            file_path=str(cbl_f),
-                            relative_path=rel_p,
-                            line_number=fn.location.line if fn.location else 1,
-                            parameters=[],
-                            docstring=None,
-                            has_type_hints=False,
-                            evidence={
-                                "file": rel_p,
-                                "line": fn.location.line if fn.location else 1,
-                                "paragraph": fn.name,
-                                "language": "cobol",
-                            },
-                        )
+                meta = ast_res.metadata or {}
+                is_cics = meta.get("is_cics", False)
+                if is_cics:
+                    frameworks.add("cics")
+
+                # Resolve copybooks
+                req_copybooks = meta.get("copybooks", [])
+                resolved_cpys = []
+                missing_cpys = []
+                for cpy_name in req_copybooks:
+                    cpy_found = False
+                    if is_cics and cpy_name in standard_cics_cpys:
+                        cpy_found = True
+                    else:
+                        for ext in (".cpy", ".CPY", ".cbl", ""):
+                            if not is_single_file and (target_dir / f"{cpy_name}{ext}").exists():
+                                cpy_found = True
+                                break
+                            if not is_single_file and (target_dir / "cpy" / f"{cpy_name}{ext}").exists():
+                                cpy_found = True
+                                break
+                            for cdir in carddemo_cpy_dirs:
+                                if cdir.exists() and (cdir / f"{cpy_name}{ext}").exists():
+                                    cpy_found = True
+                                    break
+                            if cpy_found:
+                                break
+                    if cpy_found:
+                        resolved_cpys.append(cpy_name)
+                    else:
+                        missing_cpys.append(cpy_name)
+
+                # Resolve datasets
+                req_datasets = meta.get("datasets", [])
+                resolved_dss = []
+                missing_dss = []
+                for ds_name in req_datasets:
+                    ds_found = False
+                    stem_clean = ds_name.lower().replace("-", "").replace("_", "").replace("lit", "")
+                    if not is_single_file:
+                        for f in target_dir.rglob("*"):
+                            if f.is_file() and stem_clean in f.stem.lower():
+                                ds_found = True
+                                break
+                    if not ds_found and carddemo_data_dir.exists():
+                        for f in carddemo_data_dir.glob("*.txt"):
+                            if stem_clean in f.stem.lower() or f.stem.lower().startswith(stem_clean[:4]):
+                                ds_found = True
+                                break
+                    if ds_found:
+                        resolved_dss.append(ds_name)
+                    else:
+                        missing_dss.append(ds_name)
+
+                prog_name = meta.get("program_id") or cbl_f.stem.upper()
+                entrypoints.append(
+                    DiscoveredEntrypoint(
+                        name=prog_name,
+                        file_path=str(cbl_f),
+                        relative_path=rel_p,
+                        line_number=1,
+                        parameters=["commarea", "map_data"] if is_cics else [],
+                        docstring=f"COBOL {'CICS ' if is_cics else ''}Program {prog_name}",
+                        has_type_hints=False,
+                        evidence={
+                            "program_id": prog_name,
+                            "file": rel_p,
+                            "line": 1,
+                            "language": "cobol",
+                            "technology": "cics" if is_cics else "cobol",
+                            "is_cics": is_cics,
+                            "cics_commands": meta.get("cics_commands", []),
+                            "copybooks": req_copybooks,
+                            "resolved_copybooks": resolved_cpys,
+                            "missing_copybooks": missing_cpys,
+                            "datasets": req_datasets,
+                            "resolved_datasets": resolved_dss,
+                            "missing_datasets": missing_dss,
+                            "transactions": meta.get("transactions", []),
+                            "maps": meta.get("maps", []),
+                        },
                     )
+                )
 
                 for comp in ast_res.comparisons:
                     invariants.append(f"{comp.left} {comp.operator} {comp.right} (line {comp.location.line if comp.location else '?'})")

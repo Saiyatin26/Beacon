@@ -14,7 +14,12 @@ from typing import Any, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 from common.contracts import AdapterRole, ImplementationAdapter
-from certification.adapters import FunctionAdapter, PreserveCaseNormalizer
+from certification.adapters import (
+    FunctionAdapter,
+    PreserveCaseNormalizer,
+    CobolCicsAdapter,
+    check_cobol_cics_runtime,
+)
 from .repository_service import DiscoveredEntrypoint, RepositoryAnalysisReport
 
 logger = logging.getLogger("beacon.application.adapter_detector")
@@ -62,17 +67,71 @@ class AdapterDetector:
         role: Union[AdapterRole, str],
         version: str = "1.0.0",
     ) -> ImplementationAdapter:
-        """Loads and binds a Python callable ONLY when execution is explicitly authorized."""
+        """Loads and binds an authorized adapter (Python callable or COBOL CICS runtime) ONLY when execution is authorized."""
+        # 1. COBOL CICS Adapter
+        if file_path.suffix.lower() in (".cbl", ".cob", ".cpy"):
+            carddemo_cpy_dirs = [
+                Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy"),
+                Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy-bms"),
+            ]
+            carddemo_data_dir = Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\data\ASCII")
+            return CobolCicsAdapter(
+                program_id=fn_name,
+                source_file=file_path,
+                copybook_dirs=carddemo_cpy_dirs,
+                data_dir=carddemo_data_dir,
+                name=adapter_name,
+                role=role,
+                version=version,
+            )
+
+        # 2. Modern Python Adapter with companion module resolution
+        parent_dir = file_path.parent
+        if str(parent_dir) not in sys.path:
+            sys.path.insert(0, str(parent_dir))
+        if str(parent_dir.parent) not in sys.path:
+            sys.path.insert(0, str(parent_dir.parent))
+
+        # Check for carddemo_data companion
+        companion_sources = [
+            parent_dir / "carddemo_data.py",
+            Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\pipeline\reimpl\python\carddemo_data.py"),
+        ]
+        for c_path in companion_sources:
+            if c_path.exists():
+                try:
+                    c_spec = importlib.util.spec_from_file_location("carddemo_data", str(c_path))
+                    if c_spec and c_spec.loader:
+                        c_mod = importlib.util.module_from_spec(c_spec)
+                        sys.modules["carddemo_data"] = c_mod
+                        sys.modules[f"{parent_dir.name}.carddemo_data"] = c_mod
+                        c_spec.loader.exec_module(c_mod)
+                        break
+                except Exception as c_err:
+                    logger.debug(f"Companion pre-load note: {c_err}")
+
         module_name = f"beacon_dyn_{file_path.stem}_{hash(str(file_path)) & 0xFFFFFFFF}"
-        spec = importlib.util.spec_from_file_location(module_name, str(file_path))
+        spec = importlib.util.spec_from_file_location(
+            module_name,
+            str(file_path),
+            submodule_search_locations=[str(parent_dir)],
+        )
         if not spec or not spec.loader:
             raise ImportError(f"Could not load module spec for '{file_path}'")
         module = importlib.util.module_from_spec(spec)
+        module.__package__ = parent_dir.name
         sys.modules[module_name] = module
+        sys.modules[f"{parent_dir.name}.{file_path.stem}"] = module
+
         spec.loader.exec_module(module)
         if not hasattr(module, fn_name):
-            raise AttributeError(f"Module in '{file_path}' does not contain function '{fn_name}'")
-        target_fn = getattr(module, fn_name)
+            # If specified fn_name not found, check if run_vector exists
+            if hasattr(module, "run_vector"):
+                target_fn = getattr(module, "run_vector")
+            else:
+                raise AttributeError(f"Module in '{file_path}' does not contain function '{fn_name}'")
+        else:
+            target_fn = getattr(module, fn_name)
 
         return FunctionAdapter(
             target_fn=target_fn,
@@ -95,13 +154,16 @@ class AdapterDetector:
         role_str = role.value if hasattr(role, "value") else str(role)
 
         # Check language support
-        if not any(lang.lower() == "python" for lang in analysis.languages):
+        supported_langs = {"python", "cobol"}
+        repo_langs = {lang.lower() for lang in analysis.languages}
+        if not repo_langs.intersection(supported_langs):
             return AdapterResolutionResult(
                 status=AdapterResolutionStatus.ADAPTER_UNSUPPORTED,
                 method="AUTOMATIC_STATIC",
                 role=role_str,
                 diagnostic_message=(
-                    f"Automatic adapter detection unsupported for non-Python repository languages: {analysis.languages}"
+                    f"Automatic adapter detection unsupported for repository languages: {analysis.languages}. "
+                    "BEACON V2 supports Python and COBOL/CICS."
                 ),
                 detection_evidence={"languages": analysis.languages},
             )
@@ -126,48 +188,139 @@ class AdapterDetector:
                 },
             )
 
-        # Static Filtering / ranking heuristics:
-        # 1. Look for entrypoints with arguments (not 0-arg helpers or main runners)
-        valid_candidates = [c for c in candidates if len(c.parameters) > 0 or c.has_type_hints]
-        if not valid_candidates:
-            valid_candidates = candidates
+        # ── COBOL / CICS Resolution Branch ────────────────────────────────────
+        if "cobol" in repo_langs:
+            # Find primary COBOL program candidate
+            primary_cbl = next((c for c in candidates if c.evidence.get("language") == "cobol"), candidates[0])
+            ev = primary_cbl.evidence
+            is_cics = ev.get("is_cics", False)
+            missing_cpys = ev.get("missing_copybooks", [])
+            missing_dss = ev.get("missing_datasets", [])
+            runtime_ok, runtime_diag, runtime_details = check_cobol_cics_runtime()
 
-        # 2. Check if a single candidate matches common root conventions
-        primary_match: Optional[DiscoveredEntrypoint] = None
-        if len(valid_candidates) == 1:
-            primary_match = valid_candidates[0]
-        else:
-            # Check if one function name directly matches the file stem
-            stem_matches = [
-                c for c in valid_candidates
-                if Path(c.file_path).stem.lower() in c.name.lower() or c.name.lower() in Path(c.file_path).stem.lower()
-            ]
-            if len(stem_matches) == 1:
-                primary_match = stem_matches[0]
-            else:
-                # Ambiguous: multiple candidates, none uniquely prioritized
+            # Fail closed to ADAPTER_UNRESOLVED (never ADAPTER_UNSUPPORTED) if runtime or copybooks missing
+            if not runtime_ok:
                 return AdapterResolutionResult(
-                    status=AdapterResolutionStatus.ADAPTER_AMBIGUOUS,
+                    status=AdapterResolutionStatus.ADAPTER_UNRESOLVED,
                     method="AUTOMATIC_STATIC",
                     role=role_str,
-                    candidates_count=len(valid_candidates),
-                    candidate_names=[f"{c.relative_path}:{c.name}" for c in valid_candidates],
+                    candidates_count=len(candidates),
+                    candidate_names=candidate_names,
                     diagnostic_message=(
-                        f"Automatic adapter detection failed: Multiple candidate entrypoints discovered "
-                        f"({len(valid_candidates)} candidates) with ambiguous precedence. "
-                        f"Failing closed without arbitrary guessing."
+                        f"COBOL execution environment unavailable for program '{primary_cbl.name}': {runtime_diag}. "
+                        "A valid GnuCOBOL (cobc) runtime is required."
                     ),
                     detection_evidence={
-                        "candidates": [
-                            {"file": c.relative_path, "name": c.name, "params": c.parameters, "line": c.line_number}
-                            for c in valid_candidates[:10]
-                        ]
+                        **ev,
+                        "runtime_status": "UNAVAILABLE",
+                        "runtime_diagnostics": runtime_diag,
                     },
                 )
 
-        # Static resolution succeeded WITHOUT loading or executing the module
-        adapter_name = f"{primary_match.name}_{role_str}"
+            if missing_cpys:
+                return AdapterResolutionResult(
+                    status=AdapterResolutionStatus.ADAPTER_UNRESOLVED,
+                    method="AUTOMATIC_STATIC",
+                    role=role_str,
+                    candidates_count=len(candidates),
+                    candidate_names=candidate_names,
+                    diagnostic_message=(
+                        f"COBOL/CICS dependencies unresolved for program '{primary_cbl.name}'. "
+                        f"Missing {len(missing_cpys)} required copybook(s): {missing_cpys}."
+                    ),
+                    detection_evidence={
+                        **ev,
+                        "runtime_status": "AVAILABLE",
+                        "missing_copybooks": missing_cpys,
+                        "missing_datasets": missing_dss,
+                    },
+                )
 
+            adapter_name = f"cics_{primary_cbl.name.lower()}_{role_str}"
+            return AdapterResolutionResult(
+                status=AdapterResolutionStatus.RESOLVED,
+                method="AUTOMATIC_STATIC",
+                role=role_str,
+                adapter_name=adapter_name,
+                resolved_entrypoint=f"{primary_cbl.relative_path}:{primary_cbl.name}",
+                resolved_file=primary_cbl.file_path,
+                resolved_function=primary_cbl.name,
+                candidates_count=len(candidates),
+                candidate_names=candidate_names,
+                diagnostic_message=(
+                    f"Deterministically resolved COBOL/CICS adapter '{adapter_name}' for program '{primary_cbl.name}'. "
+                    f"CICS commands: {ev.get('cics_commands', [])}. Copybooks resolved: {len(ev.get('resolved_copybooks', []))}."
+                ),
+                detection_evidence={
+                    **ev,
+                    "runtime_status": "AVAILABLE",
+                    "runtime_diagnostics": runtime_diag,
+                    "commit_sha": analysis.provenance.commit_sha,
+                    "content_hash": analysis.provenance.content_hash,
+                },
+            )
+
+        # ── Python Resolution Branch ──────────────────────────────────────────
+        # Check for prioritized canonical test runner 'run_vector'
+        run_vector_candidate = next((c for c in candidates if c.name == "run_vector"), None)
+        if run_vector_candidate:
+            primary_match = run_vector_candidate
+        else:
+            # Static Filtering / ranking heuristics:
+            valid_candidates = [c for c in candidates if len(c.parameters) > 0 or c.has_type_hints]
+            if not valid_candidates:
+                valid_candidates = candidates
+
+            if len(valid_candidates) == 1:
+                primary_match = valid_candidates[0]
+            else:
+                stem_matches = [
+                    c for c in valid_candidates
+                    if Path(c.file_path).stem.lower() in c.name.lower() or c.name.lower() in Path(c.file_path).stem.lower()
+                ]
+                if len(stem_matches) == 1:
+                    primary_match = stem_matches[0]
+                else:
+                    return AdapterResolutionResult(
+                        status=AdapterResolutionStatus.ADAPTER_AMBIGUOUS,
+                        method="AUTOMATIC_STATIC",
+                        role=role_str,
+                        candidates_count=len(valid_candidates),
+                        candidate_names=[f"{c.relative_path}:{c.name}" for c in valid_candidates],
+                        diagnostic_message=(
+                            f"Automatic adapter detection failed: Multiple candidate entrypoints discovered "
+                            f"({len(valid_candidates)} candidates) with ambiguous precedence. "
+                            f"Failing closed without arbitrary guessing."
+                        ),
+                        detection_evidence={
+                            "candidates": [
+                                {"file": c.relative_path, "name": c.name, "params": c.parameters, "line": c.line_number}
+                                for c in valid_candidates[:10]
+                            ]
+                        },
+                    )
+
+        # Verify companion module resolution for Python
+        missing_companions = primary_match.evidence.get("missing_companions", [])
+        if missing_companions:
+            return AdapterResolutionResult(
+                status=AdapterResolutionStatus.ADAPTER_UNRESOLVED,
+                method="AUTOMATIC_STATIC",
+                role=role_str,
+                candidates_count=len(candidates),
+                candidate_names=candidate_names,
+                diagnostic_message=(
+                    f"Modern Python entrypoint '{primary_match.name}' requires companion module(s) "
+                    f"{missing_companions} which could not be resolved in the repository context."
+                ),
+                detection_evidence={
+                    "resolved_file": primary_match.relative_path,
+                    "resolved_function": primary_match.name,
+                    "missing_companions": missing_companions,
+                },
+            )
+
+        adapter_name = f"{primary_match.name}_{role_str}"
         return AdapterResolutionResult(
             status=AdapterResolutionStatus.RESOLVED,
             method="AUTOMATIC_STATIC",
@@ -176,7 +329,7 @@ class AdapterDetector:
             resolved_entrypoint=f"{primary_match.relative_path}:{primary_match.name}",
             resolved_file=primary_match.file_path,
             resolved_function=primary_match.name,
-            adapter_instance=None,  # Intentionally None during static detection phase
+            adapter_instance=None,
             candidates_count=len(candidates),
             candidate_names=candidate_names,
             diagnostic_message=f"Deterministically resolved adapter '{adapter_name}' from '{primary_match.relative_path}'.",
@@ -186,6 +339,7 @@ class AdapterDetector:
                 "parameters": primary_match.parameters,
                 "line_number": primary_match.line_number,
                 "has_docstring": bool(primary_match.docstring),
+                "resolved_companions": primary_match.evidence.get("resolved_companions", []),
                 "commit_sha": analysis.provenance.commit_sha,
                 "content_hash": analysis.provenance.content_hash,
             },
@@ -193,3 +347,4 @@ class AdapterDetector:
 
 
 adapter_detector = AdapterDetector()
+

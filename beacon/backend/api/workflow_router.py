@@ -20,6 +20,7 @@ from auth import (
     verify_user_project_permission,
 )
 from workflow.models import (
+    FinalizationState,
     WorkflowRunRequest,
     WorkflowRun,
     WorkflowResult,
@@ -405,37 +406,110 @@ def _run_repository_certification_pipeline(
     ) = _perform_repository_analysis(req)
 
     if legacy_adapter_res.status != AdapterResolutionStatus.RESOLVED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "LEGACY_ADAPTER_RESOLUTION_FAILED",
+        inconclusive_run_id = f"run_{hashlib.sha256(f'{analysis_result.application_id}_legacy_unresolved_{datetime.now(timezone.utc).isoformat()}'.encode()).hexdigest()[:16]}"
+        run_record = WorkflowRun(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            request_fingerprint=analysis_result.specification_fingerprint,
+            state=WorkflowState.INCONCLUSIVE,
+            finalization_state=FinalizationState.COMPLETED,
+            certification_status="INCONCLUSIVE",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message=f"Legacy adapter unresolved: {legacy_adapter_res.diagnostic_message}",
+            metadata={
+                "error": "LEGACY_ADAPTER_UNRESOLVED",
                 "status": legacy_adapter_res.status.value,
-                "message": legacy_adapter_res.diagnostic_message,
+                "diagnostic_message": legacy_adapter_res.diagnostic_message,
                 "evidence": legacy_adapter_res.detection_evidence,
                 "candidates": legacy_adapter_res.candidate_names,
             },
         )
+        workflow_persistence.save_run(run_record)
+        return WorkflowResult(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            state=WorkflowState.INCONCLUSIVE,
+            status="INCONCLUSIVE",
+            certified=False,
+            equivalence_score=None,
+            artifact_id=None,
+            regressions_count=0,
+            regressions=[],
+            audit_status="PERSISTED",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message=f"Legacy adapter unresolved: {legacy_adapter_res.diagnostic_message}",
+            metadata=run_record.metadata,
+        )
 
     if modern_adapter_res.status != AdapterResolutionStatus.RESOLVED:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "MODERN_ADAPTER_RESOLUTION_FAILED",
+        inconclusive_run_id = f"run_{hashlib.sha256(f'{analysis_result.application_id}_modern_unresolved_{datetime.now(timezone.utc).isoformat()}'.encode()).hexdigest()[:16]}"
+        run_record = WorkflowRun(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            request_fingerprint=analysis_result.specification_fingerprint,
+            state=WorkflowState.INCONCLUSIVE,
+            finalization_state=FinalizationState.COMPLETED,
+            certification_status="INCONCLUSIVE",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message=f"Modern adapter unresolved: {modern_adapter_res.diagnostic_message}",
+            metadata={
+                "error": "MODERN_ADAPTER_UNRESOLVED",
                 "status": modern_adapter_res.status.value,
-                "message": modern_adapter_res.diagnostic_message,
+                "diagnostic_message": modern_adapter_res.diagnostic_message,
                 "evidence": modern_adapter_res.detection_evidence,
                 "candidates": modern_adapter_res.candidate_names,
             },
         )
+        workflow_persistence.save_run(run_record)
+        return WorkflowResult(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            state=WorkflowState.INCONCLUSIVE,
+            status="INCONCLUSIVE",
+            certified=False,
+            equivalence_score=None,
+            artifact_id=None,
+            regressions_count=0,
+            regressions=[],
+            audit_status="PERSISTED",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message=f"Modern adapter unresolved: {modern_adapter_res.diagnostic_message}",
+            metadata=run_record.metadata,
+        )
 
     if input_discovery_res.status != InputDiscoveryStatus.SUCCESS or not repo_spec.discovered_inputs:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "NO_AUTHORITATIVE_INPUT_SET",
-                "status": input_discovery_res.status.value,
-                "message": "Repository analysis discovered zero legitimate input test cases. Equivalence certification cannot proceed without genuine input evidence.",
+        inconclusive_run_id = f"run_{hashlib.sha256(f'{analysis_result.application_id}_insufficient_inputs_{datetime.now(timezone.utc).isoformat()}'.encode()).hexdigest()[:16]}"
+        run_record = WorkflowRun(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            request_fingerprint=analysis_result.specification_fingerprint,
+            state=WorkflowState.INCONCLUSIVE,
+            finalization_state=FinalizationState.COMPLETED,
+            certification_status="INSUFFICIENT_COVERAGE",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message="Repository analysis discovered zero legitimate input test cases. Equivalence certification cannot proceed without genuine input evidence.",
+            metadata={
+                "error": "INSUFFICIENT_COVERAGE",
+                "status": "INSUFFICIENT_COVERAGE",
+                "diagnostic_message": "Zero legitimate input test cases discovered. Equivalence certification cannot proceed without genuine input evidence.",
+                "evidence": input_discovery_res.provenance,
             },
+        )
+        workflow_persistence.save_run(run_record)
+        return WorkflowResult(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            state=WorkflowState.INCONCLUSIVE,
+            status="INSUFFICIENT_COVERAGE",
+            certified=False,
+            equivalence_score=None,
+            artifact_id=None,
+            regressions_count=0,
+            regressions=[],
+            audit_status="PERSISTED",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message="Zero legitimate input test cases discovered. Equivalence certification cannot proceed without genuine input evidence.",
+            metadata=run_record.metadata,
         )
 
     test_inputs = repo_spec.discovered_inputs

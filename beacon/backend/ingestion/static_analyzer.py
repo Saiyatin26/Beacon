@@ -259,13 +259,70 @@ class _PythonASTVisitor(ast.NodeVisitor):
 
 
 class CobolAnalyzer(StaticAnalyzer):
-    """Static analyzer for COBOL source programs extracting paragraphs and conditional rules."""
+    """Static analyzer for COBOL source programs extracting program entrypoint, CICS commands, copybooks, and rules."""
 
     def analyze(self, source_code: str, file_name: str = "") -> StaticAnalysisResult:
         import re
         functions: list[FunctionFact] = []
         conditions: list[ConditionFact] = []
         comparisons: list[ComparisonFact] = []
+
+        # 1. Program Identification
+        program_id: Optional[str] = None
+        pid_m = re.search(r"PROGRAM-ID\.\s*([A-Za-z0-9\-]+)", source_code, re.IGNORECASE)
+        if pid_m:
+            program_id = pid_m.group(1).strip().upper()
+
+        # 2. CICS Analysis
+        is_cics = bool(re.search(r"EXEC\s+CICS", source_code, re.IGNORECASE))
+        cics_commands: set[str] = set()
+        cics_blocks = re.findall(r"EXEC\s+CICS\s+(.+?)\s+END-EXEC", source_code, re.IGNORECASE | re.DOTALL)
+        for block in cics_blocks:
+            first_word = block.strip().split()[0].upper() if block.strip() else ""
+            if first_word:
+                cics_commands.add(first_word)
+
+        # 3. Copybook Dependencies
+        copybooks: set[str] = set()
+        cobol_cpy_reserved = {"OF", "IN", "REPLACING", "SUPPRESS", "JOINING"}
+        for cpy_m in re.finditer(r"\bCOPY\s+['\"]?([A-Za-z0-9\-]+)['\"]?", source_code, re.IGNORECASE):
+            name = cpy_m.group(1).strip().upper()
+            if name not in cobol_cpy_reserved:
+                copybooks.add(name)
+
+        # 4. Datasets / Files
+        datasets: set[str] = set()
+        for ds_m in re.finditer(r"(?:DATASET|FILE)\s*\(\s*([A-Za-z0-9\-]+)\s*\)", source_code, re.IGNORECASE):
+            val = ds_m.group(1).strip().upper()
+            datasets.add(val)
+        # Search for file literal mappings, e.g. 05 LIT-ACCTFILENAME PIC X(8) VALUE 'ACCTDAT '.
+        for lit_m in re.finditer(r"(?:LIT-[A-Za-z0-9\-]*FILE[A-Za-z0-9\-]*|LIT-[A-Za-z0-9\-]*NAME[A-Za-z0-9\-]*)\s+PIC\s+X\(\d+\)\s+VALUE\s+['\"]([A-Za-z0-9\- ]+)['\"]", source_code, re.IGNORECASE):
+            name_val = lit_m.group(1).strip().upper()
+            if name_val:
+                datasets.add(name_val)
+
+        # 5. Transactions
+        transactions: set[str] = set()
+        for trn_m in re.finditer(r"TRANSID\s*\(\s*['\"]?([A-Za-z0-9\-]+)['\"]?\s*\)", source_code, re.IGNORECASE):
+            transactions.add(trn_m.group(1).strip().upper())
+        for trn_lit in re.finditer(r"(?:LIT-[A-Za-z0-9\-]*TRAN[A-Za-z0-9\-]*|WS-TRANID)\s+PIC\s+X\(\d+\)\s+VALUE\s+['\"]([A-Za-z0-9\-]+)['\"]", source_code, re.IGNORECASE):
+            transactions.add(trn_lit.group(1).strip().upper())
+
+        # 6. Screen Maps
+        maps: set[str] = set()
+        for map_m in re.finditer(r"(?:MAP|MAPSET)\s*\(\s*['\"]?([A-Za-z0-9\-]+)['\"]?\s*\)", source_code, re.IGNORECASE):
+            maps.add(map_m.group(1).strip().upper())
+
+        # Register primary program entrypoint as the leading function fact
+        primary_name = program_id or (Path(file_name).stem.upper() if file_name else "MAIN-PROGRAM")
+        functions.append(
+            FunctionFact(
+                name=primary_name,
+                location=SourceLocation(file=file_name, line=1, function=primary_name),
+                arguments=["commarea", "map_data"] if is_cics else [],
+                docstring=f"COBOL {'CICS ' if is_cics else ''}Program Entrypoint ({primary_name})",
+            )
+        )
 
         current_paragraph: Optional[str] = None
         lines = source_code.splitlines()
@@ -299,7 +356,7 @@ class CobolAnalyzer(StaticAnalyzer):
             if cond_match:
                 keyword = cond_match.group(1).upper()
                 expr = cond_match.group(2).strip()
-                loc = SourceLocation(file=file_name, line=line_no, function=current_paragraph)
+                loc = SourceLocation(file=file_name, line=line_no, function=current_paragraph or primary_name)
                 cond_fact = ConditionFact(
                     expression=expr,
                     logical_operator="AND" if " AND " in expr.upper() else ("OR" if " OR " in expr.upper() else keyword),
@@ -319,6 +376,16 @@ class CobolAnalyzer(StaticAnalyzer):
                         )
                     )
 
+        metadata: dict[str, Any] = {
+            "program_id": primary_name,
+            "is_cics": is_cics,
+            "cics_commands": sorted(list(cics_commands)),
+            "copybooks": sorted(list(copybooks)),
+            "datasets": sorted(list(datasets)),
+            "transactions": sorted(list(transactions)),
+            "maps": sorted(list(maps)),
+        }
+
         return StaticAnalysisResult(
             file=file_name,
             language="cobol",
@@ -328,6 +395,7 @@ class CobolAnalyzer(StaticAnalyzer):
             assignments=[],
             returns=[],
             calls=[],
+            metadata=metadata,
         )
 
 

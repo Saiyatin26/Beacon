@@ -10,6 +10,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -140,6 +141,33 @@ class InputDiscoveryEngine:
                                 break
                         except Exception:
                             pass
+                if discovered_cases:
+                    break
+
+        # 2b. Check for authoritative code-defined transaction scenarios (e.g. CardDemo run_vector scenarios)
+        if not discovered_cases:
+            for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
+                if not repo_p_str:
+                    continue
+                repo_p = Path(repo_p_str)
+                py_candidates = [repo_p] if repo_p.is_file() and repo_p.suffix == ".py" else list(repo_p.rglob("*.py"))
+                for py_f in py_candidates:
+                    try:
+                        src_text = py_f.read_text(encoding="utf-8", errors="ignore")
+                        if "run_vector" in src_text or "scenario" in src_text.lower():
+                            scenarios = re.findall(r'(?:scenario|SCENARIO)\s*==\s*["\']([A-Z0-9_]+)["\']', src_text)
+                            if scenarios:
+                                seen_scenarios = set()
+                                for sc in scenarios:
+                                    if sc not in seen_scenarios:
+                                        seen_scenarios.add(sc)
+                                        discovered_cases.append({"SCENARIO": sc})
+                                if discovered_cases:
+                                    source_desc = f"Authoritative transaction scenarios from '{py_f.name}'"
+                                    method_desc = "CODE_DEFINED_SCENARIO_DISCOVERY"
+                                    break
+                    except Exception:
+                        pass
                 if discovered_cases:
                     break
 

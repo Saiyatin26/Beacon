@@ -225,4 +225,5 @@ class StaticAnalysisResult(BaseModel):
     assignments: list[AssignmentFact] = Field(default_factory=list)
     returns: list[ReturnFact] = Field(default_factory=list)
     calls: list[FunctionCallFact] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
