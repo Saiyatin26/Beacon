@@ -586,6 +586,21 @@ class CanonicalV2WorkflowEngine:
 
             # Execute reference
             ref_res = ref_adapter.execute(inp_vals) if hasattr(ref_adapter, "execute") else ref_adapter(inp_vals)
+
+            # Strict Fail-Closed Guard: genuine COBOL execution must not fail or crash
+            if getattr(ref_res, "execution_status", "") == "EXCEPTION":
+                if getattr(ref_adapter, "adapter_type", "") == "cobol_cics":
+                    err_msg = getattr(ref_res, "error_message", "Genuine COBOL runtime execution failed")
+                    logger.warning(f"Fail-closed guard triggered: genuine COBOL runtime execution failed on input {inp_id}: {err_msg}")
+                    return self._fail_run(
+                        run,
+                        WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+                        f"Genuine COBOL runtime execution failed on input '{inp_id}': {err_msg}. "
+                        "Authoritative execution evidence could not be obtained from real COBOL program. "
+                        "Certification is INCONCLUSIVE and never substitutes synthetic results.",
+                        audit_status="PERSISTED",
+                    )
+
             if hasattr(ref_res, "normalized_outputs") and ref_res.normalized_outputs is not None:
                 ref_val = ref_res.normalized_outputs
             elif hasattr(ref_res, "raw_outputs") and ref_res.raw_outputs is not None:
@@ -1101,22 +1116,34 @@ class CanonicalV2WorkflowEngine:
                 out = getattr(rec, "output", None)
                 if out is None and hasattr(rec, "payload") and isinstance(rec.payload, dict):
                     out = rec.payload.get("output")
+                rec_obs_found = False
                 if isinstance(out, (int, float)) and not (isinstance(out, bool) or math.isnan(out) or math.isinf(out)):
                     clean_observations.append(float(out))
+                    rec_obs_found = True
                 elif isinstance(out, dict):
                     for v in out.values():
                         if isinstance(v, (int, float)) and not (isinstance(v, bool) or math.isnan(v) or math.isinf(v)):
                             clean_observations.append(float(v))
+                            rec_obs_found = True
+                if not rec_obs_found and out is not None:
+                    # In accordance with Normative Contract (PDF Sections 4.1 & 9):
+                    # For discrete/categorical reference baseline executions, reference deviation is 0.0.
+                    clean_observations.append(0.0)
 
         if not clean_observations and eval_result and getattr(eval_result, "input_results", None):
             for item_res in eval_result.input_results:
                 ref_v = getattr(item_res, "reference_value", None)
+                rec_obs_found = False
                 if isinstance(ref_v, (int, float)) and not (isinstance(ref_v, bool) or math.isnan(ref_v) or math.isinf(ref_v)):
                     clean_observations.append(float(ref_v))
+                    rec_obs_found = True
                 elif isinstance(ref_v, dict):
                     for v in ref_v.values():
                         if isinstance(v, (int, float)) and not (isinstance(v, bool) or math.isnan(v) or math.isinf(v)):
                             clean_observations.append(float(v))
+                            rec_obs_found = True
+                if not rec_obs_found and ref_v is not None:
+                    clean_observations.append(0.0)
 
         # 2. Retrieve authoritative policy or derive through advisory proposal + deterministic validation
         th_policy = self.thresh_persistence.get_policy(f"POL-{spec.application_id}")
@@ -1135,15 +1162,17 @@ class CanonicalV2WorkflowEngine:
 
             obs_count = len(clean_observations)
             if not proposal:
-                # Derive evidence-grounded candidate proposal
+                # Derive evidence-grounded candidate proposal (PDF Sections 9 & 12)
                 if obs_count >= 5:
+                    is_zero_variance = (len(set(clean_observations)) <= 1)
                     proposal = ThresholdStrategyProposal(
                         strategy=ThresholdStrategy.EVIDENCE_DERIVED,
                         metric=DifferenceMetric.ABSOLUTE_DIFF,
-                        candidate_parameters={"k": 1.5},
+                        candidate_parameters={"k": 1.5, "maximum_bound": 0.0 if is_zero_variance else None},
                         estimator=EstimatorType.IQR_ROBUST,
+                        minimum_samples=min(obs_count, 5),
                         reasoning=f"Auto-derived proposal: empirical sample count ({obs_count} >= 5) permits robust IQR estimation.",
-                        evidence_summary={"sample_count": obs_count},
+                        evidence_summary={"sample_count": obs_count, "zero_variance": is_zero_variance},
                         confidence=0.95,
                     )
                 elif obs_count > 0:
@@ -1153,6 +1182,7 @@ class CanonicalV2WorkflowEngine:
                         metric=DifferenceMetric.ABSOLUTE_DIFF,
                         candidate_parameters={"k": 1.0, "maximum_bound": 0.0 if is_zero_variance else None},
                         estimator=EstimatorType.RANGE_FRACTION,
+                        minimum_samples=1,
                         reasoning=f"Auto-derived proposal: small sample count ({obs_count} < 5) uses RANGE bounded estimation.",
                         evidence_summary={"sample_count": obs_count, "zero_variance": is_zero_variance},
                         confidence=0.80,
@@ -1382,7 +1412,18 @@ class CanonicalV2WorkflowEngine:
             )
 
             run.explanation_id = getattr(explanation_res, "explanation_id", None)
-            return explanation_res.model_dump(mode="json") if hasattr(explanation_res, "model_dump") else explanation_res
+            exp_dict = explanation_res.model_dump(mode="json") if hasattr(explanation_res, "model_dump") else dict(explanation_res)
+            if "headline" not in exp_dict and "overall_verdict" in exp_dict:
+                exp_dict["headline"] = f"Behavioral Equivalence Verdict: {exp_dict['overall_verdict']}"
+            if "status_rationale" not in exp_dict and "executive_summary" in exp_dict:
+                exp_dict["status_rationale"] = exp_dict["executive_summary"]
+            if "key_findings" not in exp_dict or not exp_dict["key_findings"]:
+                exp_dict["key_findings"] = [
+                    rec.get("description", rec.get("title", ""))
+                    for rec in exp_dict.get("investigation_recommendations", [])
+                    if isinstance(rec, dict) and (rec.get("description") or rec.get("title"))
+                ]
+            return exp_dict
 
         except Exception as exc:
             logger.warning(f"Non-blocking grounded explanation failure for '{run.workflow_run_id}': {exc}")

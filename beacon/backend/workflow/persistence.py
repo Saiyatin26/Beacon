@@ -246,15 +246,15 @@ class WorkflowPersistenceStore:
                     conn.commit()
                     return False, row_in_prog["workflow_run_id"], "IN_PROGRESS"
 
-            # Claim Stage-B reservation in dedicated table with ownership safety (no overwriting another owner)
-            if row_b and row_b["workflow_run_id"] == workflow_run_id:
+            # Claim Stage-B reservation in dedicated table with ownership safety (no overwriting another owner unless force_recompute)
+            if row_b and (row_b["workflow_run_id"] == workflow_run_id or force_recompute):
                 conn.execute(
                     """
                     UPDATE v2_stage_b_reservations
-                    SET status = 'IN_PROGRESS', finalization_state = 'NOT_STARTED', updated_at = ?
-                    WHERE execution_fingerprint = ? AND workflow_run_id = ?;
+                    SET workflow_run_id = ?, owner_run_id = ?, status = 'IN_PROGRESS', finalization_state = 'NOT_STARTED', updated_at = ?
+                    WHERE execution_fingerprint = ?;
                     """,
-                    (now, execution_fingerprint, workflow_run_id),
+                    (workflow_run_id, workflow_run_id, now, execution_fingerprint),
                 )
             else:
                 try:
@@ -310,7 +310,7 @@ class WorkflowPersistenceStore:
 
                 if row_b:
                     existing_b_owner = row_b["workflow_run_id"]
-                    if existing_b_owner != workflow_run_id:
+                    if existing_b_owner != workflow_run_id and row_b["status"] == "IN_PROGRESS":
                         conn.commit()
                         raise WorkflowPersistenceConflictError(
                             f"Cannot finalize Stage-B reservation for '{execution_fingerprint[:12]}': actively owned by run '{existing_b_owner}'."
@@ -318,10 +318,10 @@ class WorkflowPersistenceStore:
                     conn.execute(
                         """
                         UPDATE v2_stage_b_reservations
-                        SET status = ?, finalization_state = ?, updated_at = ?
-                        WHERE execution_fingerprint = ? AND workflow_run_id = ?;
+                        SET workflow_run_id = ?, owner_run_id = ?, status = ?, finalization_state = ?, updated_at = ?
+                        WHERE execution_fingerprint = ?;
                         """,
-                        (status, finalization_state or status, now, execution_fingerprint, workflow_run_id),
+                        (workflow_run_id, workflow_run_id, status, finalization_state or status, now, execution_fingerprint),
                     )
                 else:
                     conn.execute(

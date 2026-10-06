@@ -74,15 +74,27 @@ class AdapterDetector:
                 Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy"),
                 Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy-bms"),
             ]
+            if file_path.parent.exists():
+                carddemo_cpy_dirs.append(file_path.parent)
+            if (file_path.parent / "cpy").exists():
+                carddemo_cpy_dirs.append(file_path.parent / "cpy")
+            if (file_path.parent.parent / "cpy").exists():
+                carddemo_cpy_dirs.append(file_path.parent.parent / "cpy")
+
+            source_txt = file_path.read_text(encoding="utf-8", errors="ignore")
+            from intelligence.cobol_plan import generate_cobol_execution_plan
+            plan = generate_cobol_execution_plan(source_txt, file_path=file_path)
+
             carddemo_data_dir = Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\data\ASCII")
             return CobolCicsAdapter(
-                program_id=fn_name,
+                program_id=fn_name or plan.program_id,
                 source_file=file_path,
                 copybook_dirs=carddemo_cpy_dirs,
                 data_dir=carddemo_data_dir,
                 name=adapter_name,
                 role=role,
                 version=version,
+                execution_plan=plan,
             )
 
         # 2. Modern Python Adapter with companion module resolution

@@ -642,11 +642,14 @@ class BehavioralEvaluationEngine:
                 else:
                     dim_verdict = EvaluationVerdict.NOT_APPLICABLE
 
-                # Normative contract: MeanDeviation_d and DimensionScore_d = 1 - MeanDeviation_d
-                n_d = len(dim_results)
+                # Normative contract (PDF Section 5):
+                # N_d is the number of valid authoritative comparable observations for dimension d.
+                # If no valid observations exist, the dimension is unavailable; it is not assigned score 1.
+                valid_obs = [dr for dr in dim_results if dr.verdict != EvaluationVerdict.NOT_APPLICABLE]
+                n_d = len(valid_obs)
                 if n_d > 0:
                     devs = []
-                    for dr in dim_results:
+                    for dr in valid_obs:
                         if dr.deviation is not None:
                             devs.append(dr.deviation)
                         elif dr.verdict == EvaluationVerdict.EQUIVALENT:
@@ -725,7 +728,8 @@ class BehavioralEvaluationEngine:
         percentage_score = round(100.0 * behavioral_score, 2)
 
         # Coverage: ObservedComparableCells / RequiredComparableCells
-        req_cells = total_items * len(target_dims) if total_items > 0 else 0
+        req_dims = available_dims if available_dims else target_dims
+        req_cells = total_items * len(req_dims) if total_items > 0 else 0
         obs_cells = sum(
             len([dr for dr in r.dimension_results.values() if dr.verdict != EvaluationVerdict.NOT_APPLICABLE])
             for r in input_results

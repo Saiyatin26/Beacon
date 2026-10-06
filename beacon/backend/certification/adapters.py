@@ -21,6 +21,7 @@ from common.contracts import (
     ImplementationAdapter,
     Observation,
 )
+from certification.cics_runner import compile_cobol_program, execute_compiled_cobol
 
 logger = logging.getLogger("beacon.certification.adapters")
 
@@ -442,27 +443,35 @@ class ModernizedAdapter(FunctionAdapter):
 # COBOL CICS Execution Adapter
 # ==============================================================================
 
+_COBC_RUNTIME_CACHE: Optional[tuple[bool, str, dict[str, Any]]] = None
+
 def check_cobol_cics_runtime() -> tuple[bool, str, dict[str, Any]]:
     """Checks availability of GnuCOBOL (cobc) and CICS execution context."""
+    global _COBC_RUNTIME_CACHE
+    if _COBC_RUNTIME_CACHE is not None and _COBC_RUNTIME_CACHE[0]:
+        return _COBC_RUNTIME_CACHE
+
     import shutil
     import subprocess
 
     local_cobc = shutil.which("cobc")
     if local_cobc:
-        return True, f"Native GnuCOBOL detected at '{local_cobc}'", {"runtime": "native", "path": local_cobc}
+        _COBC_RUNTIME_CACHE = (True, f"Native GnuCOBOL detected at '{local_cobc}'", {"runtime": "native", "path": local_cobc})
+        return _COBC_RUNTIME_CACHE
 
     try:
         res = subprocess.run(
             ["wsl", "-d", "Ubuntu", "--", "which", "cobc"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=25,
         )
         if res.returncode == 0 and res.stdout.strip():
             cobc_path = res.stdout.strip()
-            return True, f"WSL GnuCOBOL detected at '{cobc_path}'", {"runtime": "wsl", "path": cobc_path}
-    except Exception:
-        pass
+            _COBC_RUNTIME_CACHE = (True, f"WSL GnuCOBOL detected at '{cobc_path}'", {"runtime": "wsl", "path": cobc_path})
+            return _COBC_RUNTIME_CACHE
+    except Exception as exc:
+        logger.debug(f"WSL GnuCOBOL check note: {exc}")
 
     return False, "GnuCOBOL (cobc) compiler not found in local PATH or WSL Ubuntu environment.", {}
 
@@ -482,12 +491,15 @@ class CobolCicsAdapter(ImplementationAdapter):
         role: Union[AdapterRole, str] = AdapterRole.REFERENCE,
         input_normalizer: Optional[Union[InputNormalizer, Callable[[dict[str, Any]], dict[str, Any]]]] = None,
         output_normalizer: Optional[Union[OutputNormalizer, Callable[[Any], dict[str, Any]]]] = None,
+        execution_plan: Optional[Any] = None,
+        **kwargs: Any,
     ):
         self.program_id = program_id
         self.source_file = Path(source_file)
         self.copybook_dirs = copybook_dirs or []
         self.data_dir = data_dir
         self.transaction_id = transaction_id
+        self.execution_plan = execution_plan
         self.name = name or f"cics_{program_id.lower()}_{role}"
         self.version = version
         self.role = role
@@ -516,6 +528,9 @@ class CobolCicsAdapter(ImplementationAdapter):
             self._output_normalizer = output_normalizer or PreserveCaseNormalizer().normalize
 
         self.implementation_hash = compute_implementation_hash(self.source_file)
+        self._compiled_binary_path: Optional[str] = None
+        self._compilation_error: str = ""
+        self.execution_plan: Optional[Any] = kwargs.get("execution_plan")
 
     def health_check(self) -> AdapterHealth:
         runtime_ok, diag, details = check_cobol_cics_runtime()
@@ -535,11 +550,30 @@ class CobolCicsAdapter(ImplementationAdapter):
                 diagnostics=f"COBOL source file not found at '{self.source_file}'",
                 capabilities=self.capabilities,
             )
+
+        # Genuinely compile the COBOL program via WSL GnuCOBOL
+        if not self._compiled_binary_path:
+            ok, bin_path, err = compile_cobol_program(
+                source_file=self.source_file,
+                copybook_dirs=self.copybook_dirs,
+                program_id=self.program_id,
+            )
+            if not ok:
+                self._compilation_error = err
+                return AdapterHealth(
+                    adapter_id=f"{self.name}:{self.version}",
+                    status=AdapterHealthStatus.UNAVAILABLE,
+                    is_ready=False,
+                    diagnostics=f"COBOL compilation failed: {err[:300]}",
+                    capabilities=self.capabilities,
+                )
+            self._compiled_binary_path = bin_path
+
         return AdapterHealth(
             adapter_id=f"{self.name}:{self.version}",
             status=AdapterHealthStatus.AVAILABLE,
             is_ready=True,
-            diagnostics=f"COBOL CICS adapter '{self.program_id}' ready ({diag}).",
+            diagnostics=f"COBOL CICS adapter '{self.program_id}' compiled and ready ({diag}).",
             capabilities=self.capabilities,
         )
 
@@ -563,9 +597,9 @@ class CobolCicsAdapter(ImplementationAdapter):
         norm_inputs = self._input_normalizer(raw_inputs)
         start_time = time.perf_counter()
 
-        # Check health
+        # Check health and compile if needed
         health = self.health_check()
-        if not health.is_ready:
+        if not health.is_ready or not self._compiled_binary_path:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
             return Observation(
                 input_id=actual_input_id,
@@ -578,15 +612,41 @@ class CobolCicsAdapter(ImplementationAdapter):
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
                 error_message=health.diagnostics,
-                provenance={"role": str(self.role), "technology": "cics"},
+                provenance={"role": str(self.role), "technology": "cics", "real_cobol_execution": False},
             )
 
         try:
-            # Execute CICS transaction
-            raw_outputs = self._execute_cics_transaction(norm_inputs)
+            # Genuinely execute compiled COBOL binary under WSL
+            ok, raw_outputs, stdout, stderr = execute_compiled_cobol(
+                binary_wsl_path=self._compiled_binary_path,
+                inputs=norm_inputs,
+            )
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
-            norm_outputs = self.normalize_output(raw_outputs)
 
+            if not ok:
+                err_msg = raw_outputs.get("error") or stderr or "COBOL execution failed"
+                logger.warning(f"CobolCicsAdapter '{self.name}' genuine execution failure on input #{actual_input_id}: {err_msg}")
+                return Observation(
+                    input_id=actual_input_id,
+                    raw_inputs=raw_inputs,
+                    normalized_inputs=norm_inputs,
+                    raw_outputs=raw_outputs,
+                    normalized_outputs=raw_outputs,
+                    execution_status="EXCEPTION",
+                    implementation_name=self.name,
+                    implementation_version=self.version,
+                    execution_time_ms=latency_ms,
+                    error_message=str(err_msg),
+                    provenance={
+                        "role": str(self.role),
+                        "technology": "gnu_cobol_wsl",
+                        "program_id": self.program_id,
+                        "real_cobol_execution": True,
+                        "stderr": stderr,
+                    },
+                )
+
+            norm_outputs = self.normalize_output(raw_outputs)
             return Observation(
                 input_id=actual_input_id,
                 raw_inputs=raw_inputs,
@@ -597,7 +657,14 @@ class CobolCicsAdapter(ImplementationAdapter):
                 implementation_name=self.name,
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
-                provenance={"role": str(self.role), "technology": "cics", "program_id": self.program_id},
+                provenance={
+                    "role": str(self.role),
+                    "technology": "gnu_cobol_wsl",
+                    "program_id": self.program_id,
+                    "binary_path": self._compiled_binary_path,
+                    "real_cobol_execution": True,
+                    "stdout_captured": bool(stdout),
+                },
             )
         except Exception as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 3)
@@ -613,105 +680,21 @@ class CobolCicsAdapter(ImplementationAdapter):
                 implementation_version=self.version,
                 execution_time_ms=latency_ms,
                 error_message=str(exc),
-                provenance={"role": str(self.role), "error_type": type(exc).__name__, "technology": "cics"},
+                provenance={"role": str(self.role), "error_type": type(exc).__name__, "technology": "cics", "real_cobol_execution": False},
             )
 
     def _execute_cics_transaction(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        """Executes the CICS COBOL program against the provided input vector/scenario."""
-        scenario = inputs.get("SCENARIO")
-        # When executing COACTUPC under CICS with seed records:
-        if self.program_id.upper() == "COACTUPC":
-            if scenario == "FIRST_ENTRY" or inputs.get("EIBCALEN", 1) == 0:
-                return {
-                    "ACTION": "",
-                    "ERROR": "N",
-                    "SUCCESS": "N",
-                    "MESSAGE": "",
-                    "XCTL_PROGRAM": "COSGN00C",
-                    "RETURN_TO_PREV": "N",
-                    "ACCT_ID": "",
-                    "ACCT_STATUS": "",
-                    "ACCT_BAL": "",
-                }
-            elif scenario == "LOOKUP_ACCOUNT" or str(inputs.get("acct_id", "")).strip() == "100000001":
-                return {
-                    "ACTION": "S",
-                    "ERROR": "N",
-                    "SUCCESS": "N",
-                    "MESSAGE": "",
-                    "XCTL_PROGRAM": "",
-                    "RETURN_TO_PREV": "N",
-                    "ACCT_ID": "100000001",
-                    "ACCT_STATUS": "Y",
-                    "ACCT_BAL": "500.00",
-                }
-            elif scenario == "ACCT_NOT_FOUND" or str(inputs.get("acct_id", "")).strip() == "999999999":
-                return {
-                    "ACTION": "",
-                    "ERROR": "Y",
-                    "SUCCESS": "N",
-                    "MESSAGE": "ACCOUNT NOT FOUND",
-                    "XCTL_PROGRAM": "",
-                    "RETURN_TO_PREV": "N",
-                    "ACCT_ID": "",
-                    "ACCT_STATUS": "",
-                    "ACCT_BAL": "",
-                }
-            elif scenario == "VALIDATE_OK":
-                return {
-                    "ACTION": "N",
-                    "ERROR": "N",
-                    "SUCCESS": "N",
-                    "MESSAGE": "Press F5 to save",
-                    "XCTL_PROGRAM": "",
-                    "RETURN_TO_PREV": "N",
-                    "ACCT_ID": "100000001",
-                    "ACCT_STATUS": "Y",
-                    "ACCT_BAL": "500.00",
-                }
-            elif scenario == "VALIDATION_ERROR":
-                return {
-                    "ACTION": "E",
-                    "ERROR": "Y",
-                    "SUCCESS": "N",
-                    "MESSAGE": "INVALID ACTIVE STATUS (MUST BE Y OR N)",
-                    "XCTL_PROGRAM": "",
-                    "RETURN_TO_PREV": "N",
-                    "ACCT_ID": "100000001",
-                    "ACCT_STATUS": "X",
-                    "ACCT_BAL": "500.00",
-                }
-            elif scenario == "COMMIT_CHANGES":
-                return {
-                    "ACTION": "C",
-                    "ERROR": "N",
-                    "SUCCESS": "Y",
-                    "MESSAGE": "ACCOUNT UPDATED SUCCESSFULLY",
-                    "XCTL_PROGRAM": "",
-                    "RETURN_TO_PREV": "N",
-                    "ACCT_ID": "100000001",
-                    "ACCT_STATUS": "Y",
-                    "ACCT_BAL": "500.00",
-                }
-            elif scenario == "PF3_RETURN" or inputs.get("EIBAID") == "PF3":
-                return {
-                    "ACTION": "",
-                    "ERROR": "N",
-                    "SUCCESS": "N",
-                    "MESSAGE": "",
-                    "XCTL_PROGRAM": "COMEN01C",
-                    "RETURN_TO_PREV": "Y",
-                    "ACCT_ID": "",
-                    "ACCT_STATUS": "",
-                    "ACCT_BAL": "",
-                }
+        """Direct genuine execution. Hardcoded mock dictionary returns are strictly prohibited."""
+        if not self._compiled_binary_path:
+            health = self.health_check()
+            if not health.is_ready or not self._compiled_binary_path:
+                raise RuntimeError(f"Genuine COBOL binary unavailable: {health.diagnostics}")
 
-        # Default execution for general CICS input
-        return {
-            "PROGRAM": self.program_id,
-            "TRANSACTION": self.transaction_id or "CAUP",
-            "STATUS": "NORMAL",
-            "RESP": 0,
-            "INPUT_ECHO": inputs,
-        }
+        ok, raw_outputs, stdout, stderr = execute_compiled_cobol(
+            binary_wsl_path=self._compiled_binary_path,
+            inputs=inputs,
+        )
+        if not ok:
+            raise RuntimeError(f"COBOL execution failed: {raw_outputs.get('error', stderr)}")
+        return raw_outputs
 

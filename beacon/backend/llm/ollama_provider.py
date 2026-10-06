@@ -26,7 +26,7 @@ class OllamaProvider(LLMProvider):
     ):
         self.base_url = (base_url or settings.ollama_base_url or "http://localhost:11434").rstrip("/")
         self.model = model or settings.ollama_model or "qwen2.5-coder:7b"
-        self.timeout = timeout
+        self.timeout = timeout if timeout != 30.0 else float(getattr(settings, "ollama_timeout", 4.0))
 
     def is_available(self) -> bool:
         """Checks if local Ollama daemon is reachable."""
@@ -71,7 +71,7 @@ class OllamaProvider(LLMProvider):
             from operations.resilience import execute_with_retry
             resp_json = execute_with_retry(
                 _fetch,
-                max_attempts=getattr(settings, "max_retry_attempts", 3),
+                max_attempts=1,
                 base_delay_ms=getattr(settings, "retry_backoff_base_ms", 100.0),
                 operation_name=f"ollama_generate:{self.model}",
             )

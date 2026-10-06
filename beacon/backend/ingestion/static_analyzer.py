@@ -364,14 +364,34 @@ class CobolAnalyzer(StaticAnalyzer):
                 )
                 conditions.append(cond_fact)
 
+                # Clean up IS EQUAL TO / EQUAL TO / etc.
+                clean_expr = re.sub(r"\bIS\s+EQUAL\s+TO\b", "EQUAL", expr, flags=re.IGNORECASE)
+                clean_expr = re.sub(r"\bIS\s+NOT\s+EQUAL\s+TO\b", "NOT EQUAL", clean_expr, flags=re.IGNORECASE)
+                clean_expr = re.sub(r"\bEQUAL\s+TO\b", "EQUAL", clean_expr, flags=re.IGNORECASE)
+                clean_expr = re.sub(r"\bIS\s+GREATER\s+THAN\b", "GREATER", clean_expr, flags=re.IGNORECASE)
+                clean_expr = re.sub(r"\bIS\s+LESS\s+THAN\b", "LESS", clean_expr, flags=re.IGNORECASE)
+
                 # Split comparisons if recognizable
-                cmp_match = re.search(r"([A-Z0-9\-]+)\s*(=|<|>|<=|>=|EQUAL|GREATER|LESS)\s*([A-Z0-9\-'\"]+)", expr, re.IGNORECASE)
+                cmp_match = re.search(
+                    r"([A-Z0-9\-]+(?:\s+OF\s+[A-Z0-9\-]+)?)\s+(=|<|>|<=|>=|EQUAL|GREATER|LESS|NOT\s+EQUAL)\s+([A-Z0-9\-'\"]+)",
+                    clean_expr,
+                    re.IGNORECASE,
+                )
                 if cmp_match:
                     comparisons.append(
                         ComparisonFact(
-                            left=cmp_match.group(1),
-                            operator=cmp_match.group(2),
-                            right=cmp_match.group(3),
+                            left=cmp_match.group(1).strip(),
+                            operator=cmp_match.group(2).strip(),
+                            right=cmp_match.group(3).strip(),
+                            location=loc,
+                        )
+                    )
+                elif len(expr.strip()) > 3:
+                    comparisons.append(
+                        ComparisonFact(
+                            left=expr[:50].strip(),
+                            operator="HOLDS",
+                            right="TRUE",
                             location=loc,
                         )
                     )

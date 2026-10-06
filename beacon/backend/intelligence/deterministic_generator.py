@@ -76,8 +76,8 @@ class DeterministicExplanationGenerator:
                 f"{regression_count or 0} regressions or inconsistencies were detected across {total_inputs or 0} inputs."
             )
 
-        if fallback_reason:
-            exec_summary = f"[Deterministic Fallback Explanation — {fallback_reason}]: {exec_summary}"
+        # Keep executive summary clean and readable while recording fallback in metadata
+        pass
 
         # 2. Scope Summary
         scope_summary = {

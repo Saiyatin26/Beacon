@@ -428,5 +428,6 @@ class ThresholdValidationPolicy(BaseModel):
             minimum_samples=max(self.min_required_samples, proposal.minimum_samples),
             outlier_policy=proposal.outlier_policy,
             minimum_bound=0.0,
+            maximum_bound=proposal.candidate_parameters.get("maximum_bound"),
         )
         return True, validated_policy, "Proposal successfully validated."

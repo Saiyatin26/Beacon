@@ -721,7 +721,10 @@ class RepositoryService:
                 )
 
                 for comp in ast_res.comparisons:
-                    invariants.append(f"{comp.left} {comp.operator} {comp.right} (line {comp.location.line if comp.location else '?'})")
+                    if comp.operator == "HOLDS":
+                        invariants.append(f"{comp.left} (line {comp.location.line if comp.location else '?'})")
+                    else:
+                        invariants.append(f"{comp.left} {comp.operator} {comp.right} (line {comp.location.line if comp.location else '?'})")
 
             except Exception as exc:
                 logger.debug(f"Could not parse COBOL for '{rel_p}': {exc}")
