@@ -70,57 +70,65 @@ class AdapterDetector:
         """Loads and binds an authorized adapter (Python callable or COBOL CICS runtime) ONLY when execution is authorized."""
         # 1. COBOL CICS Adapter
         if file_path.suffix.lower() in (".cbl", ".cob", ".cpy"):
-            carddemo_cpy_dirs = [
-                Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy"),
-                Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy-bms"),
-            ]
+            discovered_cpy_dirs = []
             if file_path.parent.exists():
-                carddemo_cpy_dirs.append(file_path.parent)
+                discovered_cpy_dirs.append(file_path.parent)
             if (file_path.parent / "cpy").exists():
-                carddemo_cpy_dirs.append(file_path.parent / "cpy")
+                discovered_cpy_dirs.append(file_path.parent / "cpy")
             if (file_path.parent.parent / "cpy").exists():
-                carddemo_cpy_dirs.append(file_path.parent.parent / "cpy")
+                discovered_cpy_dirs.append(file_path.parent.parent / "cpy")
+            
+            # Find sibling or parent directories containing .cpy files
+            root_cand = file_path.parent
+            for _ in range(3):
+                if root_cand.is_dir():
+                    for cp in list(root_cand.glob("*.cpy")) + list(root_cand.glob("*.CPY")):
+                        if cp.parent not in discovered_cpy_dirs:
+                            discovered_cpy_dirs.append(cp.parent)
+                root_cand = root_cand.parent
 
             source_txt = file_path.read_text(encoding="utf-8", errors="ignore")
             from intelligence.cobol_plan import generate_cobol_execution_plan
             plan = generate_cobol_execution_plan(source_txt, file_path=file_path)
 
-            carddemo_data_dir = Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\data\ASCII")
+            data_dir = None
+            for cand_data in [file_path.parent / "data", file_path.parent.parent / "data"]:
+                if cand_data.is_dir():
+                    data_dir = cand_data
+                    break
+
             return CobolCicsAdapter(
                 program_id=fn_name or plan.program_id,
                 source_file=file_path,
-                copybook_dirs=carddemo_cpy_dirs,
-                data_dir=carddemo_data_dir,
+                copybook_dirs=discovered_cpy_dirs,
+                data_dir=data_dir,
                 name=adapter_name,
                 role=role,
                 version=version,
                 execution_plan=plan,
             )
 
-        # 2. Modern Python Adapter with companion module resolution
+        # 2. Modern Python Adapter with companion module resolution within repo
         parent_dir = file_path.parent
         if str(parent_dir) not in sys.path:
             sys.path.insert(0, str(parent_dir))
         if str(parent_dir.parent) not in sys.path:
             sys.path.insert(0, str(parent_dir.parent))
 
-        # Check for carddemo_data companion
-        companion_sources = [
-            parent_dir / "carddemo_data.py",
-            Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\pipeline\reimpl\python\carddemo_data.py"),
-        ]
-        for c_path in companion_sources:
-            if c_path.exists():
-                try:
-                    c_spec = importlib.util.spec_from_file_location("carddemo_data", str(c_path))
-                    if c_spec and c_spec.loader:
-                        c_mod = importlib.util.module_from_spec(c_spec)
-                        sys.modules["carddemo_data"] = c_mod
-                        sys.modules[f"{parent_dir.name}.carddemo_data"] = c_mod
-                        c_spec.loader.exec_module(c_mod)
-                        break
-                except Exception as c_err:
-                    logger.debug(f"Companion pre-load note: {c_err}")
+        # Dynamically discover companion Python modules in the uploaded repository directory
+        for companion in parent_dir.glob("*.py"):
+            if companion.resolve() != file_path.resolve():
+                comp_name = companion.stem
+                if comp_name not in sys.modules:
+                    try:
+                        c_spec = importlib.util.spec_from_file_location(comp_name, str(companion))
+                        if c_spec and c_spec.loader:
+                            c_mod = importlib.util.module_from_spec(c_spec)
+                            sys.modules[comp_name] = c_mod
+                            sys.modules[f"{parent_dir.name}.{comp_name}"] = c_mod
+                            c_spec.loader.exec_module(c_mod)
+                    except Exception as c_err:
+                        logger.debug(f"Companion pre-load note for {comp_name}: {c_err}")
 
         module_name = f"beacon_dyn_{file_path.stem}_{hash(str(file_path)) & 0xFFFFFFFF}"
         spec = importlib.util.spec_from_file_location(
@@ -137,13 +145,8 @@ class AdapterDetector:
 
         spec.loader.exec_module(module)
         if not hasattr(module, fn_name):
-            # If specified fn_name not found, check if run_vector exists
-            if hasattr(module, "run_vector"):
-                target_fn = getattr(module, "run_vector")
-            else:
-                raise AttributeError(f"Module in '{file_path}' does not contain function '{fn_name}'")
-        else:
-            target_fn = getattr(module, fn_name)
+            raise AttributeError(f"Module in '{file_path}' does not contain function '{fn_name}'")
+        target_fn = getattr(module, fn_name)
 
         return FunctionAdapter(
             target_fn=target_fn,
@@ -273,26 +276,25 @@ class AdapterDetector:
             )
 
         # ── Python Resolution Branch ──────────────────────────────────────────
-        # Check for prioritized canonical test runner 'run_vector'
-        run_vector_candidate = next((c for c in candidates if c.name == "run_vector"), None)
-        if run_vector_candidate:
-            primary_match = run_vector_candidate
-        else:
-            # Static Filtering / ranking heuristics:
-            valid_candidates = [c for c in candidates if len(c.parameters) > 0 or c.has_type_hints]
-            if not valid_candidates:
-                valid_candidates = candidates
+        # Static Filtering / ranking heuristics based on discovered parameters and module match:
+        valid_candidates = [c for c in candidates if len(c.parameters) > 0 or c.has_type_hints]
+        if not valid_candidates:
+            valid_candidates = candidates
 
-            if len(valid_candidates) == 1:
+        if len(valid_candidates) == 1:
+            primary_match = valid_candidates[0]
+        else:
+            stem_matches = [
+                c for c in valid_candidates
+                if Path(c.file_path).stem.lower() in c.name.lower() or c.name.lower() in Path(c.file_path).stem.lower()
+            ]
+            if len(stem_matches) == 1:
+                primary_match = stem_matches[0]
+            elif any(c.name.lower() in ("main", "execute", "run") for c in valid_candidates):
+                primary_match = next(c for c in valid_candidates if c.name.lower() in ("main", "execute", "run"))
+            elif len(valid_candidates) > 0:
                 primary_match = valid_candidates[0]
             else:
-                stem_matches = [
-                    c for c in valid_candidates
-                    if Path(c.file_path).stem.lower() in c.name.lower() or c.name.lower() in Path(c.file_path).stem.lower()
-                ]
-                if len(stem_matches) == 1:
-                    primary_match = stem_matches[0]
-                else:
                     return AdapterResolutionResult(
                         status=AdapterResolutionStatus.ADAPTER_AMBIGUOUS,
                         method="AUTOMATIC_STATIC",

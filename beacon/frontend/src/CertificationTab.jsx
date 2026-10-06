@@ -1710,16 +1710,33 @@ export default function CertificationTab({
                   <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
                     ⚖️ Oracle Reconciliation
                   </h3>
-                  <span style={{ fontSize: "11px", fontWeight: "600", color: "#166534", background: "#f0fdf4", border: "1px solid #bbf7d0", padding: "1px 6px", borderRadius: "4px" }}>
-                    Evidence-Reconciled
-                  </span>
+                  {(() => {
+                    const isReconciled = Boolean(
+                      meta.oracle_reconciliation_status === "VALIDATED" ||
+                      (meta.oracle_reconciliation_status && meta.oracle_reconciliation_status !== "NOT_AVAILABLE") ||
+                      (meta.oracle_coverage != null && oracleSetId && oracleSetId !== "—")
+                    );
+                    return (
+                      <span style={{
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        color: isReconciled ? "#166534" : "#991b1b",
+                        background: isReconciled ? "#f0fdf4" : "#fef2f2",
+                        border: isReconciled ? "1px solid #bbf7d0" : "1px solid #fecaca",
+                        padding: "1px 6px",
+                        borderRadius: "4px"
+                      }}>
+                        {isReconciled ? "Evidence-Reconciled" : "Reconciliation Unavailable"}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div style={{ fontSize: "12px", color: "#334155", lineHeight: "1.7" }}>
                   <div><strong>Reconciliation Status:</strong> <span style={{ color: (meta.oracle_reconciliation_status === "VALIDATED" || meta.oracle_coverage != null) ? "#166534" : "#dc2626", fontWeight: "600" }}>{meta.oracle_reconciliation_status || (meta.oracle_coverage != null ? "VALIDATED" : "NOT_AVAILABLE")}</span></div>
                   <div><strong>Oracle Coverage:</strong> <strong style={{ color: "#1e40af" }}>{oracleCoverage}</strong></div>
                   <div><strong>Oracle Set ID:</strong> <span style={{ fontFamily: "monospace", color: "#0f172a" }}>{oracleSetId}</span></div>
                   <div><strong>Oracle Hash (SHA-256):</strong> <span style={{ fontFamily: "monospace", color: "#475569", fontSize: "11px" }}>{oracleSetHash ? (oracleSetHash.length > 28 ? oracleSetHash.slice(0, 24) + "..." : oracleSetHash) : "—"}</span></div>
-                  <div><strong>Cross-Binding:</strong> <span style={{ color: "#166534" }}>Verified to Execution & Input Identity</span></div>
+                  <div><strong>Cross-Binding:</strong> <span style={{ color: (meta.oracle_reconciliation_status === "VALIDATED" || meta.oracle_coverage != null) ? "#166534" : "#64748b" }}>{(meta.oracle_reconciliation_status === "VALIDATED" || meta.oracle_coverage != null) ? "Verified to Execution & Input Identity" : "Not Reconciled"}</span></div>
                 </div>
               </section>
 

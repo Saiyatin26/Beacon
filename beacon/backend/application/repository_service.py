@@ -548,7 +548,7 @@ class RepositoryService:
                 code_text = py_f.read_text(encoding="utf-8", errors="ignore")
                 ast_res = py_analyzer.analyze(code_text, file_name=rel_p)
 
-                # Scan for imported companion modules (e.g. carddemo_data)
+                # Scan for imported companion modules in project
                 imported_modules = set()
                 py_stdlib = {
                     "__future__", "typing", "dataclasses", "decimal", "re", "json",
@@ -561,18 +561,15 @@ class RepositoryService:
                     if mod_name and mod_name not in py_stdlib:
                         imported_modules.add(mod_name)
 
-                # Check companion module resolution
+                # Check companion module resolution within the uploaded target and root directories
                 resolved_companions = []
                 missing_companions = []
-                carddemo_python_dir = Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\pipeline\reimpl\python")
                 for mod_name in imported_modules:
                     target_file = f"{mod_name}.py"
                     companion_found = False
                     if (py_f.parent / target_file).exists() or (root_dir / target_file).exists():
                         companion_found = True
                     elif not is_single_file and any(f.name.lower() == target_file.lower() for f in target_dir.rglob("*.py")):
-                        companion_found = True
-                    elif carddemo_python_dir.exists() and (carddemo_python_dir / target_file).exists():
                         companion_found = True
 
                     if companion_found:
@@ -621,11 +618,16 @@ class RepositoryService:
             [f for f in target_dir.rglob("*") if f.is_file() and f.suffix.lower() in cobol_exts] if not is_single_file else []
         )
 
-        carddemo_cpy_dirs = [
-            Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy"),
-            Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\cpy-bms"),
-        ]
-        carddemo_data_dir = Path(r"C:\Users\Navaneeth Motamarry\masquerade-cobol\test-codebases\carddemo\app\data\ASCII")
+        # Dynamically discover candidate copybook directories from the target workspace
+        candidate_cpy_dirs = []
+        if not is_single_file:
+            for p in list(target_dir.rglob("*.cpy")) + list(target_dir.rglob("*.CPY")):
+                if p.parent not in candidate_cpy_dirs:
+                    candidate_cpy_dirs.append(p.parent)
+            for sub in ("cpy", "copy", "cpy-bms", "copybooks", "copylib"):
+                sub_dir = target_dir / sub
+                if sub_dir.is_dir() and sub_dir not in candidate_cpy_dirs:
+                    candidate_cpy_dirs.append(sub_dir)
 
         standard_cics_cpys = {"DFHAID", "DFHBMSCA", "DFHEIBLK", "DFHRESP"}
 
@@ -641,24 +643,22 @@ class RepositoryService:
                 if is_cics:
                     frameworks.add("cics")
 
-                # Resolve copybooks
+                # Resolve copybooks dynamically from project
                 req_copybooks = meta.get("copybooks", [])
                 resolved_cpys = []
                 missing_cpys = []
+                active_cpy_dirs = list(candidate_cpy_dirs)
+                if cbl_f.parent not in active_cpy_dirs:
+                    active_cpy_dirs.append(cbl_f.parent)
+
                 for cpy_name in req_copybooks:
                     cpy_found = False
                     if is_cics and cpy_name in standard_cics_cpys:
                         cpy_found = True
                     else:
                         for ext in (".cpy", ".CPY", ".cbl", ""):
-                            if not is_single_file and (target_dir / f"{cpy_name}{ext}").exists():
-                                cpy_found = True
-                                break
-                            if not is_single_file and (target_dir / "cpy" / f"{cpy_name}{ext}").exists():
-                                cpy_found = True
-                                break
-                            for cdir in carddemo_cpy_dirs:
-                                if cdir.exists() and (cdir / f"{cpy_name}{ext}").exists():
+                            for cdir in active_cpy_dirs:
+                                if (cdir / f"{cpy_name}{ext}").exists():
                                     cpy_found = True
                                     break
                             if cpy_found:
@@ -668,7 +668,7 @@ class RepositoryService:
                     else:
                         missing_cpys.append(cpy_name)
 
-                # Resolve datasets
+                # Resolve datasets dynamically within target repository
                 req_datasets = meta.get("datasets", [])
                 resolved_dss = []
                 missing_dss = []
@@ -677,12 +677,7 @@ class RepositoryService:
                     stem_clean = ds_name.lower().replace("-", "").replace("_", "").replace("lit", "")
                     if not is_single_file:
                         for f in target_dir.rglob("*"):
-                            if f.is_file() and stem_clean in f.stem.lower():
-                                ds_found = True
-                                break
-                    if not ds_found and carddemo_data_dir.exists():
-                        for f in carddemo_data_dir.glob("*.txt"):
-                            if stem_clean in f.stem.lower() or f.stem.lower().startswith(stem_clean[:4]):
+                            if f.is_file() and (stem_clean in f.stem.lower() or f.stem.lower().startswith(stem_clean[:4])):
                                 ds_found = True
                                 break
                     if ds_found:

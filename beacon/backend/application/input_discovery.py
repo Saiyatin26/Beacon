@@ -174,33 +174,6 @@ class InputDiscoveryEngine:
                     source_desc = f"AI Condition Mining from COBOL '{primary_cbl.name}'"
                     method_desc = "AI_CONDITION_MINING"
 
-        # 2c. Check for authoritative code-defined transaction scenarios (e.g. CardDemo run_vector scenarios)
-        if not discovered_cases:
-            for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
-                if not repo_p_str:
-                    continue
-                repo_p = Path(repo_p_str)
-                py_candidates = [repo_p] if repo_p.is_file() and repo_p.suffix == ".py" else list(repo_p.rglob("*.py"))
-                for py_f in py_candidates:
-                    try:
-                        src_text = py_f.read_text(encoding="utf-8", errors="ignore")
-                        if "run_vector" in src_text or "scenario" in src_text.lower():
-                            scenarios = re.findall(r'(?:scenario|SCENARIO)\s*==\s*["\']([A-Z0-9_]+)["\']', src_text)
-                            if scenarios:
-                                seen_scenarios = set()
-                                for sc in scenarios:
-                                    if sc not in seen_scenarios:
-                                        seen_scenarios.add(sc)
-                                        discovered_cases.append({"SCENARIO": sc})
-                                if discovered_cases:
-                                    source_desc = f"Authoritative transaction scenarios from '{py_f.name}'"
-                                    method_desc = "CODE_DEFINED_SCENARIO_DISCOVERY"
-                                    break
-                    except Exception:
-                        pass
-                if discovered_cases:
-                    break
-
         # 3. Fail closed if zero legitimate inputs found — NEVER manufacture synthetic data!
         if not discovered_cases:
             return InputDiscoveryResult(
@@ -304,18 +277,19 @@ class InputDiscoveryEngine:
         cbl_text = cbl_file.read_text(encoding="utf-8", errors="ignore")
         py_text = py_file.read_text(encoding="utf-8", errors="ignore") if py_file and py_file.exists() else ""
 
-        # Collect copybook context if available
+        # Collect copybook context if available across parent directories
         cpy_context = []
+        referenced_cpys = set(re.findall(r"COPY\s+([A-Za-z0-9_-]+)", cbl_text, re.IGNORECASE))
         for parent_dir in (cbl_file.parent, cbl_file.parent.parent):
-            for sub in ("cpy", "copy", "cpy-bms"):
-                cp_path = parent_dir / sub
-                if cp_path.is_dir():
-                    for cf in list(cp_path.glob("*.cpy"))[:5]:
-                        try:
-                            cpy_context.append(f"--- COPYBOOK: {cf.name} ---\n{cf.read_text(encoding='utf-8', errors='ignore')[:1500]}")
-                        except Exception:
-                            pass
-        copybook_summary = "\n".join(cpy_context)[:4000]
+            if not parent_dir.is_dir():
+                continue
+            for cf in parent_dir.rglob("*.cpy"):
+                if cf.stem.upper() in referenced_cpys or len(cpy_context) < 15:
+                    try:
+                        cpy_context.append(f"--- COPYBOOK: {cf.name} ---\n{cf.read_text(encoding='utf-8', errors='ignore')[:4000]}")
+                    except Exception:
+                        pass
+        copybook_summary = "\n".join(cpy_context)[:40000]
 
         discovered_rules: list[dict[str, Any]] = []
         test_cases: list[dict[str, Any]] = []
@@ -325,12 +299,12 @@ class InputDiscoveryEngine:
             from llm.manager import get_provider_manager
             pm = get_provider_manager()
             prompt = f"""You are BEACON's AI Behavioral Condition and Test Case Synthesizer.
-Analyze the following COBOL source program, copybooks, and modern re-implementation to discover all operational conditions and generate complete, executable test input vectors that exercise each branch.
+Analyze the complete COBOL source program, copybooks, and modern re-implementation to discover all operational conditions and generate complete, executable test input vectors that exercise each branch.
 
 COBOL Program: {cbl_file.name}
 COBOL Source:
 ```cobol
-{cbl_text[:8000]}
+{cbl_text[:120000]}
 ```
 
 Associated Copybooks:
@@ -340,7 +314,7 @@ Associated Copybooks:
 
 Modern Re-implementation Snippet:
 ```python
-{py_text[:3000]}
+{py_text[:60000]}
 ```
 
 Requirements:
@@ -390,9 +364,9 @@ Return ONLY a valid JSON object in this exact schema:
             ast_rules = []
             ast_cases = []
             
-            # Find IF and EVALUATE statements directly in source lines
+            # Find IF, EVALUATE, and WHEN statements directly in source lines
             cond_pattern = re.compile(r"^\s{6,}(?:IF|EVALUATE|WHEN)\s+(.*?)(?:\s+THEN|\.|\s*$)", re.IGNORECASE)
-            var_compare_pattern = re.compile(r"([A-Z0-9\-]+)\s*(=|NOT\s*=|IN|NOT\s*IN|>|<|IS\s+NUMERIC|IS\s+NOT\s+NUMERIC)\s*([A-Z0-9\-\'\"]+)?", re.IGNORECASE)
+            var_compare_pattern = re.compile(r"([A-Z0-9\-]+)\s*(?:=|EQUAL\s+TO|EQUAL|NOT\s*=|IN|NOT\s*IN|>|<|IS\s+NUMERIC|IS\s+NOT\s+NUMERIC)\s*([A-Z0-9\-\'\"]+)?", re.IGNORECASE)
 
             rule_idx = 1
             for l_num, line in enumerate(lines, 1):
@@ -414,18 +388,26 @@ Return ONLY a valid JSON object in this exact schema:
                         comp_match = var_compare_pattern.search(cond_str)
                         if comp_match:
                             var_name = comp_match.group(1).strip()
-                            op = comp_match.group(2).strip().upper()
-                            val = comp_match.group(3).strip().strip("'\"") if comp_match.group(3) else ""
+                            val = comp_match.group(2).strip().strip("'\"") if comp_match.group(2) else ""
+                            cond_upper = cond_str.upper()
                             
-                            if "IN" in op:
-                                # For IN ('Y', 'N'), synthesize valid and invalid members
+                            if "IN" in cond_upper:
                                 ast_cases.append({
                                     var_name: "Y",
                                     "__condition_provenance": rule_id,
                                 })
                                 ast_cases.append({
-                                    var_name: "X",
-                                    "__condition_provenance": f"{rule_id}_VIOLATION",
+                                    var_name: "N",
+                                    "__condition_provenance": f"{rule_id}_ALTERNATIVE",
+                                })
+                            elif "LOW-VALUES" in cond_upper or "SPACES" in cond_upper:
+                                ast_cases.append({
+                                    var_name: "",
+                                    "__condition_provenance": rule_id,
+                                })
+                                ast_cases.append({
+                                    var_name: "TEST01",
+                                    "__condition_provenance": f"{rule_id}_NON_EMPTY",
                                 })
                             else:
                                 ast_cases.append({
@@ -433,7 +415,6 @@ Return ONLY a valid JSON object in this exact schema:
                                     "__condition_provenance": rule_id,
                                 })
                         elif "PFK" in cond_str.upper() or "PF" in cond_str.upper():
-                            # Level-88 AID key condition
                             pf_match = re.search(r"PFK?0?([0-9]{1,2})", cond_str, re.IGNORECASE)
                             if pf_match:
                                 pf_num = pf_match.group(1)
@@ -447,13 +428,21 @@ Return ONLY a valid JSON object in this exact schema:
                                 "__condition_provenance": rule_id,
                             })
 
-                if len(ast_rules) >= 20:
+                if len(ast_rules) >= 100:
                     break
 
             if not discovered_rules:
                 discovered_rules = ast_rules
             if not test_cases:
-                test_cases = ast_cases
+                # Deduplicate test cases by value
+                unique_cases = []
+                seen_signatures = set()
+                for c in ast_cases:
+                    sig = json.dumps({k: v for k, v in c.items() if not k.startswith("__")}, sort_keys=True)
+                    if sig not in seen_signatures:
+                        seen_signatures.add(sig)
+                        unique_cases.append(c)
+                test_cases = unique_cases
 
         return test_cases, discovered_rules
 

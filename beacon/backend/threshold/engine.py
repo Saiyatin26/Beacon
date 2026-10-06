@@ -154,50 +154,26 @@ class ThresholdEngine:
         sample_count = len(clean_observations)
         ev_ids = evidence_ids_canonical
 
-        # Check Sample Sufficiency
+        # Check Sample Sufficiency: strictly fail-closed with NO magic or small-sample fallback
         if sample_count < active_policy.minimum_samples:
-            # Insufficient samples: Check explicit fallback
-            if active_policy.fallback_strategy and active_policy.fallback_value is not None:
-                fb_val = float(active_policy.fallback_value)
-                return ThresholdResolution(
-                    resolution_id=resolution_id,
-                    metric=metric,
-                    strategy=active_policy.fallback_strategy,
-                    status=ThresholdStatus.RESOLVED,
-                    raw_value=fb_val,
-                    final_value=fb_val,
-                    minimum_bound=active_policy.minimum_bound,
-                    maximum_bound=active_policy.maximum_bound,
-                    sample_count=sample_count,
-                    minimum_required_samples=active_policy.minimum_samples,
-                    evidence_ids=ev_ids,
-                    estimator=active_policy.estimator,
-                    fallback_used=True,
-                    fallback_reason=f"Insufficient reference samples ({sample_count} < {active_policy.minimum_samples})",
-                    policy_id=active_policy.policy_id,
-                    policy_version=active_policy.version,
-                    policy_hash=policy_hash,
-                )
-            else:
-                # No valid fallback -> Fail-Closed INSUFFICIENT_EVIDENCE
-                return ThresholdResolution(
-                    resolution_id=resolution_id,
-                    metric=metric,
-                    strategy=active_policy.strategy,
-                    status=ThresholdStatus.INSUFFICIENT_EVIDENCE,
-                    raw_value=None,
-                    final_value=None,
-                    minimum_bound=active_policy.minimum_bound,
-                    maximum_bound=active_policy.maximum_bound,
-                    sample_count=sample_count,
-                    minimum_required_samples=active_policy.minimum_samples,
-                    evidence_ids=ev_ids,
-                    estimator=active_policy.estimator,
-                    fallback_used=False,
-                    policy_id=active_policy.policy_id,
-                    policy_version=active_policy.version,
-                    policy_hash=policy_hash,
-                )
+            return ThresholdResolution(
+                resolution_id=resolution_id,
+                metric=metric,
+                strategy=active_policy.strategy,
+                status=ThresholdStatus.INSUFFICIENT_EVIDENCE,
+                raw_value=None,
+                final_value=None,
+                minimum_bound=active_policy.minimum_bound,
+                maximum_bound=active_policy.maximum_bound,
+                sample_count=sample_count,
+                minimum_required_samples=active_policy.minimum_samples,
+                evidence_ids=ev_ids,
+                estimator=active_policy.estimator,
+                fallback_used=False,
+                policy_id=active_policy.policy_id,
+                policy_version=active_policy.version,
+                policy_hash=policy_hash,
+            )
 
         # Apply Outlier Policy
         filtered_observations, outliers_count = self._apply_outlier_policy(
