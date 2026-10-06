@@ -623,19 +623,26 @@ class ExplanationContextBuilder:
                 total_inputs = getattr(evaluation_result.summary, "evaluated_inputs", 0) or getattr(evaluation_result.summary, "total_inputs", 0)
                 matching_count = getattr(evaluation_result.summary, "equivalent_inputs", 0)
                 regression_count = getattr(evaluation_result.summary, "different_inputs", 0) or getattr(evaluation_result.summary, "total_differences", 0)
+                # Must consume the authoritative mathematical score from evaluation summary
+                equiv_score = getattr(evaluation_result.summary, "behavioral_score", None)
             elif hasattr(evaluation_result, "input_results") and evaluation_result.input_results:
                 total_inputs = len(evaluation_result.input_results)
                 regression_count = len([ir for ir in evaluation_result.input_results if getattr(ir, "verdict", None) == EvaluationVerdict.DIFFERENT or getattr(ir, "differences", None)])
                 matching_count = total_inputs - regression_count
+                equiv_score = None
             else:
                 regression_count = len(differences_summary)
                 total_inputs = len(valid_input_ids) or regression_count or 1
                 matching_count = max(0, total_inputs - regression_count)
+                equiv_score = None
 
-            if total_inputs is not None and total_inputs > 0:
-                equiv_score = float(matching_count or 0) / float(total_inputs)
-            else:
-                equiv_score = 0.0
+            if equiv_score is None:
+                if artifact and getattr(artifact, "score", None) is not None:
+                    equiv_score = float(artifact.score)
+                elif total_inputs is not None and total_inputs > 0:
+                    equiv_score = float(matching_count or 0) / float(total_inputs)
+                else:
+                    equiv_score = 0.0
         elif not is_strict_v2:
             total_inputs = len(valid_input_ids) or (artifact.metrics.unique_input_count if artifact and artifact.metrics else 1)
             matching_count = (artifact.metrics.matching_case_count if artifact and artifact.metrics else 0)

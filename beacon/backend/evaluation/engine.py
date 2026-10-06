@@ -644,8 +644,12 @@ class BehavioralEvaluationEngine:
 
                 # Normative contract (PDF Section 5):
                 # N_d is the number of valid authoritative comparable observations for dimension d.
+                # INCONCLUSIVE and NOT_APPLICABLE are treated as not comparable, not as maximum deviation.
                 # If no valid observations exist, the dimension is unavailable; it is not assigned score 1.
-                valid_obs = [dr for dr in dim_results if dr.verdict != EvaluationVerdict.NOT_APPLICABLE]
+                valid_obs = [
+                    dr for dr in dim_results
+                    if dr.verdict in (EvaluationVerdict.EQUIVALENT, EvaluationVerdict.DIFFERENT, EvaluationVerdict.ERROR)
+                ]
                 n_d = len(valid_obs)
                 if n_d > 0:
                     devs = []
@@ -654,7 +658,7 @@ class BehavioralEvaluationEngine:
                             devs.append(dr.deviation)
                         elif dr.verdict == EvaluationVerdict.EQUIVALENT:
                             devs.append(0.0)
-                        elif dr.verdict in (EvaluationVerdict.DIFFERENT, EvaluationVerdict.ERROR, EvaluationVerdict.INCONCLUSIVE):
+                        elif dr.verdict in (EvaluationVerdict.DIFFERENT, EvaluationVerdict.ERROR):
                             devs.append(1.0)
                         else:
                             devs.append(0.0)
@@ -722,19 +726,23 @@ class BehavioralEvaluationEngine:
             behavioral_score = sum(scoring_weights[k] * dim_scores[k] for k in dim_scores)
             behavioral_score = max(0.0, min(1.0, behavioral_score))
         else:
-            behavioral_score = 1.0 if not input_results else 0.0
+            # Frozen contract: Missing evidence NEVER becomes 100% equivalence
+            behavioral_score = 0.0
 
         observed_dev = max(0.0, min(1.0, 1.0 - behavioral_score))
         percentage_score = round(100.0 * behavioral_score, 2)
 
-        # Coverage: ObservedComparableCells / RequiredComparableCells
+        # Coverage: Valid Comparable Cells / Required Comparable Cells
         req_dims = available_dims if available_dims else target_dims
         req_cells = total_items * len(req_dims) if total_items > 0 else 0
         obs_cells = sum(
-            len([dr for dr in r.dimension_results.values() if dr.verdict != EvaluationVerdict.NOT_APPLICABLE])
+            len([
+                dr for dr in r.dimension_results.values()
+                if dr.verdict in (EvaluationVerdict.EQUIVALENT, EvaluationVerdict.DIFFERENT, EvaluationVerdict.ERROR)
+            ])
             for r in input_results
         )
-        coverage = (obs_cells / req_cells) if req_cells > 0 else 1.0
+        coverage = (obs_cells / req_cells) if req_cells > 0 else 0.0
         coverage = max(0.0, min(1.0, coverage))
 
         return EvaluationSummary(

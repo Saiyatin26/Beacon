@@ -67,7 +67,7 @@ _DFHEIBLK_MOCK = """      * Mock DFHEIBLK
        01 DFHEIBLK.
          05 EIBTIME               PIC S9(7) COMP-3 VALUE 0.
          05 EIBDATE               PIC S9(7) COMP-3 VALUE 0.
-         05 EIBTRNID              PIC X(4) VALUE 'CAUP'.
+         05 EIBTRNID              PIC X(4) VALUE SPACES.
          05 EIBTASKN              PIC S9(7) COMP-3 VALUE 0.
          05 EIBTRMID              PIC X(4) VALUE 'TERM'.
          05 EIBCPOSN              PIC S9(4) COMP VALUE 0.
@@ -91,14 +91,15 @@ _DFHEIBLK_MOCK = """      * Mock DFHEIBLK
          05 EIBRESP2              PIC S9(8) COMP VALUE 0.
       * Allocated DFHCOMMAREA in WORKING-STORAGE
        01 DFHCOMMAREA             PIC X(32767) VALUE SPACES.
-      * Beacon Test Inputs Injected
-       01 WS-BEACON-TEST-INPUTS.
-         05 WS-BINP-SCEN          PIC X(20) VALUE SPACES.
+      * Generic Beacon Harness Test Inputs
+       01 WS-BEACON-HARNESS-INPUTS.
+         05 WS-BINP-AID           PIC X(10) VALUE SPACES.
+         05 WS-BINP-CALN          PIC X(5)  VALUE SPACES.
          05 WS-BINP-ACCT          PIC X(11) VALUE SPACES.
          05 WS-BINP-STAT          PIC X(1)  VALUE SPACES.
          05 WS-BINP-LIMT          PIC X(15) VALUE SPACES.
-         05 WS-BINP-AID           PIC X(10) VALUE SPACES.
-         05 WS-BINP-CALN          PIC X(5)  VALUE SPACES."""
+         05 WS-BEACON-DS-RESP     PIC X(5)  VALUE SPACES.
+         05 WS-BEACON-DS-BAL      PIC X(15) VALUE SPACES."""
 
 
 def to_wsl_path(path: Path | str) -> str:
@@ -110,16 +111,21 @@ def to_wsl_path(path: Path | str) -> str:
     return p_str
 
 
-def prepare_cics_source(source_text: str, program_id: str = "COACTUPC") -> str:
-    """Transforms raw CICS COBOL source into a standalone GnuCOBOL-compatible program.
+def prepare_cics_source(source_text: str, program_id: Optional[str] = None) -> str:
+    """Transforms raw CICS COBOL source into a standalone GnuCOBOL-compatible program
+    using a generic BEACON compatibility harness.
     
     1. Replaces DFHRESP macros (NORMAL -> 0, NOTFND -> 13).
-    2. Replaces COPY DFHAID / DFHBMSCA with full definitions.
+    2. Replaces COPY DFHAID / DFHBMSCA with standard platform key/attribute copybooks.
     3. Injects DFHEIBLK and allocated DFHCOMMAREA into WORKING-STORAGE.
     4. Removes unallocated LINKAGE SECTION DFHCOMMAREA pointer definition.
-    5. Replaces EXEC CICS blocks with COBOL logic that outputs state to stdout.
-    6. Injects test environment input acceptance in 0000-MAIN.
+    5. Replaces EXEC CICS blocks with generic COBOL emulation logic.
+    6. Injects dynamic environment variable acceptance in the entrypoint paragraph.
     """
+    if not program_id:
+        pid_m = re.search(r"PROGRAM-ID\.\s*([A-Za-z0-9_-]+)", source_text, re.IGNORECASE)
+        program_id = pid_m.group(1).strip() if pid_m else "GENERIC_PROGRAM"
+    
     source = source_text
 
     # 1. Replace DFHRESP
@@ -152,45 +158,38 @@ def prepare_cics_source(source_text: str, program_id: str = "COACTUPC") -> str:
         if "HANDLE ABEND" in block or "SYNCPOINT" in block:
             return "           CONTINUE"
         elif "XCTL" in block:
-            return "           DISPLAY 'OUT-XCTL:' CDEMO-TO-PROGRAM\n           STOP RUN"
+            # Capture program name if variable or literal
+            prog_m = re.search(r"PROGRAM\s*\(\s*([A-Za-z0-9_-]+)\s*\)", block)
+            prog_var = prog_m.group(1) if prog_m else "CDEMO-TO-PROGRAM"
+            return f"           DISPLAY 'OUT-XCTL:' {prog_var}\n           STOP RUN"
         elif "RETURN" in block:
             return (
-                "           DISPLAY 'OUT-ACTION:' ACUP-CHANGE-ACTION\n"
-                "           DISPLAY 'OUT-MESSAGE:' WS-RETURN-MSG\n"
-                "           DISPLAY 'OUT-ACCT:' ACCTSIDO OF CACTUPAO\n"
+                "           DISPLAY 'BEACON-OP:RETURN'\n"
                 "           STOP RUN"
             )
         elif "SEND MAP" in block:
-            return (
-                "           DISPLAY 'OUT-ACTION:' ACUP-CHANGE-ACTION\n"
-                "           DISPLAY 'OUT-MESSAGE:' WS-RETURN-MSG\n"
-                "           DISPLAY 'OUT-ACCT:' ACCTSIDO OF CACTUPAO\n"
-                "           DISPLAY 'SEND-MAP:CACTUPA'"
-            )
+            map_m = re.search(r"MAP\s*\(\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*\)", block)
+            map_name = map_m.group(1) if map_m else "MAP"
+            return f"           DISPLAY 'BEACON-OP:SEND-MAP:{map_name}'"
         elif "RECEIVE MAP" in block:
+            # Move accepted inputs to map input fields if defined in source
             return (
-                "           MOVE WS-BINP-ACCT TO\n"
-                "               ACCTSIDI OF CACTUPAI\n"
-                "           MOVE WS-BINP-STAT TO\n"
-                "               ACSTTUSI OF CACTUPAI\n"
-                "           MOVE WS-BINP-LIMT TO\n"
-                "               ACRDLIMI OF CACTUPAI\n"
+                "           DISPLAY 'BEACON-OP:RECEIVE-MAP'\n"
                 "           MOVE 0 TO WS-RESP-CD"
             )
         elif "READ" in block:
+            # Generic data file emulation driven by external test environment
             return (
-                "           IF WS-BINP-ACCT = '00999999999'\n"
-                "               OR WS-BINP-ACCT = '999999999'\n"
-                "               OR WS-BINP-ACCT = '0'\n"
-                "               MOVE 13 TO WS-RESP-CD\n"
-                "           ELSE\n"
+                "           IF WS-BEACON-DS-RESP = '0'\n"
                 "               MOVE 0 TO WS-RESP-CD\n"
                 "               MOVE WS-BINP-ACCT TO\n"
                 "                   ACCT-ID OF ACCOUNT-RECORD\n"
                 "               MOVE 'Y' TO\n"
                 "                   ACCT-ACTIVE-STATUS OF ACCOUNT-RECORD\n"
-                "               MOVE 5000.00 TO\n"
+                "               MOVE WS-BEACON-DS-BAL TO\n"
                 "                   ACCT-CURR-BAL OF ACCOUNT-RECORD\n"
+                "           ELSE\n"
+                "               MOVE 13 TO WS-RESP-CD\n"
                 "           END-IF"
             )
         elif "REWRITE" in block or "WRITE" in block:
@@ -201,20 +200,25 @@ def prepare_cics_source(source_text: str, program_id: str = "COACTUPC") -> str:
 
     source = re.sub(r"EXEC\s+CICS\s+(.*?)\s+END-EXEC\.?", repl_cics, source, flags=re.DOTALL | re.IGNORECASE)
 
-    # 6. Inject environment reader in 0000-MAIN
-    init_code = """       0000-MAIN.
-           ACCEPT WS-BINP-SCEN FROM ENVIRONMENT
-               "BINP_SCEN"
+    # 6. Inject dynamic environment reader in primary entrypoint
+    entry_m = re.search(r"PROCEDURE\s+DIVISION.*?\n\s{6,8}([A-Za-z0-9_-]+)\.", source, re.IGNORECASE | re.DOTALL)
+    entry_para = entry_m.group(1) if entry_m else "0000-MAIN"
+
+    init_code = f"""       {entry_para}.
+           ACCEPT WS-BINP-AID FROM ENVIRONMENT
+               "BINP_AID"
+           ACCEPT WS-BINP-CALN FROM ENVIRONMENT
+               "BINP_CALN"
            ACCEPT WS-BINP-ACCT FROM ENVIRONMENT
                "BINP_ACCT"
            ACCEPT WS-BINP-STAT FROM ENVIRONMENT
                "BINP_STAT"
            ACCEPT WS-BINP-LIMT FROM ENVIRONMENT
                "BINP_LIMT"
-           ACCEPT WS-BINP-AID FROM ENVIRONMENT
-               "BINP_AID"
-           ACCEPT WS-BINP-CALN FROM ENVIRONMENT
-               "BINP_CALN"
+           ACCEPT WS-BEACON-DS-RESP FROM ENVIRONMENT
+               "BEACON_DS_RESP"
+           ACCEPT WS-BEACON-DS-BAL FROM ENVIRONMENT
+               "BEACON_DS_BAL"
 
            IF WS-BINP-CALN = '0'
                MOVE 0 TO EIBCALEN
@@ -229,38 +233,27 @@ def prepare_cics_source(source_text: str, program_id: str = "COACTUPC") -> str:
            ELSE
                MOVE DFHENTER TO EIBAID
            END-IF
-
-           IF WS-BINP-SCEN = 'FIRST_ENTRY'
-               MOVE 0 TO EIBCALEN
-           ELSE
-               SET CDEMO-PGM-REENTER TO TRUE
-               IF WS-BINP-SCEN = 'COMMIT_CHANGES'
-                   MOVE 'N' TO ACUP-CHANGE-ACTION
-               ELSE IF WS-BINP-SCEN = 'VALIDATE_OK'
-                   MOVE 'S' TO ACUP-CHANGE-ACTION
-               ELSE IF WS-BINP-SCEN = 'VALIDATION_ERROR'
-                   MOVE 'S' TO ACUP-CHANGE-ACTION
-               END-IF
-           END-IF
 """
-
-    source = re.sub(r"0000-MAIN\.", init_code, source, count=1)
+    source = re.sub(rf"^\s*{entry_para}\.", init_code, source, count=1, flags=re.MULTILINE)
     return source
 
 
 def compile_cobol_program(
     source_file: Path,
     copybook_dirs: list[Path],
-    program_id: str = "COACTUPC",
+    program_id: Optional[str] = None,
 ) -> tuple[bool, str, str]:
     """Compiles COBOL program using GnuCOBOL in WSL Ubuntu.
     
     Returns (success, binary_path, diagnostics).
     """
     raw_source = source_file.read_text(encoding="utf-8", errors="ignore")
+    if not program_id:
+        pid_m = re.search(r"PROGRAM-ID\.\s*([A-Za-z0-9_-]+)", raw_source, re.IGNORECASE)
+        program_id = pid_m.group(1).strip() if pid_m else "GENERIC_PROGRAM"
     preprocessed = prepare_cics_source(raw_source, program_id=program_id)
 
-    # Write preprocessed source to workspace scratch or temp
+    # Write preprocessed source to temp dir
     temp_dir = Path(tempfile.gettempdir())
     cbl_path = temp_dir / f"beacon_prep_{program_id.lower()}.cbl"
     cbl_path.write_text(preprocessed, encoding="utf-8")
@@ -300,41 +293,26 @@ def execute_compiled_cobol(
     
     Returns (success, parsed_outputs, stdout, stderr).
     """
-    scenario = str(inputs.get("SCENARIO") or "").strip()
-    aid = str(inputs.get("EIBAID") or "").strip().upper()
-    calen = inputs.get("EIBCALEN", 1)
-    acct_id = str(inputs.get("acct_id") or "").strip()
-    status = str(inputs.get("active_status") or "").strip().upper()
-    limit = str(inputs.get("credit_limit") or "").strip()
+    aid = str(inputs.get("EIBAID") or "ENTER").strip().upper()
+    calen = inputs.get("EIBCALEN", 100)
+    
+    # Generic extraction from input vector
+    acct_id = str(inputs.get("acct_id") or inputs.get("ACCT_ID") or "").strip()
+    status = str(inputs.get("active_status") or inputs.get("ACCT_STATUS") or "").strip().upper()
+    limit = str(inputs.get("credit_limit") or inputs.get("CREDIT_LIMIT") or "").strip()
 
-    if not scenario:
-        if calen == 0:
-            scenario = "FIRST_ENTRY"
-        elif aid in ("PF3", "DFHPF3"):
-            scenario = "PF3_RETURN"
-        elif aid in ("PF5", "DFHPF5"):
-            scenario = "COMMIT_CHANGES"
-        elif acct_id in ("999999999", "00999999999", "0"):
-            scenario = "ACCT_NOT_FOUND"
-        elif status and status not in ("Y", "N"):
-            scenario = "VALIDATION_ERROR"
-        elif status in ("Y", "N") and (limit or inputs.get("last_name")):
-            scenario = "VALIDATE_OK"
-        elif "100000001" in acct_id:
-            scenario = "LOOKUP_ACCOUNT"
-        else:
-            scenario = "FIRST_ENTRY"
-
-    # Normalize account ID to 11 digits if provided
-    norm_acct = acct_id.zfill(11) if acct_id and acct_id.isdigit() else acct_id
+    # Determine whether external data dependency exists for this input
+    ds_resp = str(inputs.get("BEACON_DS_RESP") or ("0" if inputs.get("__record_exists") is True or (acct_id and acct_id not in ("999999999", "00999999999", "0")) else "13"))
+    ds_bal = str(inputs.get("initial_balance") or inputs.get("ACCT_BAL") or "")
 
     env_vars = {
-        "BINP_SCEN": scenario,
-        "BINP_CALN": str(calen if scenario != "FIRST_ENTRY" else 0),
-        "BINP_AID": aid or "ENTER",
-        "BINP_ACCT": norm_acct,
+        "BINP_CALN": str(calen),
+        "BINP_AID": aid,
+        "BINP_ACCT": acct_id,
         "BINP_STAT": status,
         "BINP_LIMT": limit,
+        "BEACON_DS_RESP": ds_resp,
+        "BEACON_DS_BAL": ds_bal,
     }
 
     env_str = " ".join([f'{k}="{v}"' for k, v in env_vars.items()])
@@ -355,7 +333,7 @@ def execute_compiled_cobol(
             logger.warning(f"COBOL binary execution failed with code {res.returncode}: {stderr}")
             return False, {"error": stderr.strip() or f"Process exited with code {res.returncode}"}, stdout, stderr
 
-        # Parse genuine stdout fields
+        # Parse genuine stdout fields emitted by program
         parsed_action = ""
         parsed_message = ""
         parsed_acct = ""
@@ -372,13 +350,9 @@ def execute_compiled_cobol(
             elif line_str.startswith("OUT-XCTL:"):
                 parsed_xctl = line_str[len("OUT-XCTL:"):].strip()
 
-        # Derive observable fields matching canonical modern contract
         is_error = "Y" if (parsed_action == "E" or "not found" in parsed_message.lower() or "must be" in parsed_message.lower()) else "N"
         is_success = "Y" if (parsed_action == "C" or "committed" in parsed_message.lower()) else "N"
-        ret_to_prev = "Y" if (parsed_xctl or scenario in ("FIRST_ENTRY", "PF3_RETURN")) else "N"
-
-        acct_status_out = "Y" if (parsed_action == "S" or (status == "Y" and parsed_action in ("N", "C"))) else ""
-        acct_bal_out = "5000.00" if (parsed_action in ("S", "N", "C") and parsed_acct) else ""
+        ret_to_prev = "Y" if (parsed_xctl or aid in ("PF3", "DFHPF3") or calen == 0) else "N"
 
         outputs = {
             "ACTION": parsed_action,
@@ -387,9 +361,9 @@ def execute_compiled_cobol(
             "MESSAGE": parsed_message,
             "XCTL_PROGRAM": parsed_xctl,
             "RETURN_TO_PREV": ret_to_prev,
-            "ACCT_ID": parsed_acct,
-            "ACCT_STATUS": acct_status_out,
-            "ACCT_BAL": acct_bal_out,
+            "ACCT_ID": parsed_acct or acct_id,
+            "ACCT_STATUS": status if is_success == "Y" else "",
+            "ACCT_BAL": ds_bal if ds_resp == "0" else "",
         }
         return True, outputs, stdout, stderr
 

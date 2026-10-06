@@ -76,71 +76,116 @@ def _extract_source_ground_truth(source_code: str) -> dict[str, Any]:
         if cond and cond not in conditions:
             conditions.append(cond)
 
+    # Entrypoint / Paragraphs
+    paragraphs = []
+    proc_idx = source_code.upper().find("PROCEDURE DIVISION")
+    if proc_idx != -1:
+        proc_text = source_code[proc_idx:]
+        for m in re.finditer(r"^\s{6,8}([A-Za-z0-9_-]+)\.\s*$", proc_text, re.MULTILINE):
+            p_name = m.group(1).upper()
+            if p_name not in ("EXIT", "STOP", "GOBACK", "CONTINUE"):
+                paragraphs.append(p_name)
+    entrypoint = paragraphs[0] if paragraphs else "MAIN"
+
+    # Input fields in WORKING-STORAGE / LINKAGE
+    declared_fields = []
+    ws_idx = source_code.upper().find("WORKING-STORAGE SECTION")
+    if ws_idx != -1:
+        ws_text = source_code[ws_idx:]
+        end_idx = ws_text.upper().find("PROCEDURE DIVISION")
+        if end_idx != -1:
+            ws_text = ws_text[:end_idx]
+        for m in re.finditer(r"\b(?:01|05|10)\s+([A-Za-z0-9_-]+)", ws_text):
+            fld = m.group(1).upper()
+            if not fld.startswith("FILLER") and fld not in declared_fields:
+                declared_fields.append(fld)
+
     return {
         "program_id": program_id,
+        "entrypoint": entrypoint,
+        "paragraphs": paragraphs,
         "copybooks": sorted(list(copybooks)),
         "cics_operations": sorted(list(cics_ops)),
         "datasets": sorted(list(datasets)),
         "transactions": sorted(list(transactions)),
         "conditions": conditions[:25],
+        "declared_fields": declared_fields[:30],
     }
 
 
 def validate_execution_plan(plan: CobolExecutionPlan, source_code: str) -> CobolExecutionPlan:
-    """Validates an AI-generated execution plan strictly against the uploaded COBOL source code."""
+    """Validates an AI-generated execution plan strictly against the uploaded COBOL source code.
+    Any AI claims not grounded in the source are rejected rather than receiving hardcoded fallbacks.
+    """
     ground_truth = _extract_source_ground_truth(source_code)
+    source_upper = source_code.upper()
     details: dict[str, Any] = {
         "program_id_match": False,
         "copybooks_validated": [],
         "copybooks_unverified": [],
         "cics_operations_validated": [],
         "cics_operations_unverified": [],
+        "datasets_validated": [],
+        "inputs_validated": [],
     }
 
     # 1. Program ID
     if plan.program_id.upper() == ground_truth["program_id"].upper() or ground_truth["program_id"] == "UNKNOWN":
         details["program_id_match"] = True
     else:
-        # Fall back to ground truth program ID if LLM hallucinated
         plan.program_id = ground_truth["program_id"]
         details["program_id_match"] = True
 
-    # 2. Copybooks
+    # 2. Entrypoint
+    if plan.entrypoint and plan.entrypoint.upper() in ground_truth.get("paragraphs", []):
+        pass
+    else:
+        plan.entrypoint = ground_truth.get("entrypoint", "MAIN")
+
+    # 3. Copybooks - validate against actual COPY statements
     gt_copybooks = set(ground_truth["copybooks"])
+    valid_copybooks = []
     for cpy in plan.copybooks:
         clean = cpy.strip().upper()
-        if clean in gt_copybooks or any(clean in g for g in gt_copybooks):
+        if clean in gt_copybooks or any(clean in g for g in gt_copybooks) or clean in source_upper:
+            valid_copybooks.append(clean)
             details["copybooks_validated"].append(clean)
         else:
             details["copybooks_unverified"].append(clean)
+    plan.copybooks = sorted(list(set(valid_copybooks).union(gt_copybooks)))
 
-    # Ensure all actual source copybooks are present in the plan
-    merged_copybooks = list(set(plan.copybooks).union(gt_copybooks))
-    plan.copybooks = sorted(merged_copybooks)
-
-    # 3. CICS Operations
+    # 4. CICS Operations
     gt_ops = set(ground_truth["cics_operations"])
+    valid_ops = []
     for op in plan.cics_operations:
         clean = op.strip().upper()
         if any(clean in g or g in clean for g in gt_ops):
+            valid_ops.append(clean)
             details["cics_operations_validated"].append(clean)
         else:
             details["cics_operations_unverified"].append(clean)
+    plan.cics_operations = sorted(list(set(valid_ops).union(gt_ops)))
 
-    merged_ops = list(set(plan.cics_operations).union(gt_ops))
-    plan.cics_operations = sorted(merged_ops)
+    # 5. Datasets & Files
+    gt_datasets = set(ground_truth["datasets"])
+    valid_datasets = [d for d in plan.files_data_dependencies if d.upper() in gt_datasets or d.upper() in source_upper]
+    plan.files_data_dependencies = sorted(list(set(valid_datasets).union(gt_datasets)))
+    details["datasets_validated"] = plan.files_data_dependencies
 
-    # 4. Transactions and Datasets
-    if not plan.transactions and ground_truth["transactions"]:
-        plan.transactions = ground_truth["transactions"]
-    if not plan.files_data_dependencies and ground_truth["datasets"]:
-        plan.files_data_dependencies = ground_truth["datasets"]
+    # 6. Transactions
+    gt_tx = set(ground_truth["transactions"])
+    valid_tx = [t for t in plan.transactions if t.upper() in gt_tx or t.upper() in source_upper]
+    plan.transactions = sorted(list(set(valid_tx).union(gt_tx)))
 
-    # 5. Required Inputs
-    if not plan.required_inputs:
-        plan.required_inputs = ["acct_id", "active_status", "credit_limit", "EIBAID", "EIBCALEN"]
+    # 7. Required Inputs: Validate against declared source identifiers
+    valid_inputs = []
+    for inp in plan.required_inputs:
+        clean_inp = str(inp).strip()
+        if clean_inp.upper() in source_upper or clean_inp.upper().replace("-", "") in source_upper.replace("-", ""):
+            valid_inputs.append(clean_inp)
+    plan.required_inputs = valid_inputs
+    details["inputs_validated"] = valid_inputs
 
-    # Mark validation passed
     plan.validation_passed = True
     plan.validation_details = details
     return plan
@@ -153,13 +198,18 @@ def generate_cobol_execution_plan(
 ) -> CobolExecutionPlan:
     """Invokes OpenRouter / ProviderManager to analyze COBOL source and generate a structured execution plan.
     
-    Validates the AI output against the uploaded source code. Never relies on unverified hallucinations.
+    Derives actual program ID, entrypoint, CICS operations, COPY dependencies, datasets,
+    transactions, input fields, control-flow conditions, and observable fields strictly from source.
     """
     ground_truth = _extract_source_ground_truth(source_code)
     pm = get_provider_manager()
 
     prompt = f"""You are an expert Mainframe & COBOL Systems Architect.
-Analyze the following COBOL source code and produce a structured JSON execution plan for compiling and executing this program in a testing runtime.
+Analyze the following COBOL source code and produce a structured JSON execution plan for compiling and executing this program.
+
+Requirements:
+- Derive the actual program ID, actual entrypoint paragraph, actual CICS commands, actual COPY dependencies, actual datasets/files, actual transaction IDs, actual input fields, and actual observable output fields strictly from this source.
+- Do NOT use hardcoded or generic templates. Every field must be grounded in this specific code.
 
 COBOL SOURCE:
 ```cobol
@@ -169,27 +219,24 @@ COBOL SOURCE:
 Output ONLY a single valid JSON object matching this schema:
 {{
   "program_id": "{ground_truth['program_id']}",
-  "entrypoint": "0000-MAIN",
-  "cics_operations": ["RECEIVE", "SEND", "READ", "WRITE", "REWRITE", "RETURN", "XCTL"],
+  "entrypoint": "{ground_truth['entrypoint']}",
+  "cics_operations": ["Operations discovered from EXEC CICS statements"],
   "conditions": ["Control flow conditions discovered in source"],
-  "required_inputs": ["acct_id", "active_status", "credit_limit", "EIBAID", "EIBCALEN"],
+  "required_inputs": ["Input field names discovered in source"],
   "copybooks": ["Copybooks actually referenced by COPY statements"],
-  "files_data_dependencies": ["ACCTFILE", "CUSTFILE", "CARDXREF"],
-  "transactions": ["CAUP"],
-  "expected_observable_output_fields": ["ACTION", "MESSAGE", "ERROR", "SUCCESS", "ACCT_ID", "ACCT_STATUS", "ACCT_BAL", "XCTL_PROGRAM"]
+  "files_data_dependencies": ["Datasets or files referenced"],
+  "transactions": ["Transaction identifiers discovered"],
+  "expected_observable_output_fields": ["Observable output fields discovered"]
 }}
 """
     system_prompt = "You are an automated COBOL analysis system. Respond ONLY with valid JSON."
     plan: Optional[CobolExecutionPlan] = None
-    provider_used = "offline"
-    model_used = "deterministic"
 
     if allow_external_llm:
         try:
             resp = pm.generate(prompt=prompt, system=system_prompt, json_mode=True)
             if resp.success and resp.raw_text:
                 raw_text = resp.raw_text.strip()
-                parsed = None
                 if "```json" in raw_text:
                     raw_text = raw_text.split("```json", 1)[1].split("```", 1)[0].strip()
                 elif "```" in raw_text:
@@ -207,25 +254,20 @@ Output ONLY a single valid JSON object matching this schema:
 
                 plan = CobolExecutionPlan(
                     program_id=str(parsed.get("program_id") or ground_truth["program_id"]).strip(),
-                    entrypoint=str(parsed.get("entrypoint") or "0000-MAIN").strip(),
+                    entrypoint=str(parsed.get("entrypoint") or ground_truth["entrypoint"]).strip(),
                     cics_operations=list(parsed.get("cics_operations") or ground_truth["cics_operations"]),
                     conditions=list(parsed.get("conditions") or ground_truth["conditions"]),
-                    required_inputs=list(parsed.get("required_inputs") or ["acct_id", "active_status", "credit_limit", "EIBAID", "EIBCALEN"]),
+                    required_inputs=list(parsed.get("required_inputs") or []),
                     copybooks=list(parsed.get("copybooks") or ground_truth["copybooks"]),
                     files_data_dependencies=list(parsed.get("files_data_dependencies") or ground_truth["datasets"]),
                     transactions=list(parsed.get("transactions") or ground_truth["transactions"]),
-                    expected_observable_output_fields=list(
-                        parsed.get("expected_observable_output_fields")
-                        or ["ACTION", "MESSAGE", "ERROR", "SUCCESS", "ACCT_ID", "ACCT_STATUS", "ACCT_BAL", "XCTL_PROGRAM"]
-                    ),
+                    expected_observable_output_fields=list(parsed.get("expected_observable_output_fields") or []),
                     provenance={
                         "provider": resp.provider_name,
                         "model": resp.model_name,
                         "execution_time_ms": getattr(resp, "execution_time_ms", getattr(resp, "latency_ms", 0.0)),
                     },
                 )
-                provider_used = resp.provider_name
-                model_used = resp.model_name
         except Exception as exc:
             logger.warning(f"AI execution plan generation failed: {exc}")
 
@@ -233,14 +275,14 @@ Output ONLY a single valid JSON object matching this schema:
     if plan is None:
         plan = CobolExecutionPlan(
             program_id=ground_truth["program_id"],
-            entrypoint="0000-MAIN",
+            entrypoint=ground_truth["entrypoint"],
             cics_operations=ground_truth["cics_operations"],
             conditions=ground_truth["conditions"],
-            required_inputs=["acct_id", "active_status", "credit_limit", "EIBAID", "EIBCALEN"],
+            required_inputs=[],
             copybooks=ground_truth["copybooks"],
             files_data_dependencies=ground_truth["datasets"],
             transactions=ground_truth["transactions"],
-            expected_observable_output_fields=["ACTION", "MESSAGE", "ERROR", "SUCCESS", "ACCT_ID", "ACCT_STATUS", "ACCT_BAL", "XCTL_PROGRAM"],
+            expected_observable_output_fields=[],
             provenance={
                 "provider": "deterministic_ground_truth",
                 "model": "cobol_static_ast",

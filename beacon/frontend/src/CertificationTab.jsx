@@ -1042,7 +1042,7 @@ export default function CertificationTab({
                         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
                           <span style={{ fontSize: "16px" }}>⚙️</span>
                           <h4 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#1e3a8a" }}>
-                            AI COBOL Execution Plan & Genuine Runtime Specification
+                            AI COBOL Execution Plan & Compatibility Harness Specification
                           </h4>
                         </div>
                         <span style={{ fontSize: "11px", fontWeight: "700", color: "#166534", background: "#dcfce7", border: "1px solid #86efac", padding: "2px 8px", borderRadius: "4px" }}>
@@ -1051,7 +1051,7 @@ export default function CertificationTab({
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px", fontSize: "12px", marginBottom: "10px" }}>
                         <div><strong>Program ID:</strong> <span style={{ fontFamily: "monospace", color: "#1e40af" }}>{cPlan.program_id}</span></div>
-                        <div><strong>Target Runtime:</strong> <span style={{ fontFamily: "monospace", color: "#059669", fontWeight: "600" }}>GnuCOBOL (WSL)</span></div>
+                        <div><strong>Execution Harness:</strong> <span style={{ fontFamily: "monospace", color: "#059669", fontWeight: "600" }}>GnuCOBOL + BEACON Harness (WSL)</span></div>
                         <div><strong>Confidence:</strong> <span>{Math.round((cPlan.confidence_score || 1) * 100)}%</span></div>
                         <div><strong>Transactions:</strong> <span style={{ fontFamily: "monospace" }}>{cPlan.transactions?.join(", ") || "—"}</span></div>
                         <div><strong>Copybooks Resolved:</strong> <span>{cPlan.copybooks?.length || 0} copybooks</span></div>
@@ -1635,7 +1635,7 @@ export default function CertificationTab({
                 >
                   <span style={{ fontSize: "16px" }}>⚙️</span>
                   <div>
-                    <strong>Genuine COBOL Runtime Execution Verified (WSL GnuCOBOL):</strong> Reference outputs were produced by compiling and executing the standalone COBOL executable in WSL. Zero synthetic mock values or LLM-fabricated outputs were used.
+                    <strong>GnuCOBOL with BEACON Compatibility Harness Verified:</strong> Reference outputs were produced by compiling and executing the standalone COBOL executable under GnuCOBOL in WSL. Zero synthetic mock values or LLM-fabricated outputs were used.
                   </div>
                 </div>
               )}

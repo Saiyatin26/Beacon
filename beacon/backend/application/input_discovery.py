@@ -299,39 +299,63 @@ class InputDiscoveryEngine:
         py_file: Optional[Path] = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Uses AI / LLM (with deterministic AST fallback) to discover operational conditions
-        from COBOL source code and synthesize complete, legitimate test cases.
+        from COBOL source code and synthesize complete, legitimate test cases strictly grounded in source.
         """
         cbl_text = cbl_file.read_text(encoding="utf-8", errors="ignore")
         py_text = py_file.read_text(encoding="utf-8", errors="ignore") if py_file and py_file.exists() else ""
 
+        # Collect copybook context if available
+        cpy_context = []
+        for parent_dir in (cbl_file.parent, cbl_file.parent.parent):
+            for sub in ("cpy", "copy", "cpy-bms"):
+                cp_path = parent_dir / sub
+                if cp_path.is_dir():
+                    for cf in list(cp_path.glob("*.cpy"))[:5]:
+                        try:
+                            cpy_context.append(f"--- COPYBOOK: {cf.name} ---\n{cf.read_text(encoding='utf-8', errors='ignore')[:1500]}")
+                        except Exception:
+                            pass
+        copybook_summary = "\n".join(cpy_context)[:4000]
+
         discovered_rules: list[dict[str, Any]] = []
         test_cases: list[dict[str, Any]] = []
 
-        # Attempt LLM-assisted condition and test case synthesis
+        # 1. Attempt LLM-assisted condition and test case synthesis
         try:
             from llm.manager import get_provider_manager
             pm = get_provider_manager()
             prompt = f"""You are BEACON's AI Behavioral Condition and Test Case Synthesizer.
-Analyze the following COBOL source program and modern re-implementation to discover all operational conditions and generate complete, executable test input vectors that exercise each branch.
+Analyze the following COBOL source program, copybooks, and modern re-implementation to discover all operational conditions and generate complete, executable test input vectors that exercise each branch.
 
 COBOL Program: {cbl_file.name}
-COBOL Source Snippet:
-{cbl_text[:4000]}
+COBOL Source:
+```cobol
+{cbl_text[:8000]}
+```
+
+Associated Copybooks:
+```cobol
+{copybook_summary}
+```
 
 Modern Re-implementation Snippet:
-{py_text[:4000]}
+```python
+{py_text[:3000]}
+```
 
 Requirements:
-1. Extract operational business conditions and branch invariants from the COBOL code (e.g. initial entry, account lookup, account not found, validation error on invalid status/limits, confirmation prompt, commit transaction, menu exit).
-2. For each condition, generate a concrete test case object with input fields ('acct_id', 'active_status', 'credit_limit', 'cash_credit_limit', 'last_name', 'EIBAID', 'EIBCALEN', 'SCENARIO').
+1. Extract the actual operational business conditions, branch paths, and validation rules present in THIS COBOL code.
+2. For each discovered condition, identify the input fields defined in the COBOL source (e.g. WORKING-STORAGE, LINKAGE, or BMS maps).
+3. Generate concrete test case dictionaries containing legitimate values to exercise each branch. Use ONLY field names that exist in this program's source.
+4. Each test case MUST carry a '__condition_provenance' explaining which exact source condition/line it exercises.
 
-Return ONLY a JSON object in this exact schema:
+Return ONLY a valid JSON object in this exact schema:
 {{
   "rules": [
-    {{"rule_id": "RULE-001", "description": "IF EIBCALEN = 0: Initial entry into program and prompt for account ID", "source_location": "Line 880", "discovery_method": "AI_CONDITION_MINING"}}
+    {{"rule_id": "RULE-001", "description": "IF condition description", "source_location": "Line or paragraph", "discovery_method": "AI_CONDITION_MINING"}}
   ],
   "test_cases": [
-    {{"SCENARIO": "FIRST_ENTRY", "EIBCALEN": 0, "EIBAID": "ENTER", "acct_id": ""}}
+    {{"field_name": "value", "__condition_provenance": "RULE-001"}}
   ]
 }}
 """
@@ -339,121 +363,97 @@ Return ONLY a JSON object in this exact schema:
             if resp.success and resp.parsed_json and isinstance(resp.parsed_json, dict):
                 llm_rules = resp.parsed_json.get("rules", [])
                 llm_cases = resp.parsed_json.get("test_cases", [])
-                if isinstance(llm_rules, list) and isinstance(llm_cases, list) and len(llm_cases) >= 4:
+                
+                # Deterministic source validation of LLM claims
+                cbl_upper = cbl_text.upper()
+                if isinstance(llm_rules, list):
                     for r in llm_rules:
-                        if isinstance(r, dict):
+                        if isinstance(r, dict) and r.get("description"):
                             r["discovery_method"] = "AI_CONDITION_MINING"
                             discovered_rules.append(r)
+
+                if isinstance(llm_cases, list):
                     for tc in llm_cases:
-                        if isinstance(tc, dict):
-                            test_cases.append(tc)
+                        if isinstance(tc, dict) and len(tc) > 0:
+                            # Verify that at least one field key (excluding provenance) exists in source
+                            field_keys = [k for k in tc.keys() if not k.startswith("__")]
+                            valid_fields = [k for k in field_keys if k.upper() in cbl_upper or k.upper().replace("-", "") in cbl_upper.replace("-", "")]
+                            if valid_fields or not field_keys:
+                                test_cases.append(tc)
         except Exception as e:
             logger.debug(f"LLM condition mining attempt note: {e}")
 
-        # Deterministic Grounded Invariant Synthesis (guarantees branch coverage even if offline)
-        if not discovered_rules or len(discovered_rules) < 4:
-            discovered_rules = [
-                {
-                    "rule_id": "RULE-001",
-                    "description": "IF EIBCALEN = 0: Fresh entry into program, initialize Commarea and prompt for account ID",
-                    "source_location": "Line 880",
-                    "discovery_method": "AI_CONDITION_MINING",
-                },
-                {
-                    "rule_id": "RULE-002",
-                    "description": "IF CCARD-AID-PFK03: Return to calling program or main menu (COMEN01C)",
-                    "source_location": "Line 927",
-                    "discovery_method": "AI_CONDITION_MINING",
-                },
-                {
-                    "rule_id": "RULE-003",
-                    "description": "IF ACCTSIDI = '*' OR SPACES: Prompt 'Enter or update id of account to update'",
-                    "source_location": "Line 1051",
-                    "discovery_method": "AI_CONDITION_MINING",
-                },
-                {
-                    "rule_id": "RULE-004",
-                    "description": "IF ACCT-ID NOT FOUND: Validation error 'Did not find this account in account master file'",
-                    "source_location": "Line 1210",
-                    "discovery_method": "AI_CONDITION_MINING",
-                },
-                {
-                    "rule_id": "RULE-005",
-                    "description": "IF ACSTTUS NOT IN ('Y', 'N'): Validation error 'Account Active Status must be Y or N'",
-                    "source_location": "Line 1472",
-                    "discovery_method": "AI_CONDITION_MINING",
-                },
-                {
-                    "rule_id": "RULE-006",
-                    "description": "IF VALID-EDITS AND ENTER: Validate changes and prompt 'Changes validated.Press F5 to save'",
-                    "source_location": "Line 1463",
-                    "discovery_method": "AI_CONDITION_MINING",
-                },
-                {
-                    "rule_id": "RULE-007",
-                    "description": "IF CCARD-AID-PFK05 AND CONFIRMED: Commit account and customer updates ('Changes committed to database')",
-                    "source_location": "Line 979",
-                    "discovery_method": "AI_CONDITION_MINING",
-                },
-            ]
+        # 2. Deterministic AST/Regex Condition Extraction (Grounded Fallback)
+        if not discovered_rules or not test_cases:
+            logger.info("Extracting conditions and test cases via deterministic COBOL AST analysis.")
+            lines = cbl_text.splitlines()
+            ast_rules = []
+            ast_cases = []
+            
+            # Find IF and EVALUATE statements directly in source lines
+            cond_pattern = re.compile(r"^\s{6,}(?:IF|EVALUATE|WHEN)\s+(.*?)(?:\s+THEN|\.|\s*$)", re.IGNORECASE)
+            var_compare_pattern = re.compile(r"([A-Z0-9\-]+)\s*(=|NOT\s*=|IN|NOT\s*IN|>|<|IS\s+NUMERIC|IS\s+NOT\s+NUMERIC)\s*([A-Z0-9\-\'\"]+)?", re.IGNORECASE)
 
-        if not test_cases or len(test_cases) < 4:
-            test_cases = [
-                {
-                    "SCENARIO": "FIRST_ENTRY",
-                    "EIBCALEN": 0,
-                    "EIBAID": "ENTER",
-                    "acct_id": "",
-                },
-                {
-                    "SCENARIO": "LOOKUP_ACCOUNT",
-                    "EIBCALEN": 100,
-                    "EIBAID": "ENTER",
-                    "acct_id": "100000001",
-                },
-                {
-                    "SCENARIO": "ACCT_NOT_FOUND",
-                    "EIBCALEN": 100,
-                    "EIBAID": "ENTER",
-                    "acct_id": "999999999",
-                },
-                {
-                    "SCENARIO": "VALIDATION_ERROR",
-                    "EIBCALEN": 100,
-                    "EIBAID": "ENTER",
-                    "acct_id": "100000001",
-                    "active_status": "X",
-                    "credit_limit": "15000.00",
-                    "cash_credit_limit": "7500.00",
-                    "last_name": "Doe Updated",
-                },
-                {
-                    "SCENARIO": "VALIDATE_OK",
-                    "EIBCALEN": 100,
-                    "EIBAID": "ENTER",
-                    "acct_id": "100000001",
-                    "active_status": "Y",
-                    "credit_limit": "15000.00",
-                    "cash_credit_limit": "7500.00",
-                    "last_name": "Doe Updated",
-                },
-                {
-                    "SCENARIO": "COMMIT_CHANGES",
-                    "EIBCALEN": 100,
-                    "EIBAID": "PF5",
-                    "acct_id": "100000001",
-                    "active_status": "Y",
-                    "credit_limit": "15000.00",
-                    "cash_credit_limit": "7500.00",
-                    "last_name": "Doe Updated",
-                },
-                {
-                    "SCENARIO": "PF3_RETURN",
-                    "EIBCALEN": 100,
-                    "EIBAID": "PF3",
-                    "acct_id": "",
-                },
-            ]
+            rule_idx = 1
+            for l_num, line in enumerate(lines, 1):
+                clean_line = line[6:72] if len(line) >= 7 else line
+                m = cond_pattern.search(clean_line)
+                if m:
+                    cond_str = m.group(1).strip()
+                    if len(cond_str) > 3 and not cond_str.startswith("*"):
+                        rule_id = f"RULE-{rule_idx:03d}"
+                        ast_rules.append({
+                            "rule_id": rule_id,
+                            "description": f"Condition: {cond_str}",
+                            "source_location": f"Line {l_num}",
+                            "discovery_method": "SOURCE_AST_INSPECTION",
+                        })
+                        rule_idx += 1
+
+                        # Synthesize case from the condition if variable comparison is detected
+                        comp_match = var_compare_pattern.search(cond_str)
+                        if comp_match:
+                            var_name = comp_match.group(1).strip()
+                            op = comp_match.group(2).strip().upper()
+                            val = comp_match.group(3).strip().strip("'\"") if comp_match.group(3) else ""
+                            
+                            if "IN" in op:
+                                # For IN ('Y', 'N'), synthesize valid and invalid members
+                                ast_cases.append({
+                                    var_name: "Y",
+                                    "__condition_provenance": rule_id,
+                                })
+                                ast_cases.append({
+                                    var_name: "X",
+                                    "__condition_provenance": f"{rule_id}_VIOLATION",
+                                })
+                            else:
+                                ast_cases.append({
+                                    var_name: val if val else "1",
+                                    "__condition_provenance": rule_id,
+                                })
+                        elif "PFK" in cond_str.upper() or "PF" in cond_str.upper():
+                            # Level-88 AID key condition
+                            pf_match = re.search(r"PFK?0?([0-9]{1,2})", cond_str, re.IGNORECASE)
+                            if pf_match:
+                                pf_num = pf_match.group(1)
+                                ast_cases.append({
+                                    "EIBAID": f"PF{pf_num}",
+                                    "__condition_provenance": rule_id,
+                                })
+                        elif "ENTER" in cond_str.upper():
+                            ast_cases.append({
+                                "EIBAID": "ENTER",
+                                "__condition_provenance": rule_id,
+                            })
+
+                if len(ast_rules) >= 20:
+                    break
+
+            if not discovered_rules:
+                discovered_rules = ast_rules
+            if not test_cases:
+                test_cases = ast_cases
 
         return test_cases, discovered_rules
 
