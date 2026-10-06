@@ -561,15 +561,18 @@ class RepositoryService:
                     if mod_name and mod_name not in py_stdlib:
                         imported_modules.add(mod_name)
 
-                # Check companion module resolution within the uploaded target and root directories
+                # Check companion module resolution within the uploaded target, root, and standard companions directories
                 resolved_companions = []
                 missing_companions = []
+                standard_py_dir = Path(__file__).resolve().parent.parent.parent / "data" / "python_companions"
                 for mod_name in imported_modules:
                     target_file = f"{mod_name}.py"
                     companion_found = False
                     if (py_f.parent / target_file).exists() or (root_dir / target_file).exists():
                         companion_found = True
                     elif not is_single_file and any(f.name.lower() == target_file.lower() for f in target_dir.rglob("*.py")):
+                        companion_found = True
+                    elif standard_py_dir.is_dir() and (standard_py_dir / target_file).exists():
                         companion_found = True
 
                     if companion_found:
@@ -579,8 +582,8 @@ class RepositoryService:
 
                 # Collect candidate functions as entrypoints
                 for fn in ast_res.functions:
-                    # Ignore internal/dunder functions
-                    if fn.name.startswith("_") and not fn.name.startswith("__init__"):
+                    # Ignore internal/dunder/private functions
+                    if fn.name.startswith("_"):
                         continue
                     entrypoints.append(
                         DiscoveredEntrypoint(
@@ -618,8 +621,11 @@ class RepositoryService:
             [f for f in target_dir.rglob("*") if f.is_file() and f.suffix.lower() in cobol_exts] if not is_single_file else []
         )
 
-        # Dynamically discover candidate copybook directories from the target workspace
+        # Dynamically discover candidate copybook directories from workspace and standard library
         candidate_cpy_dirs = []
+        standard_cpy_dir = Path(__file__).resolve().parent.parent.parent / "data" / "copybooks"
+        if standard_cpy_dir.is_dir():
+            candidate_cpy_dirs.append(standard_cpy_dir)
         if not is_single_file:
             for p in list(target_dir.rglob("*.cpy")) + list(target_dir.rglob("*.CPY")):
                 if p.parent not in candidate_cpy_dirs:

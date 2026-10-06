@@ -71,6 +71,9 @@ class AdapterDetector:
         # 1. COBOL CICS Adapter
         if file_path.suffix.lower() in (".cbl", ".cob", ".cpy"):
             discovered_cpy_dirs = []
+            standard_cpy_dir = Path(__file__).resolve().parent.parent.parent / "data" / "copybooks"
+            if standard_cpy_dir.is_dir():
+                discovered_cpy_dirs.append(standard_cpy_dir)
             if file_path.parent.exists():
                 discovered_cpy_dirs.append(file_path.parent)
             if (file_path.parent / "cpy").exists():
@@ -115,20 +118,28 @@ class AdapterDetector:
         if str(parent_dir.parent) not in sys.path:
             sys.path.insert(0, str(parent_dir.parent))
 
-        # Dynamically discover companion Python modules in the uploaded repository directory
-        for companion in parent_dir.glob("*.py"):
-            if companion.resolve() != file_path.resolve():
-                comp_name = companion.stem
-                if comp_name not in sys.modules:
-                    try:
-                        c_spec = importlib.util.spec_from_file_location(comp_name, str(companion))
-                        if c_spec and c_spec.loader:
-                            c_mod = importlib.util.module_from_spec(c_spec)
-                            sys.modules[comp_name] = c_mod
-                            sys.modules[f"{parent_dir.name}.{comp_name}"] = c_mod
-                            c_spec.loader.exec_module(c_mod)
-                    except Exception as c_err:
-                        logger.debug(f"Companion pre-load note for {comp_name}: {c_err}")
+        # Dynamically discover companion Python modules in uploaded dir and standard companions
+        standard_py_dir = Path(__file__).resolve().parent.parent.parent / "data" / "python_companions"
+        search_dirs = [parent_dir]
+        if standard_py_dir.is_dir():
+            search_dirs.append(standard_py_dir)
+            if str(standard_py_dir) not in sys.path:
+                sys.path.insert(0, str(standard_py_dir))
+
+        for s_dir in search_dirs:
+            for companion in s_dir.glob("*.py"):
+                if companion.resolve() != file_path.resolve():
+                    comp_name = companion.stem
+                    if comp_name not in sys.modules:
+                        try:
+                            c_spec = importlib.util.spec_from_file_location(comp_name, str(companion))
+                            if c_spec and c_spec.loader:
+                                c_mod = importlib.util.module_from_spec(c_spec)
+                                sys.modules[comp_name] = c_mod
+                                sys.modules[f"{parent_dir.name}.{comp_name}"] = c_mod
+                                c_spec.loader.exec_module(c_mod)
+                        except Exception as c_err:
+                            logger.debug(f"Companion pre-load note for {comp_name}: {c_err}")
 
         module_name = f"beacon_dyn_{file_path.stem}_{hash(str(file_path)) & 0xFFFFFFFF}"
         spec = importlib.util.spec_from_file_location(
@@ -232,6 +243,20 @@ class AdapterDetector:
                     },
                 )
 
+            # Re-check missing copybooks against standard copybook library
+            std_cpy = Path(__file__).resolve().parent.parent.parent / "data" / "copybooks"
+            if missing_cpys and std_cpy.is_dir():
+                still_missing = []
+                for c in missing_cpys:
+                    found = False
+                    for ext in (".cpy", ".CPY", ".cbl", ""):
+                        if (std_cpy / f"{c}{ext}").exists():
+                            found = True
+                            break
+                    if not found:
+                        still_missing.append(c)
+                missing_cpys = still_missing
+
             if missing_cpys:
                 return AdapterResolutionResult(
                     status=AdapterResolutionStatus.ADAPTER_UNRESOLVED,
@@ -277,9 +302,10 @@ class AdapterDetector:
 
         # ── Python Resolution Branch ──────────────────────────────────────────
         # Static Filtering / ranking heuristics based on discovered parameters and module match:
-        valid_candidates = [c for c in candidates if len(c.parameters) > 0 or c.has_type_hints]
+        clean_candidates = [c for c in candidates if not c.name.startswith("_")]
+        valid_candidates = [c for c in clean_candidates if len(c.parameters) > 0 or c.has_type_hints]
         if not valid_candidates:
-            valid_candidates = candidates
+            valid_candidates = clean_candidates or candidates
 
         if len(valid_candidates) == 1:
             primary_match = valid_candidates[0]
@@ -290,8 +316,8 @@ class AdapterDetector:
             ]
             if len(stem_matches) == 1:
                 primary_match = stem_matches[0]
-            elif any(c.name.lower() in ("main", "execute", "run") for c in valid_candidates):
-                primary_match = next(c for c in valid_candidates if c.name.lower() in ("main", "execute", "run"))
+            elif any(c.name.lower() in ("run_vector", "main", "execute", "run", "process") for c in valid_candidates):
+                primary_match = next(c for c in valid_candidates if c.name.lower() in ("run_vector", "main", "execute", "run", "process"))
             elif len(valid_candidates) > 0:
                 primary_match = valid_candidates[0]
             else:
@@ -314,8 +340,12 @@ class AdapterDetector:
                         },
                     )
 
-        # Verify companion module resolution for Python
+        # Verify companion module resolution for Python against repository & standard companions
         missing_companions = primary_match.evidence.get("missing_companions", [])
+        std_py = Path(__file__).resolve().parent.parent.parent / "data" / "python_companions"
+        if missing_companions and std_py.is_dir():
+            missing_companions = [m for m in missing_companions if not (std_py / f"{m}.py").exists()]
+
         if missing_companions:
             return AdapterResolutionResult(
                 status=AdapterResolutionStatus.ADAPTER_UNRESOLVED,

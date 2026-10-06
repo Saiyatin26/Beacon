@@ -1398,7 +1398,7 @@ class CanonicalV2WorkflowEngine:
 
         try:
             exp_req = ExplanationRequest(
-                mode=getattr(request, "explanation_mode", "deterministic") or "deterministic",
+                mode=getattr(request, "explanation_mode", "assisted") or "assisted",
                 use_company_knowledge=getattr(request, "use_company_knowledge", False),
             )
             explanation_res = self.intel_eng.generate_explanation(

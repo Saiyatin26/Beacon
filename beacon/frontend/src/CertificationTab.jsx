@@ -1466,32 +1466,105 @@ export default function CertificationTab({
             {/* 3-4 LINE AUTHORITATIVE CERTIFICATE SUMMARY                        */}
             {/* ═════════════════════════════════════════════════════════════════ */}
             {(() => {
-              const execSummary = workflowResult.explanation?.executive_summary || workflowResult.explanation?.status_rationale;
-              const certSummary = execSummary || (workflowResult.certified ? [
-                `BEACON verified ${(workflowResult.equivalence_score != null ? (workflowResult.equivalence_score * 100).toFixed(2) : 100)}% behavioral equivalence between legacy reference and modernized target implementations.`,
-                `Evaluated across ${workflowResult.unique_input_count ?? repCases.length ?? meta.inputs_count ?? 7} authoritative CardDemo test vectors with 0 regressions detected.`,
-                `Dynamic tolerance threshold resolved to ${Number(threshMeta.resolved_threshold ?? threshMeta.final_value ?? 0).toFixed(4)} via EVIDENCE_DERIVED (Robust Median/MAD) satisfying all ${discoveryMeta.invariants_discovered ?? meta.discovered_rules?.length ?? 40} AST behavioral invariants.`,
-                `Stage-B finalization complete with cryptographic artifact hash registered in immutable audit store.`
-              ].join(" ") : [
-                `BEACON behavioral certification completed with status ${workflowResult.status || 'FAILED'}.`,
-                `Evaluated across ${workflowResult.unique_input_count ?? repCases.length ?? meta.inputs_count ?? 0} authoritative test vectors.`,
-                workflowResult.error_message || "Threshold resolution or authority requirements unfulfilled.",
-                `Audit log and execution trail recorded with state ${finalizationState}.`
-              ].join(" "));
+              const expl = workflowResult.explanation || {};
+              const execSummary = expl.executive_summary || expl.status_rationale || expl.summary;
+              const isCertified = Boolean(workflowResult.certified);
+              const isFailed = workflowResult.status === "FAILED";
+              const isInconclusive = workflowResult.status === "INCONCLUSIVE" || workflowResult.equivalence_score == null;
+
+              const themeColor = isCertified ? "#166534" : (isInconclusive ? "#854d0e" : "#991b1b");
+              const themeBg = isCertified ? "#f0fdf4" : (isInconclusive ? "#fefce8" : "#fef2f2");
+              const themeBorder = isCertified ? "#bbf7d0" : (isInconclusive ? "#fef08a" : "#fecaca");
+              const badgeBg = isCertified ? "#dcfce7" : (isInconclusive ? "#fef9c3" : "#fee2e2");
+
+              const inputCount = workflowResult.unique_input_count ?? repCases.length ?? meta.inputs_count ?? 0;
+              const ruleCount = meta.discovered_rules?.length ?? discoveryMeta.invariants_discovered ?? 0;
+              const regressionsCount = workflowResult.regressions_count ?? workflowResult.regressions?.length ?? 0;
+              const threshVal = threshMeta.final_value != null ? Number(threshMeta.final_value).toFixed(4) : (threshMeta.raw_value != null ? Number(threshMeta.raw_value).toFixed(4) : "Dynamic");
+
+              const defaultNarrative = isCertified ? (
+                `BEACON successfully certified ${(workflowResult.equivalence_score != null ? (workflowResult.equivalence_score * 100).toFixed(2) : 100)}% behavioral equivalence between legacy reference and modernized target implementations across ${inputCount} authoritative test vectors. Dynamic tolerance threshold resolved to ${threshVal} with 0 regressions detected.`
+              ) : (isInconclusive ? (
+                `Certification concluded with status INCONCLUSIVE (${workflowResult.error_message || 'Missing dependencies or insufficient reference evidence'}). Re-run with required copybooks or sample data to resolve full certification.`
+              ) : (
+                `Certification concluded with status ${workflowResult.status || 'FAILED'}. Found ${regressionsCount} behavioral regressions across ${inputCount} evaluated test vectors (${workflowResult.error_message || 'Equivalence score did not satisfy tolerance threshold'}).`
+              ));
 
               return (
-                <section style={{ ...cardStyle, marginBottom: "20px", background: workflowResult.certified ? "#f0fdf4" : "#fef2f2", border: `1px solid ${workflowResult.certified ? "#bbf7d0" : "#fecaca"}` }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
-                    <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: workflowResult.certified ? "#166534" : "#991b1b" }}>
-                      📜 Behavioral Certificate Summary
-                    </h3>
-                    <span style={{ fontSize: "11px", fontWeight: "700", color: workflowResult.certified ? "#15803d" : "#b91c1c", background: workflowResult.certified ? "#dcfce7" : "#fee2e2", padding: "2px 8px", borderRadius: "4px" }}>
-                      {workflowResult.certified ? "CERTIFIED EQUIVALENT" : "AUDIT VERDICT"}
+                <section style={{
+                  ...cardStyle,
+                  marginBottom: "20px",
+                  background: themeBg,
+                  border: `1.5px solid ${themeBorder}`,
+                  borderRadius: "8px",
+                  padding: "18px 20px"
+                }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "12px" }}>
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" }}>
+                        <span style={{ fontSize: "20px" }}>{isCertified ? "🏆" : (isInconclusive ? "⚠️" : "❌")}</span>
+                        <h3 style={{ margin: 0, fontSize: "16px", fontWeight: "800", color: themeColor }}>
+                          Executive Certification Summary
+                        </h3>
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#64748b" }}>
+                        Audited by BEACON Deterministic Engine & AI Behavioral Intelligence
+                      </div>
+                    </div>
+                    <span style={{
+                      fontSize: "12px",
+                      fontWeight: "700",
+                      color: themeColor,
+                      background: badgeBg,
+                      border: `1px solid ${themeBorder}`,
+                      padding: "4px 10px",
+                      borderRadius: "6px"
+                    }}>
+                      {isCertified ? "CERTIFIED EQUIVALENT" : (isInconclusive ? "INCONCLUSIVE AUDIT" : "NON-EQUIVALENT")}
                     </span>
                   </div>
-                  <p style={{ margin: 0, fontSize: "13px", lineHeight: "1.7", color: workflowResult.certified ? "#14532d" : "#7f1d1d" }}>
-                    {certSummary}
-                  </p>
+
+                  {/* Plain-English Customer Narrative */}
+                  <div style={{
+                    fontSize: "13.5px",
+                    lineHeight: "1.7",
+                    color: "#1e293b",
+                    marginBottom: "16px",
+                    background: "rgba(255,255,255,0.7)",
+                    padding: "12px 14px",
+                    borderRadius: "6px",
+                    borderLeft: `4px solid ${themeColor}`
+                  }}>
+                    {execSummary || defaultNarrative}
+                  </div>
+
+                  {/* 4 Quick Customer Metric Pills */}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px" }}>
+                    <div style={{ background: "#ffffff", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Equivalence</div>
+                      <div style={{ fontSize: "16px", fontWeight: "800", color: themeColor }}>
+                        {workflowResult.equivalence_score != null ? `${(workflowResult.equivalence_score * 100).toFixed(2)}%` : "N/A"}
+                      </div>
+                    </div>
+                    <div style={{ background: "#ffffff", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Test Vectors</div>
+                      <div style={{ fontSize: "16px", fontWeight: "800", color: "#0f172a" }}>
+                        {inputCount} Executed
+                      </div>
+                    </div>
+                    <div style={{ background: "#ffffff", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Mined Rules</div>
+                      <div style={{ fontSize: "16px", fontWeight: "800", color: "#0f172a" }}>
+                        {ruleCount} Invariants
+                      </div>
+                    </div>
+                    <div style={{ background: "#ffffff", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
+                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Tolerance Bound</div>
+                      <div style={{ fontSize: "16px", fontWeight: "800", color: "#0f172a" }}>
+                        {threshVal}
+                      </div>
+                    </div>
+                  </div>
                 </section>
               );
             })()}
