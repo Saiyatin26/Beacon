@@ -204,7 +204,7 @@ class WorkflowRunRequest(BaseModel):
     allow_warnings: bool = False
     policy_override: Optional[dict[str, Any]] = None
     explain: bool = True
-    explanation_mode: Literal["deterministic", "llm", "auto"] = "deterministic"
+    explanation_mode: Literal["deterministic", "llm", "auto"] = "auto"
     use_company_knowledge: bool = False
     enable_discovery: bool = False
     evaluation_mode: Optional[str] = "CONTROLLED"

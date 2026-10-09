@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from certification.runner import certify
-from certification.scorer import equivalence_score
+from certification.scorer import EVIDENCE_SCORE_WEIGHTS, equivalence_score
 from certification import (
     CertificationArtifact,
     CertificationContext,
@@ -1372,15 +1372,43 @@ def export_certification_dossier(
         leg_h = getattr(artifact, "legacy_implementation_hash", "") or (ctx.legacy_implementation_hash if ctx else "")
         mod_h = getattr(artifact, "modernized_implementation_hash", "") or (ctx.modernized_implementation_hash if ctx else "")
         data_chk = getattr(artifact, "dataset_checksum", "") or (ctx.dataset_checksum if ctx else "")
+        coverage_pct = artifact.metrics.oracle_coverage_pct
+        coverage_text = f"{coverage_pct * 100:.1f}%" if coverage_pct is not None else "N/A"
+        run_id = ctx.certification_run_id if ctx and ctx.certification_run_id else artifact.certification_id
+        threshold_text = (
+            f"{ctx.policy_min_equivalence_score * 100:.1f}%"
+            if ctx
+            else "not recorded in run context"
+        )
+        execution_metadata = ctx.execution_metadata if ctx else {}
+        provider_metadata = ctx.provider_metadata if ctx else {}
+        active_weight_total = sum(
+            EVIDENCE_SCORE_WEIGHTS.get(name, 0.0)
+            for name in artifact.metrics.evidence_score_factors
+        )
+        evidence_quality_text = (
+            f"{artifact.metrics.evidence_quality_score * 100:.1f}%"
+            if artifact.metrics.evidence_quality_score is not None
+            else "N/A (not recorded)"
+        )
+        observed_score_text = (
+            f"{artifact.metrics.overall_equivalence_score * 100:.1f}%"
+            if artifact.metrics.overall_equivalence_score is not None
+            else "N/A"
+        )
 
         md = f"""# BEACON Behavioral Equivalence Certificate Dossier
 
 ## Certificate Identity
 - **Certificate ID:** `{artifact.certification_id}`
+- **Certification Run ID:** `{run_id}`
 - **Artifact Content Hash (SHA-256):** `{artifact.content_hash}`
 - **Integrity Verification Status:** **`{integrity_report.get('status', 'UNKNOWN')}`**
 - **Certification Status:** **`{artifact.status.value if hasattr(artifact.status, 'value') else str(artifact.status)}`**
-- **Equivalence Score:** `{artifact.score * 100:.1f}%`
+- **Evidence-adjusted score:** `{artifact.score * 100:.1f}%`
+- **Observed behavioral equivalence score:** `{observed_score_text}`
+- **Evidence quality score:** `{evidence_quality_text}`
+- **Policy threshold:** `{threshold_text}`
 
 ## Execution Context & Cryptographic Fingerprints
 - **Benchmark:** `{b_id}` ({b_name})
@@ -1394,6 +1422,22 @@ def export_certification_dossier(
 - **Oracle Set ID & Hash:** `{artifact.oracle_set_id}` (`{artifact.oracle_set_hash}`)
 - **Policy ID & Hash:** `{artifact.certification_policy_id}` (`{artifact.certification_policy_hash}`)
 - **Execution Timestamp:** `{artifact.timestamp}`
+- **Execution metadata:** `{json.dumps(execution_metadata, sort_keys=True, default=str)}`
+- **AI provider metadata:** `{json.dumps(provider_metadata, sort_keys=True, default=str)}`
+
+## Evidence-adjusted scoring
+The adjusted score is the observed behavioral equivalence score multiplied by the weighted quality of evidence available for this run. Available factor weights are normalized. This is a transparent project scoring heuristic, not a statistical confidence interval or proof of arbitrary program equivalence.
+
+| Factor | Observed value | Configured weight |
+|---|---:|---:|
+"""
+        for factor_name, factor_value in artifact.metrics.evidence_score_factors.items():
+            md += (
+                f"| `{factor_name}` | `{factor_value * 100:.1f}%` | "
+                f"`{(EVIDENCE_SCORE_WEIGHTS.get(factor_name, 0.0) / active_weight_total * 100) if active_weight_total else 0.0:.1f}%` |\n"
+            )
+
+        md += f"""
 
 ## Disambiguated Metric Breakdown
 - **Unique Inputs Evaluated:** `{artifact.metrics.unique_input_count}`
@@ -1404,12 +1448,46 @@ def export_certification_dossier(
 - **Regression Cases:** `{artifact.metrics.regression_case_count}`
 - **Execution Errors:** `{artifact.metrics.execution_error_count}`
 - **Counterexamples Detected:** `{artifact.metrics.counterexample_count}`
-- **Oracle Coverage:** `{artifact.metrics.oracle_coverage_pct * 100:.1f}%`
+- **Oracle Coverage:** `{coverage_text}`
 
+## Paired execution evidence
+The following persisted cases contain the input and outputs captured by this run. At most 100 cases are included in this Markdown dossier.
+"""
+        for case in cases[:100]:
+            md += (
+                f"\n### Case `{case.case_id}` — `{case.classification}`\n"
+                f"- Input ID: `{case.input_id}`\n"
+                f"- Input SHA-256: `{case.input_hash}`\n"
+                f"- Legacy execution status: `{case.legacy_execution_status}`\n"
+                f"- Modern execution status: `{case.modern_execution_status}`\n"
+                "```json\n"
+                f"Input: {case.input_json}\n"
+                f"Legacy output: {case.legacy_output_json}\n"
+                f"Modern output: {case.modern_output_json}\n"
+                "```\n"
+            )
+        if len(cases) > 100:
+            md += f"\n*{len(cases) - 100} additional cases are omitted; use JSON or CSV export for complete case records.*\n"
+
+        md += """
+## Limitations and decision details
+"""
+        if execution_metadata:
+            md += f"- Runtime and execution-mode details: `{json.dumps(execution_metadata, sort_keys=True, default=str)}`\n"
+        if artifact.blocking_reasons:
+            md += "- Blocking reasons:\n" + "".join(f"  - {reason}\n" for reason in artifact.blocking_reasons)
+        else:
+            md += "- Blocking reasons: None recorded.\n"
+        if artifact.warnings:
+            md += "- Warnings:\n" + "".join(f"  - {warning}\n" for warning in artifact.warnings)
+        else:
+            md += "- Warnings: None recorded.\n"
+
+        md += f"""
 ## Behavioral Regressions ({len(artifact.regressions)})
 """
         for r in artifact.regressions:
-            md += f"- **Oracle `{r.oracle_id}`** on Input `{r.input_id}` (Hash `{r.input_hash}`): Legacy `{r.legacy_output}` vs Modern `{r.modern_output}`. *{r.details}*\n"
+            md += f"- **Oracle `{r.oracle_id}`** on Input `{r.input_id}` (Hash `{r.input_hash}`): Legacy `{r.legacy_output}` vs Modern `{r.modern_output}`. *{r.failed_assertion}*\n"
 
         return Response(
             content=md,
@@ -1421,9 +1499,9 @@ def export_certification_dossier(
         import io, csv
         output = io.StringIO()
         writer = csv.writer(output)
-        writer.writerow(["case_id", "case_index", "input_id", "input_hash", "classification", "severity", "oracle_result", "input_json", "legacy_output_json", "modern_output_json"])
+        writer.writerow(["case_id", "case_index", "input_id", "input_hash", "classification", "severity", "oracle_result", "legacy_execution_status", "modern_execution_status", "input_json", "legacy_output_json", "modern_output_json"])
         for c in cases:
-            writer.writerow([c.case_id, c.case_index, c.input_id, c.input_hash, c.classification, c.severity, c.oracle_result, c.input_json, c.legacy_output_json, c.modern_output_json])
+            writer.writerow([c.case_id, c.case_index, c.input_id, c.input_hash, c.classification, c.severity, c.oracle_result, c.legacy_execution_status, c.modern_execution_status, c.input_json, c.legacy_output_json, c.modern_output_json])
         return Response(
             content=output.getvalue(),
             media_type="text/csv",

@@ -142,6 +142,8 @@ class CertificationCase(BaseModel):
     input_hash: str
     legacy_output_json: str
     modern_output_json: str
+    legacy_execution_status: str = "UNKNOWN"
+    modern_execution_status: str = "UNKNOWN"
     execution_time_ms: float = 0.0
     oracle_result: str
     classification: str
@@ -197,6 +199,7 @@ class CertificationContext(BaseModel):
     request_identity: Optional[str] = None
     is_forced_recompute: bool = False
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
+    execution_metadata: dict[str, Any] = Field(default_factory=dict)
     run_status: str = "NOT_CERTIFIED"
     threshold_resolution_id: Optional[str] = None
     threshold_resolution_fingerprint: Optional[str] = None
@@ -393,6 +396,9 @@ class CertificationMetrics(BaseModel):
     oracles_exercised: int = 0
     oracle_coverage_pct: Optional[float] = None
     overall_equivalence_score: float = 0.0
+    evidence_quality_score: Optional[float] = None
+    evidence_adjusted_score: Optional[float] = None
+    evidence_score_factors: dict[str, float] = Field(default_factory=dict)
 
 
 class CertificationArtifact(BaseModel):

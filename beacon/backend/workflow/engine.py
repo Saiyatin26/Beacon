@@ -120,6 +120,7 @@ from .idempotency import WorkflowIdempotencyManager, workflow_idempotency
 from .models import (
     FinalizationState,
     WorkflowErrorCode,
+    WorkflowExecutionError,
     WorkflowResult,
     WorkflowRun,
     WorkflowRunRequest,
@@ -601,6 +602,18 @@ class CanonicalV2WorkflowEngine:
                         audit_status="PERSISTED",
                     )
 
+            if getattr(ref_res, "execution_status", "") != "SUCCESS":
+                return self._fail_run(
+                    run,
+                    WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+                    (
+                        f"Legacy/reference execution did not succeed for input '{inp_id}' "
+                        f"(status={getattr(ref_res, 'execution_status', 'UNKNOWN')}): "
+                        f"{getattr(ref_res, 'error_message', '')}"
+                    ),
+                    audit_status="PERSISTED",
+                )
+
             if hasattr(ref_res, "normalized_outputs") and ref_res.normalized_outputs is not None:
                 ref_val = ref_res.normalized_outputs
             elif hasattr(ref_res, "raw_outputs") and ref_res.raw_outputs is not None:
@@ -650,6 +663,18 @@ class CanonicalV2WorkflowEngine:
 
             # Execute target
             tgt_res = target_adapter.execute(inp_vals) if hasattr(target_adapter, "execute") else target_adapter(inp_vals)
+            if getattr(tgt_res, "execution_status", "") != "SUCCESS":
+                return self._fail_run(
+                    run,
+                    WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+                    (
+                        f"Modern/target execution did not succeed for input '{inp_id}' "
+                        f"(status={getattr(tgt_res, 'execution_status', 'UNKNOWN')}): "
+                        f"{getattr(tgt_res, 'error_message', '')}"
+                    ),
+                    audit_status="PERSISTED",
+                )
+
             if hasattr(tgt_res, "normalized_outputs") and tgt_res.normalized_outputs is not None:
                 tgt_val = tgt_res.normalized_outputs
             elif hasattr(tgt_res, "raw_outputs") and tgt_res.raw_outputs is not None:
@@ -702,6 +727,8 @@ class CanonicalV2WorkflowEngine:
                 "input_values": inp_vals,
                 "ref_val": ref_val,
                 "tgt_val": tgt_val,
+                "ref_execution_status": getattr(ref_res, "execution_status", "UNKNOWN"),
+                "tgt_execution_status": getattr(tgt_res, "execution_status", "UNKNOWN"),
                 "ref_eid": ref_eid,
                 "tgt_eid": tgt_eid,
             })
@@ -1318,17 +1345,44 @@ class CanonicalV2WorkflowEngine:
             )
 
         # 3. Execution Context Cross-Binding
+        llm_provider_metadata = (spec.provenance or {}).get("llm_provider", {})
+        if not isinstance(llm_provider_metadata, dict):
+            llm_provider_metadata = {}
+        execution_metadata: dict[str, Any] = {}
+        for side, adapter in (("legacy", ref_adapter), ("modern", target_adapter)):
+            if getattr(adapter, "adapter_type", "") == "cobol_cics":
+                cics_mode = getattr(adapter, "cics_execution_mode", "UNKNOWN")
+                execution_metadata[side] = {
+                    "runtime": "GnuCOBOL",
+                    "cics_execution_mode": cics_mode,
+                    "genuine_cics_execution": False if cics_mode == "COMPATIBILITY_EMULATION" else None,
+                }
         cert_ctx = CertificationContext(
             benchmark_id=spec.application_id,
             benchmark_name=spec.name,
             benchmark_version=spec.version,
             legacy_implementation_id=getattr(ref_adapter, "name", "legacy_ref"),
-            legacy_implementation_hash=getattr(ref_adapter, "implementation_hash", ""),
+            legacy_implementation_hash=(
+                (spec.legacy_source_identity or {}).get("content_hash")
+                or getattr(ref_adapter, "implementation_hash", "")
+            ),
             modernized_implementation_id=getattr(target_adapter, "name", "modern_target"),
-            modernized_implementation_hash=getattr(target_adapter, "implementation_hash", ""),
+            modernized_implementation_hash=(
+                (spec.modern_source_identity or {}).get("content_hash")
+                or getattr(target_adapter, "implementation_hash", "")
+            ),
             oracle_set_id=getattr(oracle_set, "oracle_set_id", ""),
             oracle_set_hash=getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", ""),
             evaluation_mode=cert_policy.evaluation_mode or "CONTROLLED",
+            provider=str(llm_provider_metadata.get("actual_provider") or "offline"),
+            model=str(llm_provider_metadata.get("model") or "deterministic"),
+            generation_method=(
+                "AI_ASSISTED_DISCOVERY"
+                if llm_provider_metadata.get("actual_provider") not in (None, "offline")
+                else "DETERMINISTIC_DISCOVERY"
+            ),
+            provider_metadata=llm_provider_metadata,
+            execution_metadata=execution_metadata,
             policy_id=cert_policy.policy_id,
             policy_version=cert_policy.version,
             policy_hash=cert_policy.policy_hash or cert_policy.compute_hash(),
@@ -1339,6 +1393,7 @@ class CanonicalV2WorkflowEngine:
             evaluation_result_id=eval_result.evaluation_id,
             threshold_resolution_id=threshold_res.resolution_id,
             threshold_resolution_fingerprint=threshold_res.fingerprint,
+            certification_run_id=run.workflow_run_id,
         )
 
         artifact = self.cert_eng.certify(
@@ -1485,6 +1540,8 @@ class CanonicalV2WorkflowEngine:
                     input_hash=hashlib.sha256(inp_json.encode()).hexdigest(),
                     legacy_output_json=legacy_out_json,
                     modern_output_json=modern_out_json,
+                    legacy_execution_status=case_data.get("ref_execution_status", "UNKNOWN"),
+                    modern_execution_status=case_data.get("tgt_execution_status", "UNKNOWN"),
                     execution_time_ms=0.0,
                     oracle_result="PASS" if is_equiv else "VIOLATED",
                     classification=cls_str,

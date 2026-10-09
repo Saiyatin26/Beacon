@@ -8,10 +8,28 @@ counterexamples, and audit provenance without exposing secrets.
 import html
 import json
 from .models import CertificationArtifact, CertificationStatus
+from .scorer import EVIDENCE_SCORE_WEIGHTS
 
 
 def generate_html_report(artifact: CertificationArtifact) -> str:
     """Generates a standalone, styled HTML audit certificate report."""
+    context = artifact.context
+    coverage = artifact.metrics.oracle_coverage_pct
+    coverage_text = f"{coverage * 100:.0f}%" if coverage is not None else "N/A"
+    evidence_quality_text = (
+        f"{artifact.metrics.evidence_quality_score * 100:.1f}%"
+        if artifact.metrics.evidence_quality_score is not None
+        else "N/A"
+    )
+    total_factor_weight = sum(
+        EVIDENCE_SCORE_WEIGHTS[name]
+        for name in artifact.metrics.evidence_score_factors
+    )
+    evidence_factor_rows = "".join(
+        f"<tr><td>{html.escape(name)}</td><td>{value * 100:.1f}%</td>"
+        f"<td>{EVIDENCE_SCORE_WEIGHTS[name] / total_factor_weight * 100:.1f}%</td></tr>"
+        for name, value in artifact.metrics.evidence_score_factors.items()
+    ) if total_factor_weight else ""
     status_colors = {
         CertificationStatus.CERTIFIED: ("#10b981", "#ecfdf5", "CERTIFIED"),
         CertificationStatus.CERTIFIED_WITH_WARNINGS: ("#f59e0b", "#fffbeb", "CERTIFIED WITH WARNINGS"),
@@ -107,12 +125,12 @@ def generate_html_report(artifact: CertificationArtifact) -> str:
 
         <div class="grid">
             <div class="card">
-                <div class="card-lbl">Equivalence Score</div>
+                <div class="card-lbl">Evidence-Adjusted Score</div>
                 <div class="card-val" style="color: {badge_color};">{artifact.score * 100:.1f}%</div>
             </div>
             <div class="card">
                 <div class="card-lbl">Oracle Coverage</div>
-                <div class="card-val">{artifact.metrics.oracle_coverage_pct * 100:.0f}%</div>
+                <div class="card-val">{coverage_text}</div>
             </div>
             <div class="card">
                 <div class="card-lbl">Matching Probes</div>
@@ -143,6 +161,22 @@ def generate_html_report(artifact: CertificationArtifact) -> str:
             </tbody>
         </table>
 
+        <h3 style="font-size: 16px; margin-bottom: 8px;">Evidence &amp; Execution Context</h3>
+        <div class="provenance-box">
+            <strong>Certification Run ID:</strong> {html.escape(context.certification_run_id if context else artifact.certification_id)}<br>
+            <strong>Observed Behavioral Equivalence:</strong> {artifact.metrics.overall_equivalence_score * 100:.1f}%<br>
+            <strong>Evidence Quality:</strong> {evidence_quality_text}<br>
+            <strong>Policy Threshold:</strong> {f"{context.policy_min_equivalence_score * 100:.1f}%" if context else "not recorded"}<br>
+            <strong>Legacy Source SHA-256:</strong> {html.escape(context.legacy_implementation_hash if context else artifact.legacy_implementation_hash or "")}<br>
+            <strong>Modern Source SHA-256:</strong> {html.escape(context.modernized_implementation_hash if context else artifact.modernized_implementation_hash or "")}<br>
+            <strong>Execution Metadata:</strong> {html.escape(json.dumps(context.execution_metadata, sort_keys=True, default=str) if context else "{}")}
+        </div>
+        <p style="font-size: 12px; color: #64748b;">The evidence-adjusted score combines observed behavioral equivalence with run-derived evidence quality factors. This project heuristic is not a statistical confidence interval or proof of arbitrary program equivalence.</p>
+        <table>
+            <thead><tr><th>Evidence Factor</th><th>Observed Value</th><th>Normalized Weight</th></tr></thead>
+            <tbody>{evidence_factor_rows or '<tr><td colspan="2">No factor data recorded</td></tr>'}</tbody>
+        </table>
+
         {f'<h3 style="font-size: 16px; margin-bottom: 12px; color: #991b1b;">Behavioral Regressions &amp; Counterexamples ({len(artifact.regressions)})</h3>{"".join(regression_cards)}' if artifact.regressions else ''}
 
         <h3 style="font-size: 16px; margin-bottom: 8px;">Cryptographic Audit Provenance</h3>
@@ -166,24 +200,63 @@ def generate_html_report(artifact: CertificationArtifact) -> str:
 
 def generate_markdown_report(artifact: CertificationArtifact) -> str:
     """Generates a structured markdown audit report."""
+    context = artifact.context
+    coverage = artifact.metrics.oracle_coverage_pct
+    coverage_text = f"{coverage * 100:.0f}%" if coverage is not None else "N/A"
+    evidence_quality_text = (
+        f"{artifact.metrics.evidence_quality_score * 100:.1f}%"
+        if artifact.metrics.evidence_quality_score is not None
+        else "N/A (not recorded)"
+    )
     md = []
     md.append(f"# BEACON Behavioral Equivalence Certificate — {artifact.certification_id}")
-    md.append(f"**Status**: `{artifact.status.value}` | **Certified**: `{artifact.certified}` | **Score**: `{artifact.score * 100:.1f}%`\n")
+    md.append(f"**Status**: `{artifact.status.value}` | **Certified**: `{artifact.certified}` | **Evidence-adjusted score**: `{artifact.score * 100:.1f}%`\n")
+    md.append(f"- **Certification Run ID**: `{context.certification_run_id if context and context.certification_run_id else artifact.certification_id}`")
     md.append(f"- **Project**: `{artifact.project_id}`")
     md.append(f"- **Legacy Version**: `{artifact.legacy_version}` &rarr; **Modernized Version**: `{artifact.modernized_version}`")
     md.append(f"- **Oracle Set**: `{artifact.oracle_set_id}` (v{artifact.oracle_set_version}, Hash: `{artifact.oracle_set_hash[:12]}...`)")
     md.append(f"- **Certificate Content Hash**: `{artifact.content_hash}`")
+    md.append(f"- **Legacy Source SHA-256**: `{context.legacy_implementation_hash if context else artifact.legacy_implementation_hash or ''}`")
+    md.append(f"- **Modern Source SHA-256**: `{context.modernized_implementation_hash if context else artifact.modernized_implementation_hash or ''}`")
     md.append(f"- **Timestamp**: `{artifact.timestamp}`\n")
 
     md.append("## Quantitative Metrics")
     md.append(f"| Metric | Value |")
     md.append(f"| :--- | :--- |")
-    md.append(f"| Overall Equivalence Score | **{artifact.score * 100:.1f}%** |")
-    md.append(f"| Oracle Coverage | **{artifact.metrics.oracle_coverage_pct * 100:.0f}%** ({artifact.metrics.oracles_exercised}/{artifact.metrics.oracle_count}) |")
+    md.append(f"| Evidence-adjusted score | **{artifact.score * 100:.1f}%** |")
+    md.append(f"| Observed behavioral equivalence score | **{artifact.metrics.overall_equivalence_score * 100:.1f}%** |")
+    md.append(f"| Evidence quality score | **{evidence_quality_text}** |")
+    md.append(f"| Oracle Coverage | **{coverage_text}** ({artifact.metrics.oracles_exercised}/{artifact.metrics.oracle_count}) |")
     md.append(f"| Matching Probes | {artifact.metrics.matching_probes} / {artifact.metrics.applicable_inputs} |")
     md.append(f"| Modern Regressions | {artifact.metrics.modern_regressions} |")
     md.append(f"| Reference Inconsistencies | {artifact.metrics.reference_inconsistencies} |")
     md.append(f"| Mutual Violations | {artifact.metrics.mutual_violations} |\n")
+
+    md.append("## Evidence-adjusted score factors")
+    md.append("The evidence-adjusted score combines observed behavioral equivalence with run-derived evidence quality factors. It is a project heuristic, not a statistical confidence interval or proof of arbitrary program equivalence.")
+    md.append("| Factor | Value | Normalized weight |")
+    md.append("| :--- | ---: | ---: |")
+    if artifact.metrics.evidence_score_factors:
+        total_factor_weight = sum(
+            EVIDENCE_SCORE_WEIGHTS[name]
+            for name in artifact.metrics.evidence_score_factors
+        )
+        for name, value in artifact.metrics.evidence_score_factors.items():
+            normalized_weight = EVIDENCE_SCORE_WEIGHTS[name] / total_factor_weight
+            md.append(f"| `{name}` | {value * 100:.1f}% | {normalized_weight * 100:.1f}% |")
+    else:
+        md.append("| Not recorded | N/A | N/A |")
+    if context:
+        md.append("\n## Execution and provider provenance")
+        md.append(f"- **Execution metadata**: `{json.dumps(context.execution_metadata, sort_keys=True, default=str)}`")
+        md.append(f"- **Provider metadata**: `{json.dumps(context.provider_metadata, sort_keys=True, default=str)}`")
+        md.append(f"- **Policy threshold**: `{context.policy_min_equivalence_score * 100:.1f}%`")
+    if artifact.blocking_reasons:
+        md.append("\n## Blocking reasons")
+        md.extend(f"- {reason}" for reason in artifact.blocking_reasons)
+    if artifact.warnings:
+        md.append("\n## Warnings")
+        md.extend(f"- {warning}" for warning in artifact.warnings)
 
     md.append("## Per-Oracle Summary")
     md.append("| Oracle ID | Severity | Applied | Matching | Regressions | Equivalence | Status |")

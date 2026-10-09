@@ -70,17 +70,20 @@ from application.models import (
 )
 from application.repository import application_repository
 from certification.adapter_registry import adapter_registry
+from certification.adapters import compute_implementation_hash
+from certification.models import CertificationTestInput, compute_input_set_canonical_hash
 from certification.repository import certification_repository
 from threshold.persistence import threshold_persistence
 from threshold.models import ThresholdPolicy, DifferenceMetric, ThresholdStrategy
 from certification.policies import certification_policy_resolver
+from common.config import settings
 
 
 class RepositoryAnalysisRequest(BaseModel):
     """Request payload for repository static analysis and discovery."""
     legacy_repository: Optional[RepositorySourceSpec] = None
     modern_repository: Optional[RepositorySourceSpec] = None
-    evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "CONTROLLED"
+    evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "FULL_BEACON"
     source_mode: Union[SourceIngestionMode, str] = SourceIngestionMode.GITHUB_REPOSITORY
     analysis_scope: Union[AnalysisScope, str] = AnalysisScope.REPOSITORY
     selected_artifacts: Optional[list[Union[dict[str, Any], str, SourceArtifact]]] = None
@@ -113,12 +116,12 @@ class RepositoryCertificationRequest(BaseModel):
     """Primary request payload for repository-first V2 certification."""
     legacy_repository: Optional[RepositorySourceSpec] = None
     modern_repository: Optional[RepositorySourceSpec] = None
-    evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "CONTROLLED"
+    evaluation_mode: Literal["CONTROLLED", "FULL", "FULL_BEACON"] = "FULL_BEACON"
     policy_min_equivalence_score: float = 0.999
     policy_min_oracle_coverage: float = 0.0
     allow_warnings: bool = False
     explain: bool = True
-    explanation_mode: Literal["deterministic", "llm", "auto"] = "deterministic"
+    explanation_mode: Literal["deterministic", "llm", "auto"] = "auto"
     custom_inputs: Optional[list[dict[str, Any]]] = None
     idempotency_key: Optional[str] = None
     source_mode: Union[SourceIngestionMode, str] = SourceIngestionMode.GITHUB_REPOSITORY
@@ -148,11 +151,13 @@ def _perform_repository_analysis(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Staged upload workspace '{upload_id}' not found.",
                 )
+            legacy_content_hash = compute_implementation_hash(legacy_dir)
+            modern_content_hash = compute_implementation_hash(modern_dir)
             legacy_identity = RepositoryIdentity(
                 canonical_url=str(legacy_dir),
                 resolved_revision=upload_id,
                 commit_sha=None,
-                content_hash=hashlib.sha256(f"legacy_upload_{upload_id}".encode()).hexdigest(),
+                content_hash=legacy_content_hash,
             )
             legacy_prov = RepositoryProvenance(
                 source_url=f"upload://{upload_id}/legacy",
@@ -160,7 +165,7 @@ def _perform_repository_analysis(
                 source_type="directory",
                 resolved_revision=upload_id,
                 commit_sha=None,
-                content_hash=legacy_identity.content_hash,
+                content_hash=legacy_content_hash,
                 retrieval_timestamp=datetime.now(timezone.utc).isoformat(),
                 local_path=str(legacy_dir),
                 identity=legacy_identity,
@@ -169,7 +174,7 @@ def _perform_repository_analysis(
                 canonical_url=str(modern_dir),
                 resolved_revision=upload_id,
                 commit_sha=None,
-                content_hash=hashlib.sha256(f"modern_upload_{upload_id}".encode()).hexdigest(),
+                content_hash=modern_content_hash,
             )
             modern_prov = RepositoryProvenance(
                 source_url=f"upload://{upload_id}/modern",
@@ -177,7 +182,7 @@ def _perform_repository_analysis(
                 source_type="directory",
                 resolved_revision=upload_id,
                 commit_sha=None,
-                content_hash=modern_identity.content_hash,
+                content_hash=modern_content_hash,
                 retrieval_timestamp=datetime.now(timezone.utc).isoformat(),
                 local_path=str(modern_dir),
                 identity=modern_identity,
@@ -324,6 +329,11 @@ def _perform_repository_analysis(
             "legacy_provenance": legacy_prov.model_dump(),
             "modern_provenance": modern_prov.model_dump(),
             "input_discovery_provenance": input_discovery_res.provenance,
+            "cobol_execution_plan": cobol_plan.model_dump() if cobol_plan else None,
+            "llm_provider": (
+                input_discovery_res.provenance.get("llm_provider")
+                or (cobol_plan.provenance if cobol_plan else {})
+            ),
         },
     )
     spec_fingerprint = repo_spec.specification_fingerprint
@@ -413,16 +423,6 @@ def _run_repository_certification_pipeline(
     current_user: User,
 ) -> WorkflowResult:
     """Executes full repository ingestion, analysis, adapter detection, input discovery, and canonical certification."""
-    # 0. Strict Input Authority: Custom input injection is strictly forbidden in production certification
-    if req.custom_inputs is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail={
-                "error": "CUSTOM_INPUTS_DISALLOWED_IN_PRODUCTION",
-                "message": "Caller-supplied custom_inputs is forbidden in production repository certification. Repository-discovered inputs are authoritative.",
-            },
-        )
-
     (
         legacy_dir,
         legacy_prov,
@@ -507,7 +507,10 @@ def _run_repository_certification_pipeline(
             metadata=run_record.metadata,
         )
 
-    if input_discovery_res.status != InputDiscoveryStatus.SUCCESS or not repo_spec.discovered_inputs:
+    if (
+        (input_discovery_res.status != InputDiscoveryStatus.SUCCESS or not repo_spec.discovered_inputs)
+        and not req.custom_inputs
+    ):
         inconclusive_run_id = f"run_{hashlib.sha256(f'{analysis_result.application_id}_insufficient_inputs_{datetime.now(timezone.utc).isoformat()}'.encode()).hexdigest()[:16]}"
         run_record = WorkflowRun(
             workflow_run_id=inconclusive_run_id,
@@ -542,9 +545,45 @@ def _run_repository_certification_pipeline(
             metadata=run_record.metadata,
         )
 
-    test_inputs = repo_spec.discovered_inputs
+    test_inputs = list(repo_spec.discovered_inputs)
+    if req.custom_inputs:
+        if len(test_inputs) + len(req.custom_inputs) > settings.max_input_records:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"The combined discovered and caller-supplied test input count may not exceed "
+                    f"{settings.max_input_records}."
+                ),
+            )
+        for index, values in enumerate(req.custom_inputs, start=1):
+            if not values:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Caller-supplied test input #{index} must be a non-empty JSON object.",
+                )
+            test_inputs.append(
+                CertificationTestInput(
+                    input_id=f"USER-INP-{index:04d}",
+                    values=values,
+                    origin="explicit_case",
+                    provenance={"source": "user_supplied", "index": index},
+                )
+            )
+        repo_spec.discovered_inputs = [item.values for item in test_inputs]
+        repo_spec.input_set_identity = compute_input_set_canonical_hash(test_inputs)
+        analysis_result.specification_fingerprint = repo_spec.specification_fingerprint
+        analysis_result.inputs_count = len(test_inputs)
+        analysis_result.inputs = [item.values for item in test_inputs[:5]]
+
     input_source_desc = input_discovery_res.discovery_source
-    input_discovery_meta = input_discovery_res.provenance
+    input_discovery_meta = {
+        **(input_discovery_res.provenance or {}),
+        "user_supplied_inputs_count": len(req.custom_inputs or []),
+    }
+    if req.custom_inputs:
+        input_source_desc = (
+            f"{input_source_desc}; " if input_source_desc else ""
+        ) + f"{len(req.custom_inputs)} user-supplied input case(s)"
 
     # 5. Execution Authorization: Load executable callables ONLY NOW in the authorized execution stage
     legacy_instance = adapter_detector.load_authorized_adapter(
@@ -605,7 +644,18 @@ def _run_repository_certification_pipeline(
     cob_plan_data = analysis_result.provenance.get("cobol_execution_plan") if (analysis_result and analysis_result.provenance) else None
     if cob_plan_data:
         result.metadata["cobol_execution_plan"] = cob_plan_data
-        result.metadata["genuine_cobol_execution"] = True
+        cics_operations = cob_plan_data.get("cics_operations", [])
+        result.metadata["cobol_execution"] = {
+            "runtime": "GnuCOBOL",
+            "cics_operations": cics_operations,
+            "cics_execution_mode": "COMPATIBILITY_EMULATION" if cics_operations else "NOT_APPLICABLE",
+            "genuine_cics_execution": False if cics_operations else None,
+            "limitations": (
+                ["CICS commands are transformed to a standalone compatibility harness; this is not genuine CICS execution."]
+                if cics_operations
+                else []
+            ),
+        }
 
     if result.threshold_resolution_id:
         th_res = threshold_persistence.get_resolution(result.threshold_resolution_id)

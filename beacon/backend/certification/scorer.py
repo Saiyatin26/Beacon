@@ -10,8 +10,49 @@ contributes less to the headline score even if it fails, so a shaky candidate
 rule can't artificially tank the reported result.
 """
 
+import math
+
 from common.config import settings
 from common.models import Oracle
+
+
+EVIDENCE_SCORE_WEIGHTS = {
+    "oracle_coverage": 0.30,
+    "input_coverage": 0.20,
+    "execution_reliability": 0.20,
+    "oracle_confidence": 0.15,
+    "input_set_integrity": 0.10,
+    "source_hash_integrity": 0.05,
+}
+
+
+def evidence_adjusted_score(
+    behavioral_score: float,
+    factors: dict[str, float | None],
+) -> tuple[float, float, dict[str, float]]:
+    """Combines observed equivalence with available, run-derived evidence quality factors."""
+    if not math.isfinite(behavioral_score) or not 0.0 <= behavioral_score <= 1.0:
+        raise ValueError("behavioral_score must be finite and between 0.0 and 1.0")
+
+    active_factors: dict[str, float] = {}
+    for name in EVIDENCE_SCORE_WEIGHTS:
+        value = factors.get(name)
+        if value is None:
+            continue
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            raise ValueError(f"Evidence factor '{name}' must be finite and between 0.0 and 1.0")
+        active_factors[name] = value
+
+    total_weight = sum(EVIDENCE_SCORE_WEIGHTS[name] for name in active_factors)
+    if total_weight == 0.0:
+        raise ValueError("At least one evidence factor is required")
+
+    quality = sum(
+        EVIDENCE_SCORE_WEIGHTS[name] * value
+        for name, value in active_factors.items()
+    ) / total_weight
+    adjusted_score = behavioral_score * quality
+    return round(adjusted_score, 6), round(quality, 6), active_factors
 
 
 def equivalence_score(oracle_results: list[dict], oracles_by_id: dict[str, Oracle]) -> float:

@@ -41,7 +41,11 @@ class Settings:
 
     # Primary Cloud Provider: OpenRouter
     openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+    openrouter_fallback_model: str = os.getenv(
+        "OPENROUTER_FALLBACK_MODEL",
+        "nvidia/nemotron-3.5-lightning:free",
+    )
     openrouter_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
     # Supported Cloud Provider: Anthropic
@@ -223,6 +227,5 @@ class Settings:
 
 
 settings = Settings()
-
 
 

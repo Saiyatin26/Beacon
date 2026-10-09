@@ -11,12 +11,25 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
 logger = logging.getLogger("beacon.certification.cics_runner")
+
+_BMS_INPUT_ALIASES = {
+    "ACCT_ID": "ACCTSIDI",
+    "ACTIVE_STATUS": "ACSTTUSI",
+    "CREDIT_LIMIT": "ACRDLIMI",
+}
+_BMS_OUTPUT_ALIASES = {
+    "ACCTSIDO": "ACCT_ID",
+    "ACSTTUSO": "ACCT_STATUS",
+    "ACURBALO": "ACCT_BAL",
+    "INFOMSGO": "MESSAGE",
+}
 
 _DFHAID_MOCK = """      * Full Mock DFHAID
        01 DFHAID-MOCK.
@@ -111,7 +124,60 @@ def to_wsl_path(path: Path | str) -> str:
     return p_str
 
 
-def prepare_cics_source(source_text: str, program_id: Optional[str] = None) -> str:
+def _load_cics_copybooks(source_text: str, copybook_dirs: list[Path]) -> list[str]:
+    """Loads only copybooks referenced by the program for BMS field discovery."""
+    copybooks: list[str] = []
+    for match in re.finditer(r"\bCOPY\s+['\"]?([A-Za-z0-9_-]+)", source_text, re.IGNORECASE):
+        copy_name = match.group(1).upper()
+        for directory in copybook_dirs:
+            if not directory.is_dir():
+                continue
+            candidate = next(
+                (
+                    path for path in directory.iterdir()
+                    if path.is_file()
+                    and path.suffix.lower() == ".cpy"
+                    and path.stem.upper() == copy_name
+                ),
+                None,
+            )
+            if candidate is not None:
+                copybooks.append(candidate.read_text(encoding="utf-8", errors="ignore"))
+                break
+    return copybooks
+
+
+def _map_fields_by_group(copybook_texts: list[str]) -> dict[str, list[tuple[str, int]]]:
+    """Extracts simple PIC X BMS map fields from 01-level copybook groups."""
+    fields_by_group: dict[str, list[tuple[str, int]]] = {}
+    for copybook in copybook_texts:
+        groups = list(re.finditer(r"(?im)^\s*01\s+([A-Za-z0-9_-]+)\b[^\r\n]*", copybook))
+        for index, group in enumerate(groups):
+            group_name = group.group(1).upper()
+            block_end = groups[index + 1].start() if index + 1 < len(groups) else len(copybook)
+            group_body = copybook[group.end():block_end]
+            fields: list[tuple[str, int]] = []
+            for field_match in re.finditer(
+                r"(?im)^\s*(?:02|03)\s+([A-Za-z0-9_-]+)\s+"
+                r"(?:REDEFINES\s+[A-Za-z0-9_-]+\s+)?PIC\s+X"
+                r"(?:\s*\(\s*(\d+)\s*\))?",
+                group_body,
+            ):
+                field_name = field_match.group(1).upper()
+                if field_name == "FILLER":
+                    continue
+                field_length = int(field_match.group(2) or "1")
+                fields.append((field_name, field_length))
+            if fields:
+                fields_by_group[group_name] = fields
+    return fields_by_group
+
+
+def prepare_cics_source(
+    source_text: str,
+    program_id: Optional[str] = None,
+    copybook_dirs: Optional[list[Path]] = None,
+) -> str:
     """Transforms raw CICS COBOL source into a standalone GnuCOBOL-compatible program
     using a generic BEACON compatibility harness.
     
@@ -120,13 +186,22 @@ def prepare_cics_source(source_text: str, program_id: Optional[str] = None) -> s
     3. Injects DFHEIBLK and allocated DFHCOMMAREA into WORKING-STORAGE.
     4. Removes unallocated LINKAGE SECTION DFHCOMMAREA pointer definition.
     5. Replaces EXEC CICS blocks with generic COBOL emulation logic.
-    6. Injects dynamic environment variable acceptance in the entrypoint paragraph.
+    6. Captures simple BMS output-map fields and accepts matching input fields.
+    7. Injects dynamic environment variable acceptance in the entrypoint paragraph.
     """
     if not program_id:
         pid_m = re.search(r"PROGRAM-ID\.\s*([A-Za-z0-9_-]+)", source_text, re.IGNORECASE)
         program_id = pid_m.group(1).strip() if pid_m else "GENERIC_PROGRAM"
     
     source = source_text
+    copybook_texts = _load_cics_copybooks(source_text, copybook_dirs or [])
+    map_fields_by_group = _map_fields_by_group([source_text, *copybook_texts])
+    input_map_fields = [
+        (group_name, field_name, field_length)
+        for group_name, fields in map_fields_by_group.items()
+        for field_name, field_length in fields
+        if field_name.endswith("I")
+    ]
 
     # 1. Replace DFHRESP
     source = re.sub(r"DFHRESP\s*\(\s*NORMAL\s*\)", "0", source, flags=re.IGNORECASE)
@@ -142,7 +217,13 @@ def prepare_cics_source(source_text: str, program_id: Optional[str] = None) -> s
     ws_idx = source.upper().find("WORKING-STORAGE SECTION.")
     if ws_idx != -1:
         insert_at = source.find("\n", ws_idx) + 1
-        source = source[:insert_at] + _DFHEIBLK_MOCK + "\n" + source[insert_at:]
+        map_input_storage = ""
+        if input_map_fields:
+            map_input_storage = "       01 WS-BEACON-MAP-INPUTS.\n" + "".join(
+                f"         05 WS-BINP-MAP-{index:04d} PIC X({field_length}).\n"
+                for index, (_, _, field_length) in enumerate(input_map_fields, start=1)
+            )
+        source = source[:insert_at] + _DFHEIBLK_MOCK + "\n" + map_input_storage + source[insert_at:]
 
     # 4. Remove unallocated LINKAGE SECTION DFHCOMMAREA
     source = re.sub(
@@ -170,13 +251,32 @@ def prepare_cics_source(source_text: str, program_id: Optional[str] = None) -> s
         elif "SEND MAP" in block:
             map_m = re.search(r"MAP\s*\(\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*\)", block)
             map_name = map_m.group(1) if map_m else "MAP"
-            return f"           DISPLAY 'BEACON-OP:SEND-MAP:{map_name}'"
-        elif "RECEIVE MAP" in block:
-            # Move accepted inputs to map input fields if defined in source
-            return (
-                "           DISPLAY 'BEACON-OP:RECEIVE-MAP'\n"
-                "           MOVE 0 TO WS-RESP-CD"
+            output_group_m = re.search(r"FROM\s*\(\s*([A-Za-z0-9_-]+)\s*\)", block)
+            output_group = output_group_m.group(1).upper() if output_group_m else ""
+            output_fields = map_fields_by_group.get(output_group, [])
+            capture_lines = []
+            for field_name, _ in output_fields:
+                capture_lines.extend([
+                    f"           DISPLAY 'OUT-MAP-FIELD:' '{field_name}:'",
+                    f"               {field_name} OF {output_group}",
+                ])
+            return "\n".join(
+                [f"           DISPLAY 'BEACON-OP:SEND-MAP:{map_name}'", *capture_lines]
             )
+        elif "RECEIVE MAP" in block:
+            input_group_m = re.search(r"INTO\s*\(\s*([A-Za-z0-9_-]+)\s*\)", block)
+            input_group = input_group_m.group(1).upper() if input_group_m else ""
+            receive_lines = [
+                "           DISPLAY 'BEACON-OP:RECEIVE-MAP'",
+                "           MOVE 0 TO WS-RESP-CD",
+            ]
+            for index, (group_name, field_name, _) in enumerate(input_map_fields, start=1):
+                if not input_group or group_name == input_group:
+                    receive_lines.append(
+                        f"           MOVE WS-BINP-MAP-{index:04d}\n"
+                        f"               TO {field_name} OF {group_name}"
+                    )
+            return "\n".join(receive_lines)
         elif "READ" in block:
             # Generic data file emulation driven by external test environment
             return (
@@ -204,6 +304,11 @@ def prepare_cics_source(source_text: str, program_id: Optional[str] = None) -> s
     entry_m = re.search(r"PROCEDURE\s+DIVISION.*?\n\s{6,8}([A-Za-z0-9_-]+)\.", source, re.IGNORECASE | re.DOTALL)
     entry_para = entry_m.group(1) if entry_m else "0000-MAIN"
 
+    map_input_accepts = "".join(
+        f'           ACCEPT WS-BINP-MAP-{index:04d} FROM ENVIRONMENT\n'
+        f'               "BEACON_INP_{field_name}"\n'
+        for index, (_, field_name, _) in enumerate(input_map_fields, start=1)
+    )
     init_code = f"""       {entry_para}.
            ACCEPT WS-BINP-AID FROM ENVIRONMENT
                "BINP_AID"
@@ -219,6 +324,7 @@ def prepare_cics_source(source_text: str, program_id: Optional[str] = None) -> s
                "BEACON_DS_RESP"
            ACCEPT WS-BEACON-DS-BAL FROM ENVIRONMENT
                "BEACON_DS_BAL"
+{map_input_accepts}
 
            IF WS-BINP-CALN = '0'
                MOVE 0 TO EIBCALEN
@@ -251,7 +357,11 @@ def compile_cobol_program(
     if not program_id:
         pid_m = re.search(r"PROGRAM-ID\.\s*([A-Za-z0-9_-]+)", raw_source, re.IGNORECASE)
         program_id = pid_m.group(1).strip() if pid_m else "GENERIC_PROGRAM"
-    preprocessed = prepare_cics_source(raw_source, program_id=program_id)
+    preprocessed = prepare_cics_source(
+        raw_source,
+        program_id=program_id,
+        copybook_dirs=copybook_dirs,
+    )
 
     # Write preprocessed source to temp dir
     temp_dir = Path(tempfile.gettempdir())
@@ -290,20 +400,33 @@ def execute_compiled_cobol(
     timeout: int = 15,
 ) -> tuple[bool, dict[str, Any], str, str]:
     """Executes the compiled GnuCOBOL binary in WSL with genuine environment inputs.
-    
+
+    A successful process exit without recognized output markers is not a
+    successful observation; outputs are never inferred from the input vector.
     Returns (success, parsed_outputs, stdout, stderr).
     """
     aid = str(inputs.get("EIBAID") or "ENTER").strip().upper()
     calen = inputs.get("EIBCALEN", 100)
-    
-    # Generic extraction from input vector
-    acct_id = str(inputs.get("acct_id") or inputs.get("ACCT_ID") or "").strip()
-    status = str(inputs.get("active_status") or inputs.get("ACCT_STATUS") or "").strip().upper()
-    limit = str(inputs.get("credit_limit") or inputs.get("CREDIT_LIMIT") or "").strip()
 
-    # Determine whether external data dependency exists for this input
-    ds_resp = str(inputs.get("BEACON_DS_RESP") or ("0" if inputs.get("__record_exists") is True or (acct_id and acct_id not in ("999999999", "00999999999", "0")) else "13"))
-    ds_bal = str(inputs.get("initial_balance") or inputs.get("ACCT_BAL") or "")
+    normalized_inputs = {str(key).upper(): value for key, value in inputs.items()}
+    acct_id = str(
+        normalized_inputs.get("ACCT_ID")
+        or normalized_inputs.get("ACCTSIDI")
+        or ""
+    ).strip()
+    status = str(
+        normalized_inputs.get("ACTIVE_STATUS")
+        or normalized_inputs.get("ACCT_STATUS")
+        or normalized_inputs.get("ACSTTUSI")
+        or ""
+    ).strip().upper()
+    limit = str(
+        normalized_inputs.get("CREDIT_LIMIT")
+        or normalized_inputs.get("ACRDLIMI")
+        or ""
+    ).strip()
+    ds_resp = str(normalized_inputs.get("BEACON_DS_RESP") or ("0" if normalized_inputs.get("__RECORD_EXISTS") is True or (acct_id and acct_id not in ("999999999", "00999999999", "0")) else "13"))
+    ds_bal = str(normalized_inputs.get("INITIAL_BALANCE") or normalized_inputs.get("ACCT_BAL") or "")
 
     env_vars = {
         "BINP_CALN": str(calen),
@@ -314,9 +437,20 @@ def execute_compiled_cobol(
         "BEACON_DS_RESP": ds_resp,
         "BEACON_DS_BAL": ds_bal,
     }
+    for key, value in inputs.items():
+        field_name = str(key).upper()
+        if (
+            re.fullmatch(r"[A-Z][A-Z0-9_]*", field_name)
+            and isinstance(value, (str, int, float, bool))
+        ):
+            env_vars[f"BEACON_INP_{field_name}"] = str(value)
+    for canonical_name, map_field_name in _BMS_INPUT_ALIASES.items():
+        value = normalized_inputs.get(canonical_name)
+        if isinstance(value, (str, int, float, bool)):
+            env_vars[f"BEACON_INP_{map_field_name}"] = str(value)
 
-    env_str = " ".join([f'{k}="{v}"' for k, v in env_vars.items()])
-    cmd = f"export {env_str} && {binary_wsl_path}"
+    env_args = " ".join(shlex.quote(f"{key}={value}") for key, value in env_vars.items())
+    cmd = f"env {env_args} {shlex.quote(binary_wsl_path)}"
 
     try:
         res = subprocess.run(
@@ -338,33 +472,59 @@ def execute_compiled_cobol(
         parsed_message = ""
         parsed_acct = ""
         parsed_xctl = ""
+        parsed_map_fields: dict[str, str] = {}
+        observed_fields: set[str] = set()
 
         for line in stdout.splitlines():
             line_str = line.strip()
             if line_str.startswith("OUT-ACTION:"):
+                observed_fields.add("ACTION")
                 parsed_action = line_str[len("OUT-ACTION:"):].strip()
             elif line_str.startswith("OUT-MESSAGE:"):
+                observed_fields.add("MESSAGE")
                 parsed_message = line_str[len("OUT-MESSAGE:"):].strip()
             elif line_str.startswith("OUT-ACCT:"):
+                observed_fields.add("ACCT_ID")
                 parsed_acct = line_str[len("OUT-ACCT:"):].strip()
             elif line_str.startswith("OUT-XCTL:"):
+                observed_fields.add("XCTL_PROGRAM")
                 parsed_xctl = line_str[len("OUT-XCTL:"):].strip()
+            elif line_str.startswith("OUT-MAP-FIELD:"):
+                _, field_name, field_value = line_str.split(":", 2)
+                parsed_map_fields[field_name] = field_value.replace("\x00", "").rstrip()
+                observed_fields.add("MAP_FIELDS")
 
-        is_error = "Y" if (parsed_action == "E" or "not found" in parsed_message.lower() or "must be" in parsed_message.lower()) else "N"
-        is_success = "Y" if (parsed_action == "C" or "committed" in parsed_message.lower()) else "N"
-        ret_to_prev = "Y" if (parsed_xctl or aid in ("PF3", "DFHPF3") or calen == 0) else "N"
+        if not observed_fields:
+            diagnostic = (
+                "COBOL process exited successfully but emitted no recognized "
+                "BEACON output markers; authoritative business outputs were not observed."
+            )
+            logger.warning(diagnostic)
+            return False, {"error": diagnostic}, stdout, stderr
 
-        outputs = {
-            "ACTION": parsed_action,
-            "ERROR": is_error,
-            "SUCCESS": is_success,
-            "MESSAGE": parsed_message,
-            "XCTL_PROGRAM": parsed_xctl,
-            "RETURN_TO_PREV": ret_to_prev,
-            "ACCT_ID": parsed_acct or acct_id,
-            "ACCT_STATUS": status if is_success == "Y" else "",
-            "ACCT_BAL": ds_bal if ds_resp == "0" else "",
-        }
+        outputs: dict[str, Any] = {}
+        if "ACTION" in observed_fields:
+            outputs["ACTION"] = parsed_action
+            outputs["ERROR"] = "Y" if parsed_action == "E" else "N"
+            outputs["SUCCESS"] = "Y" if parsed_action == "C" else "N"
+        if "MESSAGE" in observed_fields:
+            outputs["MESSAGE"] = parsed_message
+            outputs["ERROR"] = "Y" if "not found" in parsed_message.lower() or "must be" in parsed_message.lower() else outputs.get("ERROR", "N")
+            outputs["SUCCESS"] = "Y" if "committed" in parsed_message.lower() else outputs.get("SUCCESS", "N")
+        if "ACCT_ID" in observed_fields:
+            outputs["ACCT_ID"] = parsed_acct
+        if "XCTL_PROGRAM" in observed_fields:
+            outputs["XCTL_PROGRAM"] = parsed_xctl
+            outputs["RETURN_TO_PREV"] = "Y"
+        if "MAP_FIELDS" in observed_fields:
+            outputs["MAP_FIELDS"] = parsed_map_fields
+            outputs.update(
+                {
+                    canonical_name: parsed_map_fields[map_field_name]
+                    for map_field_name, canonical_name in _BMS_OUTPUT_ALIASES.items()
+                    if map_field_name in parsed_map_fields
+                }
+            )
         return True, outputs, stdout, stderr
 
     except subprocess.TimeoutExpired:

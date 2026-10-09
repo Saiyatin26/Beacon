@@ -89,7 +89,7 @@ class ProviderManager:
                 resp = provider.generate(prompt, system=system, json_mode=json_mode)
                 resp.requested_provider = mode
                 if resp.success and (resp.parsed_json is not None or not json_mode):
-                    fallback_used = (mode != "auto" and resp.provider_name.lower() != mode) or (mode == "auto" and len(fallback_chain) > 1)
+                    fallback_used = resp.fallback_occurred or (mode != "auto" and resp.provider_name.lower() != mode) or (mode == "auto" and len(fallback_chain) > 1)
                     resp.fallback_occurred = fallback_used
                     resp.fallback_chain = list(fallback_chain)
                     if resp.fallback_occurred and last_error:

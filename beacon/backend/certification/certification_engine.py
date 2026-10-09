@@ -14,7 +14,8 @@ import uuid
 
 from oracle.models import OracleDefinition, OracleSet
 from oracle.serializer import compute_oracle_set_hash
-from evaluation.models import BehaviorDimension
+from common.contracts import compute_canonical_input_hash
+from evaluation.models import BehaviorDimension, EvaluationVerdict
 from .adapters import ImplementationAdapter, LegacyAdapter, ModernizedAdapter
 from .engine import CrossVersionCertificationEngine
 from .input_generator import generate_certification_test_suite
@@ -36,6 +37,8 @@ from .models import (
     verify_input_set_integrity,
 )
 from .repository import certification_repository
+from .scorer import evidence_adjusted_score
+from evaluation.models import verify_evaluation_result_integrity
 from ingestion.audit import audit_logger, AuditAction
 from operations.logging_config import log_operational_event
 
@@ -121,6 +124,65 @@ class CertificationEngine:
                     obs_dev = round(1.0 - score, 6)
                     cov = 1.0
 
+                observed_score = score
+                input_coverage = (
+                    min(float(getattr(evaluation_result.summary, "evaluated_inputs", 0)) / total_inp, 1.0)
+                    if evaluation_result is not None and total_inp > 0
+                    else 0.0
+                )
+                eval_summary = getattr(evaluation_result, "summary", None)
+                evaluated_count = int(getattr(eval_summary, "evaluated_inputs", 0)) if eval_summary else 0
+                execution_reliability = (
+                    max(
+                        0.0,
+                        1.0 - float(getattr(eval_summary, "error_inputs", 0)) / evaluated_count,
+                    )
+                    if evaluated_count
+                    else 0.0
+                )
+                oracle_confidences = [
+                    float(getattr(rule, "confidence", 1.0))
+                    for rule in getattr(oracle_set, "rules", [])
+                ] if oracle_set else []
+                if oracle_set and getattr(oracle_set, "oracles", None):
+                    oracle_confidences.extend(
+                        float(getattr(oracle, "confidence", 1.0))
+                        for oracle in oracle_set.oracles
+                    )
+                legacy_hash = (
+                    context.legacy_implementation_hash if context else ""
+                )
+                modern_hash = (
+                    context.modernized_implementation_hash if context else ""
+                )
+                source_hash_integrity = (
+                    None
+                    if not legacy_hash and not modern_hash
+                    else 1.0 if legacy_hash and modern_hash else 0.0
+                )
+                input_set_integrity = (
+                    1.0
+                    if evaluation_result is not None
+                    and bool(evaluation_result.evaluation_hash)
+                    and verify_evaluation_result_integrity(evaluation_result)
+                    else 0.0
+                )
+                adjusted_score, evidence_quality, score_factors = evidence_adjusted_score(
+                    observed_score,
+                    {
+                        "oracle_coverage": cov,
+                        "input_coverage": input_coverage,
+                        "execution_reliability": execution_reliability,
+                        "oracle_confidence": (
+                            sum(oracle_confidences) / len(oracle_confidences)
+                            if oracle_confidences
+                            else None
+                        ),
+                        "input_set_integrity": input_set_integrity,
+                        "source_hash_integrity": source_hash_integrity,
+                    },
+                )
+
                 min_cov = float(getattr(cert_policy, "min_coverage", getattr(cert_policy, "min_oracle_coverage", 0.8)))
 
                 # Strict Predicate Evaluation (Normative Patent Contract)
@@ -138,7 +200,7 @@ class CertificationEngine:
                     blocking_reasons = [f"Coverage ({cov:.4f}) is below minimum required threshold ({min_cov:.4f})"]
                 else:
                     eff_thresh = float(getattr(threshold_resolution, "effective_threshold", 0.0))
-                    if obs_dev <= eff_thresh:
+                    if obs_dev <= eff_thresh and adjusted_score >= cert_policy.min_equivalence_score:
                         if diff_inp > 0 and getattr(cert_policy, "allow_warnings", True):
                             final_status = CertificationStatus.CERTIFIED_WITH_WARNINGS
                         else:
@@ -148,9 +210,16 @@ class CertificationEngine:
                     else:
                         final_status = CertificationStatus.NOT_CERTIFIED
                         is_certified = False
-                        blocking_reasons = [
-                            f"Observed deviation ({obs_dev:.6f}) exceeds resolved dynamic threshold ({eff_thresh:.6f})"
-                        ]
+                        blocking_reasons = []
+                        if obs_dev > eff_thresh:
+                            blocking_reasons.append(
+                                f"Observed deviation ({obs_dev:.6f}) exceeds resolved dynamic threshold ({eff_thresh:.6f})"
+                            )
+                        if adjusted_score < cert_policy.min_equivalence_score:
+                            blocking_reasons.append(
+                                f"Evidence-adjusted score ({adjusted_score * 100:.1f}%) is below "
+                                f"the policy threshold ({cert_policy.min_equivalence_score * 100:.1f}%)"
+                            )
 
             oracle_summaries = []
             if oracle_set and hasattr(oracle_set, "rules"):
@@ -250,7 +319,7 @@ class CertificationEngine:
                 timestamp=timestamp,
                 status=final_status,
                 certified=is_certified,
-                score=round(score, 6),
+                score=adjusted_score,
                 observed_deviation=round(obs_dev, 6),
                 resolved_threshold=round(getattr(threshold_resolution, "effective_threshold", 0.0), 6) if threshold_resolution else None,
                 coverage=round(cov, 6),
@@ -260,7 +329,10 @@ class CertificationEngine:
                     regression_case_count=diff_inp,
                     oracle_count=len(oracle_summaries),
                     oracle_coverage_pct=round(cov, 4),
-                    overall_equivalence_score=round(score, 6),
+                    overall_equivalence_score=round(observed_score, 6),
+                    evidence_quality_score=evidence_quality,
+                    evidence_adjusted_score=adjusted_score,
+                    evidence_score_factors=score_factors,
                 ),
                 domain_scores=dim_scores,
                 oracle_summaries=oracle_summaries,
@@ -627,6 +699,8 @@ class CertificationEngine:
                 input_hash=inp_hash,
                 legacy_output_json=leg_out,
                 modern_output_json=mod_out,
+                legacy_execution_status=leg_obs.execution_status if leg_obs else "NOT_EXECUTED",
+                modern_execution_status=mod_obs.execution_status if mod_obs else "NOT_EXECUTED",
                 execution_time_ms=exec_time,
                 oracle_result="VIOLATED" if input_regs else "PASS",
                 classification=classification,
@@ -665,6 +739,15 @@ class CertificationEngine:
             if c.legacy_output_json is None or c.modern_output_json is None:
                 reproducibility_valid = False
                 reproducibility_reasons.append(f"Case #{c.case_index} missing execution outputs")
+            if (
+                c.legacy_execution_status != "SUCCESS"
+                or c.modern_execution_status != "SUCCESS"
+            ):
+                reproducibility_valid = False
+                reproducibility_reasons.append(
+                    f"Case #{c.case_index} lacks successful paired execution "
+                    f"(legacy={c.legacy_execution_status}, modern={c.modern_execution_status})"
+                )
             if not c.oracle_result or not c.classification:
                 reproducibility_valid = False
                 reproducibility_reasons.append(f"Case #{c.case_index} missing oracle result or classification")
@@ -741,6 +824,55 @@ class CertificationEngine:
         e_errors = sum(1 for c in cases_to_save if c.classification in ("ERROR", "EXECUTION_ERROR"))
         c_count = len(phase9_report.regressions)
         coverage_pct = round(oracles_exercised_count / oracle_count, 4) if oracle_count > 0 else None
+        successful_pair_input_ids = {
+            record.input_id
+            for record in phase9_report.comparison_records
+            if record.legacy_observation.execution_status == "SUCCESS"
+            and record.modern_observation.execution_status == "SUCCESS"
+        }
+        input_coverage = (
+            min(len(successful_pair_input_ids) / len(inputs), 1.0)
+            if inputs
+            else 0.0
+        )
+        execution_attempts = [
+            observation.execution_status
+            for record in phase9_report.comparison_records
+            for observation in (record.legacy_observation, record.modern_observation)
+        ]
+        execution_reliability = (
+            sum(status == "SUCCESS" for status in execution_attempts) / len(execution_attempts)
+            if execution_attempts
+            else 0.0
+        )
+        oracle_confidence = (
+            sum(oracle.confidence for oracle in oracle_set.oracles) / oracle_count
+            if oracle_count
+            else 0.0
+        )
+        legacy_source_hash = (
+            context.legacy_implementation_hash if context else ""
+        ) or getattr(legacy_adapter, "implementation_hash", "")
+        modern_source_hash = (
+            context.modernized_implementation_hash if context else ""
+        ) or getattr(modern_adapter, "implementation_hash", "")
+        source_hash_integrity = (
+            None
+            if not legacy_source_hash and not modern_source_hash
+            else 1.0 if legacy_source_hash and modern_source_hash else 0.0
+        )
+        evidence_factors = {
+            "oracle_coverage": coverage_pct or 0.0,
+            "input_coverage": input_coverage,
+            "execution_reliability": execution_reliability,
+            "oracle_confidence": oracle_confidence,
+            "input_set_integrity": 1.0 if reproducibility_valid else 0.0,
+            "source_hash_integrity": source_hash_integrity,
+        }
+        adjusted_score, evidence_quality, active_evidence_factors = evidence_adjusted_score(
+            phase9_report.overall_equivalence_score,
+            evidence_factors,
+        )
 
         metrics = CertificationMetrics(
             unique_input_count=u_inputs,
@@ -765,6 +897,9 @@ class CertificationEngine:
             oracles_exercised=oracles_exercised_count,
             oracle_coverage_pct=coverage_pct,
             overall_equivalence_score=phase9_report.overall_equivalence_score,
+            evidence_quality_score=evidence_quality,
+            evidence_adjusted_score=adjusted_score,
+            evidence_score_factors=active_evidence_factors,
         )
 
         log_operational_event(
@@ -779,7 +914,8 @@ class CertificationEngine:
             regressions=r_cases,
             message=(
                 f"[PHASE 06] METRICS | cases={c_cases} | matching={m_cases} "
-                f"| regressions={r_cases} | score={metrics.overall_equivalence_score:.4f}"
+                f"| regressions={r_cases} | observed_score={metrics.overall_equivalence_score:.4f} "
+                f"| evidence_adjusted_score={metrics.evidence_adjusted_score:.4f}"
             ),
         )
 
@@ -821,9 +957,9 @@ class CertificationEngine:
             )
             final_status = CertificationStatus.NOT_CERTIFIED
 
-        elif metrics.overall_equivalence_score < cert_policy.min_equivalence_score:
+        elif adjusted_score < cert_policy.min_equivalence_score:
             blocking_reasons.append(
-                f"Equivalence score ({metrics.overall_equivalence_score * 100:.1f}%) below policy threshold "
+                f"Evidence-adjusted score ({adjusted_score * 100:.1f}%) below policy threshold "
                 f"({cert_policy.min_equivalence_score * 100:.1f}%)"
             )
             final_status = CertificationStatus.NOT_CERTIFIED
@@ -946,7 +1082,7 @@ class CertificationEngine:
             reproducibility_state=repro_state,
             status=final_status,
             certified=is_certified,
-            score=metrics.overall_equivalence_score,
+            score=adjusted_score,
             metrics=metrics,
             domain_scores=phase9_report.domain_scores,
             oracle_summaries=oracle_summaries,

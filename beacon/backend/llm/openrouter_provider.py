@@ -110,6 +110,9 @@ class OpenRouterProvider(LLMProvider):
         }
 
         start_time = time.perf_counter()
+        requested_model = self.model
+        actual_model = requested_model
+        fallback_reason: Optional[str] = None
         try:
             req_data = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(endpoint, data=req_data, headers=headers, method="POST")
@@ -120,12 +123,38 @@ class OpenRouterProvider(LLMProvider):
                     return json.loads(resp_bytes.decode("utf-8"))
 
             from operations.resilience import execute_with_retry
-            resp_json = execute_with_retry(
-                _fetch,
-                max_attempts=getattr(settings, "max_retry_attempts", 3),
-                base_delay_ms=getattr(settings, "retry_backoff_base_ms", 100.0),
-                operation_name=f"openrouter_chat_completion:{self.model}",
-            )
+            try:
+                resp_json = execute_with_retry(
+                    _fetch,
+                    max_attempts=getattr(settings, "max_retry_attempts", 3),
+                    base_delay_ms=getattr(settings, "retry_backoff_base_ms", 100.0),
+                    operation_name=f"openrouter_chat_completion:{requested_model}",
+                )
+            except urllib.error.HTTPError as exc:
+                fallback_model = (settings.openrouter_fallback_model or "").strip()
+                if exc.code not in (402, 404) or not fallback_model or fallback_model == requested_model:
+                    raise
+                fallback_reason = (
+                    f"Configured OpenRouter model '{requested_model}' returned HTTP {exc.code}; "
+                    f"retried with configured fallback model '{fallback_model}'."
+                )
+                logger.warning(fallback_reason)
+                actual_model = fallback_model
+                payload["model"] = fallback_model
+                req_data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(endpoint, data=req_data, headers=headers, method="POST")
+
+                def _fetch_fallback():
+                    with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                        resp_bytes = resp.read()
+                        return json.loads(resp_bytes.decode("utf-8"))
+
+                resp_json = execute_with_retry(
+                    _fetch_fallback,
+                    max_attempts=getattr(settings, "max_retry_attempts", 3),
+                    base_delay_ms=getattr(settings, "retry_backoff_base_ms", 100.0),
+                    operation_name=f"openrouter_chat_completion:{fallback_model}",
+                )
 
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
@@ -135,25 +164,42 @@ class OpenRouterProvider(LLMProvider):
                 return LLMResponse(
                     raw_text="",
                     provider_name=self.name,
-                    model_name=self.model,
+                    model_name=actual_model,
+                    requested_provider=self.name,
                     latency_ms=latency_ms,
+                    fallback_occurred=fallback_reason is not None,
+                    fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
+                    fallback_reason=fallback_reason,
                     success=False,
                     error="OpenRouter response contained no choices.",
+                    metadata={
+                        "configured_model": requested_model,
+                        "actual_model": actual_model,
+                        "model_fallback_used": fallback_reason is not None,
+                    },
                 )
 
             raw_text = choices[0].get("message", {}).get("content", "")
             parsed_json = extract_json_payload(raw_text) if json_mode else None
+            response_model = resp_json.get("model", actual_model)
 
             return LLMResponse(
                 raw_text=raw_text,
                 parsed_json=parsed_json,
                 provider_name=self.name,
-                model_name=self.model,
+                model_name=response_model,
+                requested_provider=self.name,
                 latency_ms=latency_ms,
+                fallback_occurred=fallback_reason is not None,
+                fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
+                fallback_reason=fallback_reason,
                 success=True,
                 metadata={
                     "usage": resp_json.get("usage", {}),
-                    "model_id": resp_json.get("model", self.model),
+                    "model_id": response_model,
+                    "configured_model": requested_model,
+                    "actual_model": response_model,
+                    "model_fallback_used": fallback_reason is not None,
                 },
             )
 
@@ -164,20 +210,38 @@ class OpenRouterProvider(LLMProvider):
             return LLMResponse(
                 raw_text="",
                 provider_name=self.name,
-                model_name=self.model,
+                model_name=actual_model,
+                requested_provider=self.name,
                 latency_ms=latency_ms,
+                fallback_occurred=fallback_reason is not None,
+                fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
+                fallback_reason=fallback_reason,
                 success=False,
                 error=err_msg,
+                metadata={
+                    "configured_model": requested_model,
+                    "actual_model": actual_model,
+                    "model_fallback_used": fallback_reason is not None,
+                },
             )
         except Exception as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = "OpenRouter request failed."
-            logger.error(err_msg)
+            err_msg = f"OpenRouter request failed: {exc}"
+            logger.exception("OpenRouter request failed.")
             return LLMResponse(
                 raw_text="",
                 provider_name=self.name,
-                model_name=self.model,
+                model_name=actual_model,
+                requested_provider=self.name,
                 latency_ms=latency_ms,
+                fallback_occurred=fallback_reason is not None,
+                fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
+                fallback_reason=fallback_reason,
                 success=False,
                 error=err_msg,
+                metadata={
+                    "configured_model": requested_model,
+                    "actual_model": actual_model,
+                    "model_fallback_used": fallback_reason is not None,
+                },
             )

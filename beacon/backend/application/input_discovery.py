@@ -145,6 +145,7 @@ class InputDiscoveryEngine:
                     break
 
         ai_mined_rules: list[dict[str, Any]] = []
+        llm_provider_metadata: dict[str, Any] = {}
 
         # 2b. Check for COBOL source programs and perform AI-Assisted Condition & Invariant Mining
         if not discovered_cases:
@@ -167,7 +168,7 @@ class InputDiscoveryEngine:
             if cobol_candidates:
                 primary_cbl = cobol_candidates[0]
                 primary_py = py_candidates[0] if py_candidates else None
-                cases, rules = self._mine_cobol_conditions_with_ai(primary_cbl, primary_py)
+                cases, rules, llm_provider_metadata = self._mine_cobol_conditions_with_ai(primary_cbl, primary_py)
                 if cases:
                     discovered_cases.extend(cases)
                     ai_mined_rules = rules
@@ -182,6 +183,7 @@ class InputDiscoveryEngine:
                 test_inputs=[],
                 discovery_source="",
                 discovery_method="FAILED",
+                provenance={"llm_provider": llm_provider_metadata},
                 diagnostic_message=(
                     "Input discovery failed: No legitimate test cases or fixtures could be discovered "
                     "in the provided repositories. Synthetic fallback is strictly disabled in BEACON V2. "
@@ -262,6 +264,7 @@ class InputDiscoveryEngine:
                 "input_set_hash": input_set_hash,
                 "count": len(test_inputs),
                 "ai_mined_rules": ai_mined_rules,
+                "llm_provider": llm_provider_metadata,
             },
             diagnostic_message=f"Discovered {len(test_inputs)} authoritative test cases via {method_desc}.",
         )
@@ -270,7 +273,7 @@ class InputDiscoveryEngine:
         self,
         cbl_file: Path,
         py_file: Optional[Path] = None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """Uses AI / LLM (with deterministic AST fallback) to discover operational conditions
         from COBOL source code and synthesize complete, legitimate test cases strictly grounded in source.
         """
@@ -293,6 +296,7 @@ class InputDiscoveryEngine:
 
         discovered_rules: list[dict[str, Any]] = []
         test_cases: list[dict[str, Any]] = []
+        llm_provider_metadata: dict[str, Any] = {}
 
         # 1. Attempt LLM-assisted condition and test case synthesis
         try:
@@ -334,6 +338,14 @@ Return ONLY a valid JSON object in this exact schema:
 }}
 """
             resp = pm.generate(prompt, json_mode=True)
+            llm_provider_metadata = {
+                "requested_provider": resp.requested_provider,
+                "actual_provider": resp.provider_name,
+                "model": resp.model_name,
+                "fallback_used": resp.fallback_occurred,
+                "fallback_reason": resp.fallback_reason,
+                "success": resp.success,
+            }
             if resp.success and resp.parsed_json and isinstance(resp.parsed_json, dict):
                 llm_rules = resp.parsed_json.get("rules", [])
                 llm_cases = resp.parsed_json.get("test_cases", [])
@@ -356,6 +368,11 @@ Return ONLY a valid JSON object in this exact schema:
                                 test_cases.append(tc)
         except Exception as e:
             logger.debug(f"LLM condition mining attempt note: {e}")
+            llm_provider_metadata = {
+                "actual_provider": "unavailable",
+                "success": False,
+                "error": str(e),
+            }
 
         # 2. Deterministic AST/Regex Condition Extraction (Grounded Fallback)
         if not discovered_rules or not test_cases:
@@ -444,7 +461,7 @@ Return ONLY a valid JSON object in this exact schema:
                         unique_cases.append(c)
                 test_cases = unique_cases
 
-        return test_cases, discovered_rules
+        return test_cases, discovered_rules, llm_provider_metadata
 
 
 input_discovery_engine = InputDiscoveryEngine()

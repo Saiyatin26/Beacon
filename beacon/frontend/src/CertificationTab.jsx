@@ -3,7 +3,7 @@
  *
  * Repository-First Behavioral Equivalence Certification Entry Point.
  * Implements the V2 Part 1 Architecture:
- *   1. User provides Legacy Repository URL, Modern Repository URL, and Evaluation Mode (CONTROLLED | FULL).
+ *   1. User provides Legacy/Modern sources, explicit test inputs, and evaluation mode.
  *   2. Backend securely ingests repositories, resolves immutable commit SHAs and content hashes.
  *   3. Safe static inspection (zero dynamic imports) resolves compatible adapters and entrypoints.
  *   4. Behavioral invariants and legitimate inputs are discovered from repository evidence.
@@ -62,7 +62,8 @@ export default function CertificationTab({
   const [modernFiles, setModernFiles] = useState([]);
   const [analysisScope, setAnalysisScope] = useState("FILE"); // FILE | DIRECTORY
   const [stagedUpload, setStagedUpload] = useState(null);
-  const [evaluationMode, setEvaluationMode] = useState("CONTROLLED"); // CONTROLLED | FULL
+  const [evaluationMode, setEvaluationMode] = useState("FULL_BEACON");
+  const [customInputsJson, setCustomInputsJson] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // ── Repository Analysis State ───────────────────────────────────────────────
@@ -75,6 +76,8 @@ export default function CertificationTab({
   const [certifyError, setCertifyError] = useState(null);
   const [workflowResult, setWorkflowResult] = useState(null);
   const [workflowRunId, setWorkflowRunId] = useState(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState(null);
 
   // ── Step Tracking ──────────────────────────────────────────────────────────
   const [activeStep, setActiveStep] = useState("configure"); // configure | result
@@ -245,6 +248,31 @@ export default function CertificationTab({
       }
     }
 
+    let customInputs = null;
+    if (customInputsJson.trim()) {
+      let parsedInputs;
+      try {
+        parsedInputs = JSON.parse(customInputsJson);
+      } catch {
+        setCertifyError("Additional test inputs must be valid JSON (one object or an array of objects).");
+        return;
+      }
+      if (Array.isArray(parsedInputs)) {
+        customInputs = parsedInputs;
+      } else if (parsedInputs && typeof parsedInputs === "object") {
+        customInputs = [parsedInputs];
+      } else {
+        setCertifyError("Additional test inputs must be a JSON object or an array of JSON objects.");
+        return;
+      }
+      if (customInputs.length === 0 || customInputs.some((item) =>
+        !item || typeof item !== "object" || Array.isArray(item) || Object.keys(item).length === 0
+      )) {
+        setCertifyError("Provide at least one non-empty JSON object for each additional test input.");
+        return;
+      }
+    }
+
     setCertifyBusy(true);
     setCertifyError(null);
     setWorkflowResult(null);
@@ -286,8 +314,9 @@ export default function CertificationTab({
         analysis_scope: sourceType === "UPLOADED_FILES" ? analysisScope : "REPOSITORY",
         selected_artifacts: selectedArtifacts,
         upload_id: uploadId,
+        custom_inputs: customInputs,
         explain: true,
-        explanation_mode: "deterministic",
+        explanation_mode: "auto",
       };
 
       const res = await _fetch(`${apiBase}/api/v2/workflow/certify-repository`, {
@@ -317,6 +346,100 @@ export default function CertificationTab({
     } finally {
       setCertifyBusy(false);
     }
+  };
+
+  const saveDownload = (blob, filename) => {
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(anchor);
+  };
+
+  const downloadCertificate = async () => {
+    if (!workflowResult?.artifact_id) return;
+    setReportBusy(true);
+    setReportError(null);
+    try {
+      const response = await _fetch(
+        `${apiBase}/api/v1/certification/${encodeURIComponent(workflowResult.artifact_id)}/export?format=markdown`
+      );
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || `Certificate download failed (HTTP ${response.status}).`);
+      }
+      saveDownload(
+        await response.blob(),
+        `beacon_certificate_${workflowResult.artifact_id}.md`
+      );
+    } catch (error) {
+      setReportError(error.message || "Certificate download failed.");
+    } finally {
+      setReportBusy(false);
+    }
+  };
+
+  const downloadRunReport = () => {
+    if (!workflowResult) return;
+    const meta = workflowResult.metadata || {};
+    const report = {
+      report_type: workflowResult.artifact_id ? "CERTIFICATION_RUN" : "UNSIGNED_RUN_REPORT_NOT_A_CERTIFICATE",
+      workflow_run_id: workflowResult.workflow_run_id,
+      application_id: workflowResult.application_id,
+      status: workflowResult.status,
+      certified: Boolean(workflowResult.certified),
+      artifact_id: workflowResult.artifact_id || null,
+      artifact_hash: workflowResult.artifact_hash || null,
+      score: workflowResult.equivalence_score ?? null,
+      source_hashes: {
+        legacy: meta.legacy_provenance?.content_hash || meta.sources?.legacy?.content_hash || null,
+        modern: meta.modern_provenance?.content_hash || meta.sources?.modern?.content_hash || null,
+      },
+      input_count: workflowResult.unique_input_count ?? meta.inputs_count ?? null,
+      evidence: meta.representative_cases || [],
+      error_code: workflowResult.error_code || null,
+      error_message: workflowResult.error_message || null,
+      limitations: meta.cobol_execution?.limitations || [],
+      metadata: meta,
+    };
+    const filename = `beacon_run_${workflowResult.workflow_run_id || "report"}.json`;
+    saveDownload(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }), filename);
+  };
+
+  const downloadAiSummary = () => {
+    if (!workflowResult?.explanation) return;
+    const meta = workflowResult.metadata || {};
+    const explanation = workflowResult.explanation;
+    const generation = explanation.generation_metadata || {};
+    const explanationFailed = explanation.status === "EXPLANATION_FAILED";
+    const summary = {
+      report_type: explanationFailed
+        ? "BEACON_EXPLANATION_FAILURE_REPORT"
+        : "BEACON_EVIDENCE_GROUNDED_SUMMARY",
+      generation_status: explanation.status || "COMPLETED",
+      workflow_run_id: workflowResult.workflow_run_id,
+      certification_id: workflowResult.artifact_id || null,
+      certificate_hash: workflowResult.artifact_hash || null,
+      source_hashes: {
+        legacy: meta.legacy_provenance?.content_hash || meta.sources?.legacy?.content_hash || null,
+        modern: meta.modern_provenance?.content_hash || meta.sources?.modern?.content_hash || null,
+      },
+      authoritative_verdict: workflowResult.status,
+      certified: Boolean(workflowResult.certified),
+      summary: explanation.executive_summary || explanation.status_rationale || explanation.summary || "",
+      provider: generation.provider || explanation.provider || "offline",
+      model: generation.model || explanation.model || "deterministic",
+      generation_mode: generation.generation_mode || explanation.mode || "DETERMINISTIC",
+      fallback_used: Boolean(generation.fallback_occurred || explanation.fallback_used),
+      fallback_reason: generation.fallback_reason || explanation.fallback_reason || null,
+      grounding_status: explanation.grounding_status || explanation.authoritative_match_status || null,
+      explanation,
+    };
+    const filename = `beacon_ai_summary_${workflowResult.artifact_id || workflowResult.workflow_run_id}.json`;
+    saveDownload(new Blob([JSON.stringify(summary, null, 2)], { type: "application/json" }), filename);
   };
 
   // ── Load Past Run Helper ───────────────────────────────────────────────────
@@ -829,30 +952,55 @@ export default function CertificationTab({
                       gap: "10px",
                       padding: "10px 12px",
                       borderRadius: "6px",
-                      border: `1px solid ${evaluationMode === "FULL" ? "#2563eb" : "#cbd5e1"}`,
-                      background: evaluationMode === "FULL" ? "#eff6ff" : "#f8fafc",
+                      border: `1px solid ${evaluationMode === "FULL_BEACON" ? "#2563eb" : "#cbd5e1"}`,
+                      background: evaluationMode === "FULL_BEACON" ? "#eff6ff" : "#f8fafc",
                       cursor: "pointer",
                     }}
                   >
                     <input
                       type="radio"
                       name="evaluationMode"
-                      value="FULL"
-                      checked={evaluationMode === "FULL"}
+                      value="FULL_BEACON"
+                      checked={evaluationMode === "FULL_BEACON"}
                       onChange={(e) => setEvaluationMode(e.target.value)}
                       style={{ marginTop: "2px" }}
                     />
                     <div>
-                      <div style={{ fontSize: "13px", fontWeight: "700", color: evaluationMode === "FULL" ? "#1e40af" : "#1e293b" }}>
-                        🔍 FULL Mode
+                      <div style={{ fontSize: "13px", fontWeight: "700", color: evaluationMode === "FULL_BEACON" ? "#1e40af" : "#1e293b" }}>
+                        🔍 FULL BEACON Mode
                       </div>
                       <div style={{ fontSize: "11px", color: "#64748b", marginTop: "2px" }}>
-                        Broader BEACON-managed automatic discovery across all extracted AST paths and comprehensive evidence collection.
+                        Primary end-to-end mode: discover rules and inputs, execute both programs, compare evidence, and certify.
                       </div>
                     </div>
                   </label>
                 </div>
               </div>
+
+              <label style={{ display: "block", marginBottom: "16px" }}>
+                <span style={{ display: "block", fontSize: "12px", fontWeight: "700", color: "#334155", marginBottom: "6px" }}>
+                  Additional test inputs (optional JSON)
+                </span>
+                <textarea
+                  value={customInputsJson}
+                  onChange={(event) => setCustomInputsJson(event.target.value)}
+                  placeholder={'{"acct_id":"12345678901","credit_limit":"5000"}\n—or an array of input objects'}
+                  rows={4}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "10px 12px",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: "6px",
+                    fontFamily: "monospace",
+                    fontSize: "12px",
+                    resize: "vertical",
+                  }}
+                />
+                <span style={{ display: "block", marginTop: "5px", fontSize: "11px", color: "#64748b" }}>
+                  BEACON executes these inputs against both implementations and records them as user-supplied evidence.
+                </span>
+              </label>
 
               {/* Analysis Action Button */}
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -1367,8 +1515,53 @@ export default function CertificationTab({
                 >
                   ← New Certification
                 </button>
+                <button
+                  onClick={workflowResult.artifact_id ? downloadCertificate : downloadRunReport}
+                  disabled={reportBusy}
+                  style={{
+                    background: "#0f766e",
+                    border: "1px solid #0f766e",
+                    color: "#ffffff",
+                    padding: "7px 14px",
+                    borderRadius: "6px",
+                    fontWeight: "600",
+                    fontSize: "12px",
+                    cursor: reportBusy ? "wait" : "pointer",
+                  }}
+                >
+                  {reportBusy
+                    ? "Preparing download…"
+                    : workflowResult.artifact_id
+                    ? "Download Certification Report"
+                    : "Download Run Report (Not a Certificate)"}
+                </button>
+                {workflowResult.explanation && (
+                  <button
+                    onClick={downloadAiSummary}
+                    style={{
+                      background: "#ffffff",
+                      border: "1px solid #2563eb",
+                      color: "#1d4ed8",
+                      padding: "7px 14px",
+                      borderRadius: "6px",
+                      fontWeight: "600",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    {workflowResult.explanation.status === "EXPLANATION_FAILED"
+                      ? "Download Explanation Status"
+                      : "Download AI Summary"}
+                  </button>
+                )}
               </div>
             </div>
+
+            {reportError && (
+              <div style={{ marginBottom: "16px", color: "#991b1b", fontSize: "13px" }} role="alert">
+                {reportError}
+              </div>
+            )}
 
             {/* Error / Failure Detail if present */}
             {workflowResult.error_code && (
@@ -1401,7 +1594,7 @@ export default function CertificationTab({
             >
               {[
                 {
-                  label: "Equivalence Score",
+                  label: "Evidence-Adjusted Score",
                   val: workflowResult.equivalence_score != null
                     ? `${(workflowResult.equivalence_score * 100).toFixed(2)}%`
                     : "—",
@@ -1469,7 +1662,6 @@ export default function CertificationTab({
               const expl = workflowResult.explanation || {};
               const execSummary = expl.executive_summary || expl.status_rationale || expl.summary;
               const isCertified = Boolean(workflowResult.certified);
-              const isFailed = workflowResult.status === "FAILED";
               const isInconclusive = workflowResult.status === "INCONCLUSIVE" || workflowResult.equivalence_score == null;
 
               const themeColor = isCertified ? "#166534" : (isInconclusive ? "#854d0e" : "#991b1b");
@@ -1483,7 +1675,7 @@ export default function CertificationTab({
               const threshVal = threshMeta.final_value != null ? Number(threshMeta.final_value).toFixed(4) : (threshMeta.raw_value != null ? Number(threshMeta.raw_value).toFixed(4) : "Dynamic");
 
               const defaultNarrative = isCertified ? (
-                `BEACON successfully certified ${(workflowResult.equivalence_score != null ? (workflowResult.equivalence_score * 100).toFixed(2) : 100)}% behavioral equivalence between legacy reference and modernized target implementations across ${inputCount} authoritative test vectors. Dynamic tolerance threshold resolved to ${threshVal} with 0 regressions detected.`
+                `BEACON issued ${workflowResult.status} with an evidence-adjusted score of ${workflowResult.equivalence_score != null ? `${(workflowResult.equivalence_score * 100).toFixed(2)}%` : "not available"} across ${inputCount} evaluated cases. ${regressionsCount} regression case(s) were recorded. This result applies only to the tested inputs and declared evidence.`
               ) : (isInconclusive ? (
                 `Certification concluded with status INCONCLUSIVE (${workflowResult.error_message || 'Missing dependencies or insufficient reference evidence'}). Re-run with required copybooks or sample data to resolve full certification.`
               ) : (
@@ -1508,7 +1700,7 @@ export default function CertificationTab({
                         </h3>
                       </div>
                       <div style={{ fontSize: "12px", color: "#64748b" }}>
-                        Audited by BEACON Deterministic Engine & AI Behavioral Intelligence
+                        Verdict determined by BEACON's certification engine; any AI summary is supplemental.
                       </div>
                     </div>
                     <span style={{
@@ -1520,7 +1712,7 @@ export default function CertificationTab({
                       padding: "4px 10px",
                       borderRadius: "6px"
                     }}>
-                      {isCertified ? "CERTIFIED EQUIVALENT" : (isInconclusive ? "INCONCLUSIVE AUDIT" : "NON-EQUIVALENT")}
+                      {workflowResult.status || (isInconclusive ? "INCONCLUSIVE AUDIT" : "NON-EQUIVALENT")}
                     </span>
                   </div>
 
@@ -1541,15 +1733,15 @@ export default function CertificationTab({
                   {/* 4 Quick Customer Metric Pills */}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "10px" }}>
                     <div style={{ background: "#ffffff", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Equivalence</div>
+                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Evidence-Adjusted Score</div>
                       <div style={{ fontSize: "16px", fontWeight: "800", color: themeColor }}>
                         {workflowResult.equivalence_score != null ? `${(workflowResult.equivalence_score * 100).toFixed(2)}%` : "N/A"}
                       </div>
                     </div>
                     <div style={{ background: "#ffffff", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>
-                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Test Vectors</div>
+                      <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "600", textTransform: "uppercase" }}>Test Cases</div>
                       <div style={{ fontSize: "16px", fontWeight: "800", color: "#0f172a" }}>
-                        {inputCount} Executed
+                        {inputCount} Evaluated
                       </div>
                     </div>
                     <div style={{ background: "#ffffff", padding: "10px", borderRadius: "6px", border: "1px solid #e2e8f0" }}>

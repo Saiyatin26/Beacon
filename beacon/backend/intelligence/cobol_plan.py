@@ -265,6 +265,10 @@ Output ONLY a single valid JSON object matching this schema:
                     provenance={
                         "provider": resp.provider_name,
                         "model": resp.model_name,
+                        "requested_provider": resp.requested_provider,
+                        "fallback_occurred": resp.fallback_occurred,
+                        "fallback_reason": resp.fallback_reason,
+                        "provider_metadata": resp.metadata,
                         "execution_time_ms": getattr(resp, "execution_time_ms", getattr(resp, "latency_ms", 0.0)),
                     },
                 )
@@ -284,8 +288,10 @@ Output ONLY a single valid JSON object matching this schema:
             transactions=ground_truth["transactions"],
             expected_observable_output_fields=[],
             provenance={
-                "provider": "deterministic_ground_truth",
+                "provider": "offline",
                 "model": "cobol_static_ast",
+                "requested_provider": settings.llm_provider,
+                "fallback_occurred": False,
                 "source": "deterministic_source_extraction",
             },
         )

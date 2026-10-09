@@ -92,7 +92,11 @@ class AdapterDetector:
 
             source_txt = file_path.read_text(encoding="utf-8", errors="ignore")
             from intelligence.cobol_plan import generate_cobol_execution_plan
-            plan = generate_cobol_execution_plan(source_txt, file_path=file_path)
+            plan = generate_cobol_execution_plan(
+                source_txt,
+                file_path=file_path,
+                allow_external_llm=False,
+            )
 
             data_dir = None
             for cand_data in [file_path.parent / "data", file_path.parent.parent / "data"]:
@@ -391,4 +395,3 @@ class AdapterDetector:
 
 
 adapter_detector = AdapterDetector()
-

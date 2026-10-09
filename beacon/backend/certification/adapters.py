@@ -530,7 +530,12 @@ class CobolCicsAdapter(ImplementationAdapter):
         self.implementation_hash = compute_implementation_hash(self.source_file)
         self._compiled_binary_path: Optional[str] = None
         self._compilation_error: str = ""
-        self.execution_plan: Optional[Any] = kwargs.get("execution_plan")
+        self.execution_plan = execution_plan
+        self.cics_execution_mode = (
+            "COMPATIBILITY_EMULATION"
+            if getattr(execution_plan, "cics_operations", [])
+            else "NOT_APPLICABLE"
+        )
 
     def health_check(self) -> AdapterHealth:
         runtime_ok, diag, details = check_cobol_cics_runtime()
@@ -642,6 +647,8 @@ class CobolCicsAdapter(ImplementationAdapter):
                         "technology": "gnu_cobol_wsl",
                         "program_id": self.program_id,
                         "real_cobol_execution": True,
+                        "genuine_cics_execution": False if self.cics_execution_mode == "COMPATIBILITY_EMULATION" else None,
+                        "cics_execution_mode": self.cics_execution_mode,
                         "stderr": stderr,
                     },
                 )
@@ -663,6 +670,8 @@ class CobolCicsAdapter(ImplementationAdapter):
                     "program_id": self.program_id,
                     "binary_path": self._compiled_binary_path,
                     "real_cobol_execution": True,
+                    "genuine_cics_execution": False if self.cics_execution_mode == "COMPATIBILITY_EMULATION" else None,
+                    "cics_execution_mode": self.cics_execution_mode,
                     "stdout_captured": bool(stdout),
                 },
             )
@@ -697,4 +706,3 @@ class CobolCicsAdapter(ImplementationAdapter):
         if not ok:
             raise RuntimeError(f"COBOL execution failed: {raw_outputs.get('error', stderr)}")
         return raw_outputs
-
