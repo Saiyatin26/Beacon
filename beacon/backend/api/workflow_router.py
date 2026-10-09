@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status, UploadFile, File, Form
+from fastapi.responses import Response
 
 from auth import (
     Permission,
@@ -30,6 +31,7 @@ from workflow.models import (
 from workflow.engine import workflow_engine
 from workflow.persistence import workflow_persistence
 from workflow.recovery import workflow_recovery
+from certification.report_generator import generate_workflow_run_pdf_report
 
 logger = logging.getLogger("beacon.api.workflow")
 
@@ -233,33 +235,12 @@ def _perform_repository_analysis(
             from intelligence.cobol_plan import generate_cobol_execution_plan
             cobol_plan = generate_cobol_execution_plan(cbl_src, file_path=cbl_files[0])
 
-    # Aggregate discovered rules & boundary invariants
+    # Only source-anchored AI candidates are behavioral rules. Execution-plan
+    # predicates and AST boundary checks are diagnostics, not business rules.
     discovered_rules = []
     ai_rules = input_discovery_res.provenance.get("ai_mined_rules") or []
     if ai_rules:
         discovered_rules.extend(ai_rules)
-
-    if cobol_plan and cobol_plan.conditions:
-        for idx, cond in enumerate(cobol_plan.conditions):
-            discovered_rules.append({
-                "rule_id": f"COBOL-COND-{idx+1:03d}",
-                "description": f"Verified COBOL Predicate: {cond}",
-                "source_location": f"{cobol_plan.program_id}:{cobol_plan.entrypoint}",
-                "discovery_method": "OPENROUTER_COBOL_INTELLIGENCE",
-                "source": "AI_SOURCE_VALIDATED",
-            })
-
-    # Also append boundary AST invariants
-    ast_invariants = legacy_analysis.boundary_invariants + modern_analysis.boundary_invariants
-    start_idx = len(discovered_rules) + 1
-    for idx, inv in enumerate(ast_invariants):
-        discovered_rules.append({
-            "rule_id": f"RULE-{start_idx + idx:03d}",
-            "description": inv,
-            "source_location": "-",
-            "discovery_method": "AST_ANALYSIS",
-            "source": "STATIC_AST_COMPARISON",
-        })
 
     # Prepare inputs payload
     discovered_inputs = [inp.values for inp in input_discovery_res.test_inputs]
@@ -354,6 +335,17 @@ def _perform_repository_analysis(
         if analysis_status == "READY":
             analysis_status = "DISCOVERY_INSUFFICIENT"
         errors.append(f"Inputs: {input_discovery_res.diagnostic_message}")
+    if any(lang.lower() == "cobol" for lang in legacy_analysis.languages) and not discovered_rules:
+        if analysis_status == "READY":
+            analysis_status = "RULE_DISCOVERY_INSUFFICIENT"
+        provider_status = input_discovery_res.provenance.get("llm_provider", {}).get(
+            "rule_extraction_status",
+            "NOT_RECORDED",
+        )
+        errors.append(
+            f"AI behavioral-rule extraction produced no source-validated rules "
+            f"(status: {provider_status})."
+        )
 
     analysis_result = RepositoryAnalysisResult(
         status=analysis_status,
@@ -398,7 +390,7 @@ def _perform_repository_analysis(
         },
         diagnostic_message=(
             f"Successfully analyzed repositories ({len(input_discovery_res.test_inputs)} inputs, "
-            f"{len(discovered_rules)} invariants discovered)." if analysis_status == "READY"
+            f"{len(discovered_rules)} source-validated behavioral rules discovered)." if analysis_status == "READY"
             else f"Repository analysis failed closed: {'; '.join(errors)}"
         ),
         errors=errors,
@@ -504,6 +496,52 @@ def _run_repository_certification_pipeline(
             audit_status="PERSISTED",
             error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
             error_message=f"Modern adapter unresolved: {modern_adapter_res.diagnostic_message}",
+            metadata=run_record.metadata,
+        )
+
+    if any(lang.lower() == "cobol" for lang in legacy_analysis.languages) and not repo_spec.discovered_rules:
+        provider_metadata = input_discovery_res.provenance.get("llm_provider", {})
+        discovery_status = provider_metadata.get("rule_extraction_status", "NOT_RECORDED")
+        inconclusive_run_id = f"run_{hashlib.sha256(f'{analysis_result.application_id}_rule_discovery_{datetime.now(timezone.utc).isoformat()}'.encode()).hexdigest()[:16]}"
+        error_message = (
+            "AI behavioral-rule extraction did not produce source-validated rules "
+            f"(status: {discovery_status}). Certification is blocked rather than treating "
+            "implementation predicates as business rules."
+        )
+        run_record = WorkflowRun(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            request_fingerprint=analysis_result.specification_fingerprint,
+            state=WorkflowState.INCONCLUSIVE,
+            finalization_state=FinalizationState.COMPLETED,
+            certification_status="RULE_DISCOVERY_INSUFFICIENT",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message=error_message,
+            metadata={
+                "error": "RULE_DISCOVERY_INSUFFICIENT",
+                "status": "RULE_DISCOVERY_INSUFFICIENT",
+                "diagnostic_message": error_message,
+                "llm_provider": provider_metadata,
+                "source_hashes": {
+                    "legacy": legacy_prov.content_hash,
+                    "modern": modern_prov.content_hash,
+                },
+            },
+        )
+        workflow_persistence.save_run(run_record)
+        return WorkflowResult(
+            workflow_run_id=inconclusive_run_id,
+            application_id=analysis_result.application_id,
+            state=WorkflowState.INCONCLUSIVE,
+            status="RULE_DISCOVERY_INSUFFICIENT",
+            certified=False,
+            equivalence_score=None,
+            artifact_id=None,
+            regressions_count=0,
+            regressions=[],
+            audit_status="PERSISTED",
+            error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
+            error_message=error_message,
             metadata=run_record.metadata,
         )
 
@@ -855,6 +893,37 @@ def get_workflow_run(
 
     verify_user_project_permission(current_user, run.application_id, Permission.VIEW)
     return run
+
+
+@workflow_router.get(
+    "/runs/{run_id}/export",
+    status_code=status.HTTP_200_OK,
+    summary="Download a PDF report for a workflow run without a certificate",
+)
+def export_workflow_run_report(
+    run_id: str,
+    current_user: User = Depends(get_current_active_user),
+) -> Response:
+    """Exports a failed or inconclusive run as a clearly non-certifying PDF report."""
+    run = workflow_persistence.get_run(run_id)
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Workflow run '{run_id}' not found.",
+        )
+    verify_user_project_permission(current_user, run.application_id, Permission.VIEW)
+    run_payload = run.model_dump(mode="json")
+    metadata = run_payload.get("metadata") or {}
+    explanation = metadata.get("explanation") if isinstance(metadata, dict) else None
+    ai_summary = None
+    if isinstance(explanation, dict):
+        ai_summary = explanation.get("executive_summary") or explanation.get("summary")
+    pdf_content = generate_workflow_run_pdf_report(run_payload, ai_summary=ai_summary)
+    return Response(
+        content=pdf_content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=beacon_run_{run_id}.pdf"},
+    )
 
 
 @workflow_router.get(

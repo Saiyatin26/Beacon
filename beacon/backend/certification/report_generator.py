@@ -6,7 +6,9 @@ counterexamples, and audit provenance without exposing secrets.
 """
 
 import html
+import io
 import json
+from typing import Any, Optional
 from .models import CertificationArtifact, CertificationStatus
 from .scorer import EVIDENCE_SCORE_WEIGHTS
 
@@ -274,3 +276,279 @@ def generate_markdown_report(artifact: CertificationArtifact) -> str:
 
     md.append(f"\n> **Notice**: {artifact.statement}")
     return "\n".join(md)
+
+
+def generate_pdf_report(
+    artifact: CertificationArtifact,
+    ai_summary: Optional[str] = None,
+    cases: Optional[list[Any]] = None,
+) -> bytes:
+    """Generate a PDF dossier for a persisted certification and its grounded summary."""
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (
+        Paragraph,
+        SimpleDocTemplate,
+        Spacer,
+        Table,
+        TableStyle,
+    )
+
+    buffer = io.BytesIO()
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="CertificateTitle", parent=styles["Title"], alignment=TA_CENTER))
+    styles.add(ParagraphStyle(name="SmallText", parent=styles["BodyText"], fontSize=8, leading=10))
+    story = [
+        Paragraph("BEACON Behavioral Equivalence Certificate", styles["CertificateTitle"]),
+        Spacer(1, 12),
+        Paragraph(f"Certificate ID: {html.escape(artifact.certification_id)}", styles["Heading2"]),
+    ]
+
+    context = artifact.context
+    run_id = context.certification_run_id if context and context.certification_run_id else artifact.certification_id
+    score_text = f"{artifact.score * 100:.1f}%"
+    metrics = [
+        ["Verdict", artifact.status.value, "Certified", "Yes" if artifact.certified else "No"],
+        ["Evidence-adjusted score", score_text, "Policy threshold", (
+            f"{context.policy_min_equivalence_score * 100:.1f}%" if context else "Not recorded"
+        )],
+        ["Run ID", run_id, "Generated", artifact.timestamp or "Not recorded"],
+        ["Oracle coverage", (
+            f"{artifact.metrics.oracle_coverage_pct * 100:.1f}%"
+            if artifact.metrics.oracle_coverage_pct is not None else "N/A"
+        ), "Matching probes", str(artifact.metrics.matching_probes)],
+    ]
+    story.extend([
+        Table(
+            metrics,
+            colWidths=[1.45 * inch, 2.0 * inch, 1.35 * inch, 2.0 * inch],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8eef5")),
+                ("BACKGROUND", (2, 0), (2, -1), colors.HexColor("#e8eef5")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]),
+        ),
+        Spacer(1, 12),
+        Paragraph("Evidence-grounded AI summary", styles["Heading2"]),
+        Paragraph(
+            html.escape(ai_summary.strip()) if ai_summary and ai_summary.strip()
+            else "No AI summary was persisted for this certification run.",
+            styles["BodyText"],
+        ),
+        Spacer(1, 10),
+        Paragraph("Source and certificate identity", styles["Heading2"]),
+        Paragraph(
+            f"Legacy source SHA-256: {html.escape(context.legacy_implementation_hash if context else artifact.legacy_implementation_hash or 'Not recorded')}<br/>"
+            f"Modern source SHA-256: {html.escape(context.modernized_implementation_hash if context else artifact.modernized_implementation_hash or 'Not recorded')}<br/>"
+            f"Certificate SHA-256: {html.escape(artifact.content_hash or 'Not recorded')}<br/>"
+            f"Input-set SHA-256: {html.escape(artifact.input_set_hash or 'Not recorded')}<br/>"
+            f"Oracle-set SHA-256: {html.escape(artifact.oracle_set_hash or 'Not recorded')}",
+            styles["SmallText"],
+        ),
+        Spacer(1, 10),
+        Paragraph("Execution and limitations", styles["Heading2"]),
+        Paragraph(
+            html.escape(json.dumps(context.execution_metadata, sort_keys=True, default=str) if context else "{}"),
+            styles["SmallText"],
+        ),
+        Paragraph(
+            f"AI provider: {html.escape(context.provider if context else 'Not recorded')} | "
+            f"Model: {html.escape(context.model if context else 'Not recorded')} | "
+            f"Generation method: {html.escape(context.generation_method if context else 'Not recorded')}",
+            styles["SmallText"],
+        ),
+        Paragraph(
+            "The evidence-adjusted score is a project heuristic over the tested input domain. "
+            "It is not a statistical confidence interval or proof of arbitrary program equivalence.",
+            styles["SmallText"],
+        ),
+    ])
+    if artifact.blocking_reasons:
+        story.extend([Spacer(1, 8), Paragraph("Blocking reasons", styles["Heading2"])])
+        story.extend(Paragraph(f"- {html.escape(reason)}", styles["SmallText"]) for reason in artifact.blocking_reasons)
+    if artifact.warnings:
+        story.extend([Spacer(1, 8), Paragraph("Warnings", styles["Heading2"])])
+        story.extend(Paragraph(f"- {html.escape(warning)}", styles["SmallText"]) for warning in artifact.warnings)
+    if artifact.regressions:
+        story.extend([Spacer(1, 8), Paragraph("Behavioral regressions", styles["Heading2"])])
+        for regression in artifact.regressions:
+            story.append(Paragraph(
+                f"Oracle {html.escape(regression.oracle_id)}; input {html.escape(regression.input_id)}: "
+                f"{html.escape(regression.failed_assertion)}",
+                styles["SmallText"],
+            ))
+            story.append(Paragraph(
+                f"Legacy output: {html.escape(str(regression.legacy_output))}<br/>"
+                f"Modern output: {html.escape(str(regression.modern_output))}",
+                styles["SmallText"],
+            ))
+            story.append(Spacer(1, 5))
+    if cases:
+        story.extend([Spacer(1, 8), Paragraph("Persisted execution evidence", styles["Heading2"])])
+        evidence_rows = [[
+            Paragraph("<b>Case</b>", styles["SmallText"]),
+            Paragraph("<b>Classification / status</b>", styles["SmallText"]),
+            Paragraph("<b>Input</b>", styles["SmallText"]),
+            Paragraph("<b>Observed outputs</b>", styles["SmallText"]),
+        ]]
+        for case in cases[:100]:
+            input_value = getattr(case, "input_json", "")
+            legacy_value = getattr(case, "legacy_output_json", "")
+            modern_value = getattr(case, "modern_output_json", "")
+            if isinstance(input_value, str):
+                input_value = input_value[:1200]
+            if isinstance(legacy_value, str):
+                legacy_value = legacy_value[:1200]
+            if isinstance(modern_value, str):
+                modern_value = modern_value[:1200]
+            case_label = f"{getattr(case, 'case_id', '')} / {getattr(case, 'input_id', '')}"
+            execution_status = (
+                f"{getattr(case, 'classification', 'UNKNOWN')}<br/>"
+                f"Legacy: {getattr(case, 'legacy_execution_status', 'UNKNOWN')}<br/>"
+                f"Modern: {getattr(case, 'modern_execution_status', 'UNKNOWN')}"
+            )
+            outputs = f"Legacy: {legacy_value}<br/>Modern: {modern_value}"
+            evidence_rows.append([
+                Paragraph(html.escape(str(case_label)), styles["SmallText"]),
+                Paragraph(html.escape(str(execution_status)), styles["SmallText"]),
+                Paragraph(html.escape(str(input_value)), styles["SmallText"]),
+                Paragraph(html.escape(str(outputs)), styles["SmallText"]),
+            ])
+        story.append(Table(
+            evidence_rows,
+            colWidths=[1.05 * inch, 1.25 * inch, 2.2 * inch, 2.25 * inch],
+            repeatRows=1,
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8eef5")),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd5e1")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]),
+        ))
+    story.extend([
+        Spacer(1, 12),
+        Paragraph(html.escape(artifact.statement), styles["SmallText"]),
+    ])
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=0.6 * inch,
+        leftMargin=0.6 * inch,
+        topMargin=0.6 * inch,
+        bottomMargin=0.6 * inch,
+        title=f"BEACON Certificate {artifact.certification_id}",
+        author="BEACON",
+        pageCompression=0,
+    )
+    document.build(story)
+    return buffer.getvalue()
+
+
+def generate_workflow_run_pdf_report(
+    run: dict[str, Any],
+    ai_summary: Optional[str] = None,
+) -> bytes:
+    """Generate a PDF run report that never misrepresents a blocked run as a certificate."""
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    buffer = io.BytesIO()
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(name="RunReportTitle", parent=styles["Title"], alignment=1))
+    styles.add(ParagraphStyle(name="RunReportSmall", parent=styles["BodyText"], fontSize=8, leading=10))
+    metadata = run.get("metadata") if isinstance(run.get("metadata"), dict) else {}
+    source_hashes = metadata.get("source_hashes") or {}
+    if not source_hashes:
+        source_hashes = {
+            "legacy": (metadata.get("legacy_provenance") or {}).get("content_hash"),
+            "modern": (metadata.get("modern_provenance") or {}).get("content_hash"),
+        }
+    score = run.get("certification_score", run.get("equivalence_score"))
+    score_text = f"{float(score) * 100:.1f}%" if isinstance(score, (int, float)) else "Not calculated"
+    status_text = str(run.get("certification_status") or run.get("status") or run.get("state") or "UNKNOWN")
+    story = [
+        Paragraph("BEACON Workflow Run Report", styles["RunReportTitle"]),
+        Spacer(1, 8),
+        Paragraph("<b>NOT A CERTIFICATE</b> — this run did not produce a certification artifact.", styles["Heading2"]),
+        Table(
+            [
+                ["Workflow Run ID", str(run.get("workflow_run_id", "Not recorded"))],
+                ["Status", status_text],
+                ["Certified", "Yes" if run.get("certified") else "No"],
+                ["Evidence-adjusted score", score_text],
+                ["Error code", str(run.get("error_code") or "None recorded")],
+                ["Error / diagnostic", str(run.get("error_message") or metadata.get("diagnostic_message") or "None recorded")],
+            ],
+            colWidths=[1.6 * inch, 5.0 * inch],
+            style=TableStyle([
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8eef5")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd5e1")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]),
+        ),
+        Spacer(1, 10),
+        Paragraph("Source identity", styles["Heading2"]),
+        Paragraph(
+            f"Legacy source SHA-256: {html.escape(str(source_hashes.get('legacy') or 'Not recorded'))}<br/>"
+            f"Modern source SHA-256: {html.escape(str(source_hashes.get('modern') or 'Not recorded'))}",
+            styles["RunReportSmall"],
+        ),
+        Spacer(1, 8),
+        Paragraph("AI summary", styles["Heading2"]),
+        Paragraph(
+            html.escape(ai_summary.strip()) if ai_summary and ai_summary.strip()
+            else "No grounded AI summary is available for this run.",
+            styles["BodyText"],
+        ),
+        Spacer(1, 8),
+        Paragraph("Run evidence", styles["Heading2"]),
+    ]
+    evidence = metadata.get("representative_cases") or metadata.get("evidence") or []
+    if isinstance(evidence, list) and evidence:
+        for item in evidence[:50]:
+            story.append(Paragraph(
+                html.escape(json.dumps(item, sort_keys=True, default=str)[:1800]),
+                styles["RunReportSmall"],
+            ))
+            story.append(Spacer(1, 4))
+    else:
+        story.append(Paragraph("No paired execution evidence was recorded.", styles["RunReportSmall"]))
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        "A successful certificate is generated only when execution and evidence satisfy the declared policy. "
+        "This report records the run state and must not be used as a certification claim.",
+        styles["RunReportSmall"],
+    ))
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=0.6 * inch,
+        leftMargin=0.6 * inch,
+        topMargin=0.6 * inch,
+        bottomMargin=0.6 * inch,
+        title=f"BEACON Run Report {run.get('workflow_run_id', '')}",
+        author="BEACON",
+        pageCompression=0,
+    )
+    document.build(story)
+    return buffer.getvalue()

@@ -147,33 +147,34 @@ class InputDiscoveryEngine:
         ai_mined_rules: list[dict[str, Any]] = []
         llm_provider_metadata: dict[str, Any] = {}
 
-        # 2b. Check for COBOL source programs and perform AI-Assisted Condition & Invariant Mining
-        if not discovered_cases:
-            cobol_candidates: list[Path] = []
-            py_candidates: list[Path] = []
-            for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
-                if not repo_p_str:
-                    continue
-                repo_p = Path(repo_p_str)
-                if repo_p.is_file():
-                    if repo_p.suffix.lower() in (".cbl", ".cob", ".cpy"):
-                        cobol_candidates.append(repo_p)
-                    elif repo_p.suffix.lower() == ".py":
-                        py_candidates.append(repo_p)
-                else:
-                    for ext in ("*.cbl", "*.cob", "*.cpy", "*.CBL", "*.COB"):
-                        cobol_candidates.extend(list(repo_p.rglob(ext)))
-                    py_candidates.extend(list(repo_p.rglob("*.py")))
+        # Extract source-specific rules even when repository fixtures already supply inputs.
+        cobol_candidates: list[Path] = []
+        py_candidates: list[Path] = []
+        for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
+            if not repo_p_str:
+                continue
+            repo_p = Path(repo_p_str)
+            if repo_p.is_file():
+                if repo_p.suffix.lower() in (".cbl", ".cob", ".cpy"):
+                    cobol_candidates.append(repo_p)
+                elif repo_p.suffix.lower() == ".py":
+                    py_candidates.append(repo_p)
+            else:
+                for ext in ("*.cbl", "*.cob", "*.cpy", "*.CBL", "*.COB"):
+                    cobol_candidates.extend(list(repo_p.rglob(ext)))
+                py_candidates.extend(list(repo_p.rglob("*.py")))
 
-            if cobol_candidates:
-                primary_cbl = cobol_candidates[0]
-                primary_py = py_candidates[0] if py_candidates else None
-                cases, rules, llm_provider_metadata = self._mine_cobol_conditions_with_ai(primary_cbl, primary_py)
-                if cases:
-                    discovered_cases.extend(cases)
-                    ai_mined_rules = rules
-                    source_desc = f"AI Condition Mining from COBOL '{primary_cbl.name}'"
-                    method_desc = "AI_CONDITION_MINING"
+        if cobol_candidates:
+            primary_cbl = sorted(cobol_candidates, key=lambda path: str(path).lower())[0]
+            primary_py = sorted(py_candidates, key=lambda path: str(path).lower())[0] if py_candidates else None
+            ai_cases, ai_mined_rules, llm_provider_metadata = self._mine_cobol_conditions_with_ai(
+                primary_cbl,
+                primary_py,
+            )
+            if ai_cases and not discovered_cases:
+                discovered_cases.extend(ai_cases)
+                source_desc = f"AI-proposed inputs from COBOL '{primary_cbl.name}'"
+                method_desc = "AI_PROPOSED_INPUTS_SOURCE_VALIDATED"
 
         # 3. Fail closed if zero legitimate inputs found — NEVER manufacture synthetic data!
         if not discovered_cases:
@@ -183,7 +184,11 @@ class InputDiscoveryEngine:
                 test_inputs=[],
                 discovery_source="",
                 discovery_method="FAILED",
-                provenance={"llm_provider": llm_provider_metadata},
+                provenance={
+                    "llm_provider": llm_provider_metadata,
+                    "ai_mined_rules": ai_mined_rules,
+                    "ai_mined_rule_count": len(ai_mined_rules),
+                },
                 diagnostic_message=(
                     "Input discovery failed: No legitimate test cases or fixtures could be discovered "
                     "in the provided repositories. Synthetic fallback is strictly disabled in BEACON V2. "
@@ -230,21 +235,44 @@ class InputDiscoveryEngine:
 
         # Convert to canonical CertificationTestInput with cryptographic provenance
         test_inputs: list[CertificationTestInput] = []
-        for idx, c_dict in enumerate(selected_cases):
-            canonical_json = json.dumps(c_dict, sort_keys=True, separators=(",", ":"), default=str)
+        seen_input_signatures: set[str] = set()
+        for c_dict in selected_cases:
+            input_values = {key: value for key, value in c_dict.items() if not key.startswith("__")}
+            canonical_json = json.dumps(input_values, sort_keys=True, separators=(",", ":"), default=str)
+            if canonical_json in seen_input_signatures:
+                continue
+            seen_input_signatures.add(canonical_json)
             inp_hash = hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
-            inp_id = f"INP-{idx+1:04d}-{inp_hash[:8]}"
+            inp_id = f"INP-{len(test_inputs)+1:04d}-{inp_hash[:8]}"
             test_inputs.append(
                 CertificationTestInput(
                     input_id=inp_id,
-                    values=c_dict,
-                    metadata={"source": source_desc, "index": idx + 1},
+                    values=input_values,
+                    metadata={
+                        "source": source_desc,
+                        "index": len(test_inputs) + 1,
+                        "condition_provenance": c_dict.get("__condition_provenance"),
+                    },
                     provenance={
                         "discovery_method": method_desc,
                         "source": source_desc,
                         "input_hash": inp_hash,
                     },
                 )
+            )
+        if not test_inputs:
+            return InputDiscoveryResult(
+                status=InputDiscoveryStatus.INSUFFICIENT_COVERAGE,
+                inputs_count=0,
+                test_inputs=[],
+                discovery_source=source_desc,
+                discovery_method="VALIDATION_FAILED",
+                provenance={
+                    "llm_provider": llm_provider_metadata,
+                    "ai_mined_rules": ai_mined_rules,
+                    "ai_mined_rule_count": len(ai_mined_rules),
+                },
+                diagnostic_message="Input discovery failed: all discovered cases were empty or duplicates.",
             )
 
         # Compute overall input set canonical hash
@@ -264,6 +292,8 @@ class InputDiscoveryEngine:
                 "input_set_hash": input_set_hash,
                 "count": len(test_inputs),
                 "ai_mined_rules": ai_mined_rules,
+                "ai_mined_rule_count": len(ai_mined_rules),
+                "rule_extraction_status": llm_provider_metadata.get("rule_extraction_status", "NOT_ATTEMPTED"),
                 "llm_provider": llm_provider_metadata,
             },
             diagnostic_message=f"Discovered {len(test_inputs)} authoritative test cases via {method_desc}.",
@@ -274,9 +304,7 @@ class InputDiscoveryEngine:
         cbl_file: Path,
         py_file: Optional[Path] = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-        """Uses AI / LLM (with deterministic AST fallback) to discover operational conditions
-        from COBOL source code and synthesize complete, legitimate test cases strictly grounded in source.
-        """
+        """Extracts source-anchored behavioral rules and proposes executable cases using an LLM."""
         cbl_text = cbl_file.read_text(encoding="utf-8", errors="ignore")
         py_text = py_file.read_text(encoding="utf-8", errors="ignore") if py_file and py_file.exists() else ""
 
@@ -298,12 +326,12 @@ class InputDiscoveryEngine:
         test_cases: list[dict[str, Any]] = []
         llm_provider_metadata: dict[str, Any] = {}
 
-        # 1. Attempt LLM-assisted condition and test case synthesis
+        # AI proposes candidates only; source anchors are checked locally before use.
         try:
             from llm.manager import get_provider_manager
             pm = get_provider_manager()
-            prompt = f"""You are BEACON's AI Behavioral Condition and Test Case Synthesizer.
-Analyze the complete COBOL source program, copybooks, and modern re-implementation to discover all operational conditions and generate complete, executable test input vectors that exercise each branch.
+            prompt = f"""You are BEACON's source-grounded behavioral rule extractor.
+Identify at most 20 externally observable business/behavioral rules in this program. Do not report every IF, EVALUATE, loop, flag, or control-flow condition as a separate rule. Prefer rules that describe observable input/output behavior.
 
 COBOL Program: {cbl_file.name}
 COBOL Source:
@@ -322,15 +350,16 @@ Modern Re-implementation Snippet:
 ```
 
 Requirements:
-1. Extract the actual operational business conditions, branch paths, and validation rules present in THIS COBOL code.
-2. For each discovered condition, identify the input fields defined in the COBOL source (e.g. WORKING-STORAGE, LINKAGE, or BMS maps).
-3. Generate concrete test case dictionaries containing legitimate values to exercise each branch. Use ONLY field names that exist in this program's source.
-4. Each test case MUST carry a '__condition_provenance' explaining which exact source condition/line it exercises.
+1. Every rule must describe behavior observable from program inputs and outputs, not an implementation detail.
+2. Include a numeric source line and an exact short source_excerpt copied from that line.
+3. Generate a small set of concrete test input dictionaries using only declared input fields in the COBOL source or supplied copybooks.
+4. Each case must include '__condition_provenance' naming the rule ID it exercises.
+5. Do not invent expected outputs. BEACON will execute both programs and compare observed outputs independently.
 
 Return ONLY a valid JSON object in this exact schema:
 {{
   "rules": [
-    {{"rule_id": "RULE-001", "description": "IF condition description", "source_location": "Line or paragraph", "discovery_method": "AI_CONDITION_MINING"}}
+    {{"rule_id": "candidate-1", "description": "Observable business behavior", "source_location": "Line 12", "source_excerpt": "exact COBOL source text"}}
   ],
   "test_cases": [
     {{"field_name": "value", "__condition_provenance": "RULE-001"}}
@@ -346,121 +375,88 @@ Return ONLY a valid JSON object in this exact schema:
                 "fallback_reason": resp.fallback_reason,
                 "success": resp.success,
             }
-            if resp.success and resp.parsed_json and isinstance(resp.parsed_json, dict):
+            provider_is_ai = str(resp.provider_name).lower() not in {"offline", "deterministic", "unavailable"}
+            if resp.success and provider_is_ai and resp.parsed_json and isinstance(resp.parsed_json, dict):
                 llm_rules = resp.parsed_json.get("rules", [])
                 llm_cases = resp.parsed_json.get("test_cases", [])
-                
-                # Deterministic source validation of LLM claims
-                cbl_upper = cbl_text.upper()
+                source_lines = cbl_text.splitlines()
+                validated_rules: list[dict[str, Any]] = []
                 if isinstance(llm_rules, list):
                     for r in llm_rules:
-                        if isinstance(r, dict) and r.get("description"):
-                            r["discovery_method"] = "AI_CONDITION_MINING"
-                            discovered_rules.append(r)
+                        if not isinstance(r, dict):
+                            continue
+                        description = str(r.get("description", "")).strip()
+                        source_excerpt = str(r.get("source_excerpt", "")).strip()
+                        location_match = re.search(r"\bline\s+(\d+)\b", str(r.get("source_location", "")), re.IGNORECASE)
+                        if not description or not source_excerpt or not location_match:
+                            continue
+                        source_line = int(location_match.group(1))
+                        if source_line < 1 or source_line > len(source_lines):
+                            continue
+                        excerpt_normalized = re.sub(r"\s+", "", source_excerpt).upper()
+                        nearby_source = re.sub(
+                            r"\s+",
+                            "",
+                            "\n".join(source_lines[max(0, source_line - 2):min(len(source_lines), source_line + 1)]),
+                        ).upper()
+                        if not excerpt_normalized or excerpt_normalized not in nearby_source:
+                            continue
+                        if not re.search(r"\bIF\b|\bWHEN\b|\bEVALUATE\b|\bPERFORM\b|\bMOVE\b|\bEXEC\b", source_excerpt, re.IGNORECASE):
+                            continue
+                        validated_rules.append({
+                            "description": description,
+                            "source_location": f"Line {source_line}",
+                            "source_excerpt": source_excerpt,
+                            "discovery_method": "AI_SOURCE_ANCHORED_RULE_EXTRACTION",
+                            "source": "AI_CANDIDATE_SOURCE_VALIDATED",
+                        })
+                unique_rules: dict[tuple[int, str], dict[str, Any]] = {}
+                for rule in validated_rules:
+                    key = (
+                        int(re.search(r"\d+", rule["source_location"]).group()),
+                        re.sub(r"\s+", " ", rule["description"]).casefold(),
+                    )
+                    unique_rules.setdefault(key, rule)
+                for rule_idx, rule in enumerate(
+                    sorted(unique_rules.values(), key=lambda item: (int(re.search(r"\d+", item["source_location"]).group()), item["description"].casefold()))[:20],
+                    start=1,
+                ):
+                    rule["rule_id"] = f"AI-RULE-{rule_idx:03d}"
+                    discovered_rules.append(rule)
 
                 if isinstance(llm_cases, list):
                     for tc in llm_cases:
                         if isinstance(tc, dict) and len(tc) > 0:
-                            # Verify that at least one field key (excluding provenance) exists in source
                             field_keys = [k for k in tc.keys() if not k.startswith("__")]
-                            valid_fields = [k for k in field_keys if k.upper() in cbl_upper or k.upper().replace("-", "") in cbl_upper.replace("-", "")]
-                            if valid_fields or not field_keys:
+                            valid_fields = [
+                                key for key in field_keys
+                                if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", key)
+                                and re.sub(r"[-_]", "", key).upper()
+                                in {
+                                    re.sub(r"[-_]", "", identifier).upper()
+                                    for identifier in re.findall(
+                                        r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b",
+                                        (cbl_text + "\n" + copybook_summary).upper(),
+                                    )
+                                }
+                            ]
+                            if valid_fields and len(valid_fields) == len(field_keys) and tc.get("__condition_provenance"):
                                 test_cases.append(tc)
+                llm_provider_metadata["rule_extraction_status"] = "SUCCESS" if discovered_rules else "NO_VALID_SOURCE_ANCHORED_RULES"
+                llm_provider_metadata["validated_rule_count"] = len(discovered_rules)
+                llm_provider_metadata["validated_input_count"] = len(test_cases)
+            else:
+                llm_provider_metadata["rule_extraction_status"] = "AI_PROVIDER_UNAVAILABLE"
         except Exception as e:
-            logger.debug(f"LLM condition mining attempt note: {e}")
+            logger.debug("LLM behavioral rule extraction failed: %s", type(e).__name__)
             llm_provider_metadata = {
                 "actual_provider": "unavailable",
                 "success": False,
-                "error": str(e),
+                "error_type": type(e).__name__,
+                "rule_extraction_status": "AI_PROVIDER_ERROR",
             }
 
-        # 2. Deterministic AST/Regex Condition Extraction (Grounded Fallback)
-        if not discovered_rules or not test_cases:
-            logger.info("Extracting conditions and test cases via deterministic COBOL AST analysis.")
-            lines = cbl_text.splitlines()
-            ast_rules = []
-            ast_cases = []
-            
-            # Find IF, EVALUATE, and WHEN statements directly in source lines
-            cond_pattern = re.compile(r"^\s{6,}(?:IF|EVALUATE|WHEN)\s+(.*?)(?:\s+THEN|\.|\s*$)", re.IGNORECASE)
-            var_compare_pattern = re.compile(r"([A-Z0-9\-]+)\s*(?:=|EQUAL\s+TO|EQUAL|NOT\s*=|IN|NOT\s*IN|>|<|IS\s+NUMERIC|IS\s+NOT\s+NUMERIC)\s*([A-Z0-9\-\'\"]+)?", re.IGNORECASE)
-
-            rule_idx = 1
-            for l_num, line in enumerate(lines, 1):
-                clean_line = line[6:72] if len(line) >= 7 else line
-                m = cond_pattern.search(clean_line)
-                if m:
-                    cond_str = m.group(1).strip()
-                    if len(cond_str) > 3 and not cond_str.startswith("*"):
-                        rule_id = f"RULE-{rule_idx:03d}"
-                        ast_rules.append({
-                            "rule_id": rule_id,
-                            "description": f"Condition: {cond_str}",
-                            "source_location": f"Line {l_num}",
-                            "discovery_method": "SOURCE_AST_INSPECTION",
-                        })
-                        rule_idx += 1
-
-                        # Synthesize case from the condition if variable comparison is detected
-                        comp_match = var_compare_pattern.search(cond_str)
-                        if comp_match:
-                            var_name = comp_match.group(1).strip()
-                            val = comp_match.group(2).strip().strip("'\"") if comp_match.group(2) else ""
-                            cond_upper = cond_str.upper()
-                            
-                            if "IN" in cond_upper:
-                                ast_cases.append({
-                                    var_name: "Y",
-                                    "__condition_provenance": rule_id,
-                                })
-                                ast_cases.append({
-                                    var_name: "N",
-                                    "__condition_provenance": f"{rule_id}_ALTERNATIVE",
-                                })
-                            elif "LOW-VALUES" in cond_upper or "SPACES" in cond_upper:
-                                ast_cases.append({
-                                    var_name: "",
-                                    "__condition_provenance": rule_id,
-                                })
-                                ast_cases.append({
-                                    var_name: "TEST01",
-                                    "__condition_provenance": f"{rule_id}_NON_EMPTY",
-                                })
-                            else:
-                                ast_cases.append({
-                                    var_name: val if val else "1",
-                                    "__condition_provenance": rule_id,
-                                })
-                        elif "PFK" in cond_str.upper() or "PF" in cond_str.upper():
-                            pf_match = re.search(r"PFK?0?([0-9]{1,2})", cond_str, re.IGNORECASE)
-                            if pf_match:
-                                pf_num = pf_match.group(1)
-                                ast_cases.append({
-                                    "EIBAID": f"PF{pf_num}",
-                                    "__condition_provenance": rule_id,
-                                })
-                        elif "ENTER" in cond_str.upper():
-                            ast_cases.append({
-                                "EIBAID": "ENTER",
-                                "__condition_provenance": rule_id,
-                            })
-
-                if len(ast_rules) >= 100:
-                    break
-
-            if not discovered_rules:
-                discovered_rules = ast_rules
-            if not test_cases:
-                # Deduplicate test cases by value
-                unique_cases = []
-                seen_signatures = set()
-                for c in ast_cases:
-                    sig = json.dumps({k: v for k, v in c.items() if not k.startswith("__")}, sort_keys=True)
-                    if sig not in seen_signatures:
-                        seen_signatures.add(sig)
-                        unique_cases.append(c)
-                test_cases = unique_cases
-
+        # No static or synthetic fallback is labelled as AI output.
         return test_cases, discovered_rules, llm_provider_metadata
 
 

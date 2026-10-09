@@ -33,6 +33,7 @@ from certification import (
     generate_markdown_report,
     verify_artifact_integrity,
 )
+from certification.report_generator import generate_pdf_report
 from drift import (
     DriftEvent,
     DriftObservation,
@@ -1312,7 +1313,7 @@ from fastapi.responses import JSONResponse, Response
 @app.get("/api/v1/certification/{certification_id}/export")
 def export_certification_dossier(
     certification_id: str,
-    format: Literal["json", "markdown", "csv"] = "json",
+    format: Literal["json", "markdown", "csv", "pdf"] = "json",
     current_user: User = Depends(require_project_permission(Permission.VIEW)),
 ):
     """Exports a complete, auditable certification dossier in JSON, Markdown, or CSV format with complete context and zero secrets."""
@@ -1360,6 +1361,18 @@ def export_certification_dossier(
         return JSONResponse(
             content=export_payload,
             headers={"Content-Disposition": f"attachment; filename=certification_dossier_{certification_id}.json"}
+        )
+
+    elif format == "pdf":
+        from intelligence.persistence import intelligence_persistence
+
+        explanation = intelligence_persistence.get_explanation(certification_id)
+        ai_summary = explanation.executive_summary if explanation else None
+        pdf_content = generate_pdf_report(artifact, ai_summary=ai_summary)
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=beacon_certificate_{certification_id}.pdf"},
         )
 
     elif format == "markdown":

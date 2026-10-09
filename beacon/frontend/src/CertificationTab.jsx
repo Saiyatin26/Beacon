@@ -365,7 +365,7 @@ export default function CertificationTab({
     setReportError(null);
     try {
       const response = await _fetch(
-        `${apiBase}/api/v1/certification/${encodeURIComponent(workflowResult.artifact_id)}/export?format=markdown`
+        `${apiBase}/api/v1/certification/${encodeURIComponent(workflowResult.artifact_id)}/export?format=pdf`
       );
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
@@ -373,7 +373,7 @@ export default function CertificationTab({
       }
       saveDownload(
         await response.blob(),
-        `beacon_certificate_${workflowResult.artifact_id}.md`
+        `beacon_certificate_${workflowResult.artifact_id}.pdf`
       );
     } catch (error) {
       setReportError(error.message || "Certificate download failed.");
@@ -382,31 +382,27 @@ export default function CertificationTab({
     }
   };
 
-  const downloadRunReport = () => {
-    if (!workflowResult) return;
-    const meta = workflowResult.metadata || {};
-    const report = {
-      report_type: workflowResult.artifact_id ? "CERTIFICATION_RUN" : "UNSIGNED_RUN_REPORT_NOT_A_CERTIFICATE",
-      workflow_run_id: workflowResult.workflow_run_id,
-      application_id: workflowResult.application_id,
-      status: workflowResult.status,
-      certified: Boolean(workflowResult.certified),
-      artifact_id: workflowResult.artifact_id || null,
-      artifact_hash: workflowResult.artifact_hash || null,
-      score: workflowResult.equivalence_score ?? null,
-      source_hashes: {
-        legacy: meta.legacy_provenance?.content_hash || meta.sources?.legacy?.content_hash || null,
-        modern: meta.modern_provenance?.content_hash || meta.sources?.modern?.content_hash || null,
-      },
-      input_count: workflowResult.unique_input_count ?? meta.inputs_count ?? null,
-      evidence: meta.representative_cases || [],
-      error_code: workflowResult.error_code || null,
-      error_message: workflowResult.error_message || null,
-      limitations: meta.cobol_execution?.limitations || [],
-      metadata: meta,
-    };
-    const filename = `beacon_run_${workflowResult.workflow_run_id || "report"}.json`;
-    saveDownload(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }), filename);
+  const downloadRunReport = async () => {
+    if (!workflowResult?.workflow_run_id) return;
+    setReportBusy(true);
+    setReportError(null);
+    try {
+      const response = await _fetch(
+        `${apiBase}/api/v2/workflow/runs/${encodeURIComponent(workflowResult.workflow_run_id)}/export`
+      );
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || `Run report download failed (HTTP ${response.status}).`);
+      }
+      saveDownload(
+        await response.blob(),
+        `beacon_run_${workflowResult.workflow_run_id}.pdf`
+      );
+    } catch (error) {
+      setReportError(error.message || "Run report download failed.");
+    } finally {
+      setReportBusy(false);
+    }
   };
 
   const downloadAiSummary = () => {
@@ -1215,13 +1211,13 @@ export default function CertificationTab({
                   );
                 })()}
 
-                {/* Discovered Behavioral Rules & Invariants */}
+                {/* AI-validated Behavioral Rules */}
                 <section style={{ ...cardStyle, marginBottom: "16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
                     <h4 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
-                      📜 Discovered Behavioral Rules & Invariants ({(analysisResult.rules || analysisResult.discovered_rules || []).length})
+                      📜 AI-validated Behavioral Rules ({(analysisResult.rules || analysisResult.discovered_rules || []).length})
                     </h4>
-                    <span style={{ fontSize: "11px", color: "#64748b" }}>AST Branch & Expression Inference</span>
+                    <span style={{ fontSize: "11px", color: "#64748b" }}>AI candidates anchored to source lines</span>
                   </div>
                   {(analysisResult.rules?.length > 0 || analysisResult.discovered_rules?.length > 0) ? (
                     <div style={{ maxHeight: "180px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "6px" }}>
@@ -1532,8 +1528,8 @@ export default function CertificationTab({
                   {reportBusy
                     ? "Preparing download…"
                     : workflowResult.artifact_id
-                    ? "Download Certification Report"
-                    : "Download Run Report (Not a Certificate)"}
+                    ? "Download Certificate (PDF)"
+                    : "Download Run Report (PDF; Not a Certificate)"}
                 </button>
                 {workflowResult.explanation && (
                   <button
@@ -1813,14 +1809,14 @@ export default function CertificationTab({
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
-                    📜 Discovered Behavioral Invariants & Legitimate Inputs
+                    📜 AI-validated Behavioral Rules & Inputs
                   </h3>
                   <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
-                    Static AST branch extraction and genuine test fixtures discovered directly from ingested source code.
+                    AI-proposed behavioral rules are retained only when their cited source lines validate; execution evidence remains independently measured.
                   </p>
                 </div>
                 <span style={{ fontSize: "12px", color: "#475569" }}>
-                  Invariants: <strong>{discoveryMeta.invariants_discovered ?? meta.discovered_rules?.length ?? 0}</strong> • Validated Cases: <strong>{meta.inputs_count ?? discoveryMeta.legitimate_inputs_discovered ?? 0}</strong>
+                  AI-validated rules: <strong>{meta.discovered_rules?.length ?? discoveryMeta.invariants_discovered ?? 0}</strong> • Validated Cases: <strong>{meta.inputs_count ?? discoveryMeta.legitimate_inputs_discovered ?? 0}</strong>
                 </span>
               </div>
 
@@ -1831,7 +1827,7 @@ export default function CertificationTab({
                       <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
                         <th style={{ padding: "6px 10px", color: "#475569" }}>Rule ID</th>
                         <th style={{ padding: "6px 10px", color: "#475569" }}>Invariant / Description</th>
-                        <th style={{ padding: "6px 10px", color: "#475569" }}>Source AST Location</th>
+                        <th style={{ padding: "6px 10px", color: "#475569" }}>Source Location</th>
                         <th style={{ padding: "6px 10px", color: "#475569" }}>Discovery Method</th>
                       </tr>
                     </thead>

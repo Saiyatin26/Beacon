@@ -190,6 +190,14 @@ class WorkflowErrorCode(str, Enum):
     INTERNAL_ERROR = "INTERNAL_ERROR"
 
 
+class WorkflowExecutionError(RuntimeError):
+    """Raised when authoritative persistence or finalization checks fail."""
+
+    def __init__(self, error_code: WorkflowErrorCode, message: str):
+        self.error_code = error_code
+        super().__init__(message)
+
+
 class WorkflowRunRequest(BaseModel):
     """Structured request payload to execute canonical V2 certification."""
     model_config = ConfigDict(extra="ignore")
