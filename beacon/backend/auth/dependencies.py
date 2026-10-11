@@ -164,6 +164,14 @@ def require_project_permission(permission: Permission, project_id_param: str = "
                         target_project_id = r.get("project_id")
                 except Exception:
                     pass
+            if not target_project_id:
+                try:
+                    from workflow.persistence import workflow_persistence
+                    w_run = workflow_persistence.get_run(cert_id)
+                    if w_run and w_run.application_id:
+                        target_project_id = w_run.application_id
+                except Exception:
+                    pass
         elif dataset_id:
             try:
                 from ingestion.dataset_registry import user_dataset_registry

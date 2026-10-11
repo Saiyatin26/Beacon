@@ -104,7 +104,7 @@ class Settings:
     @property
     def gemini_model(self) -> str:
         load_dotenv(PROJECT_ROOT / ".env", override=True)
-        return os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+        return os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 
     @gemini_model.setter
     def gemini_model(self, val: str) -> None:

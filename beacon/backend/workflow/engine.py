@@ -1393,6 +1393,8 @@ class CanonicalV2WorkflowEngine:
             evaluation_result_id=eval_result.evaluation_id,
             threshold_resolution_id=threshold_res.resolution_id,
             threshold_resolution_fingerprint=threshold_res.fingerprint,
+            input_set_id=run.input_set_id or (f"INPSET-{spec.application_id}" if spec else ""),
+            input_set_hash=run.input_set_hash or compute_input_set_canonical_hash(test_inputs),
             certification_run_id=run.workflow_run_id,
         )
 
@@ -1402,6 +1404,7 @@ class CanonicalV2WorkflowEngine:
             evaluation_result=eval_result,
             oracle_set=oracle_set,
             threshold_resolution=threshold_res,
+            test_inputs=test_inputs,
         )
 
         if not artifact or not getattr(artifact, "certification_id", None):
@@ -1502,8 +1505,8 @@ class CanonicalV2WorkflowEngine:
         t_stage = time.perf_counter()
 
         # 1. Build canonical CertificationInputSet
-        input_set_id = f"INPSET-{artifact.certification_id}"
-        input_set_hash = compute_input_set_canonical_hash(test_inputs)
+        input_set_id = artifact.input_set_id or run.input_set_id or f"INPSET-{artifact.certification_id}"
+        input_set_hash = artifact.input_set_hash or run.input_set_hash or compute_input_set_canonical_hash(test_inputs)
         input_set = CertificationInputSet(
             input_set_id=input_set_id,
             version=1,
@@ -1572,6 +1575,18 @@ class CanonicalV2WorkflowEngine:
         run.certification_id = artifact.certification_id
         run.finalization_state = FinalizationState.CERTIFICATION_VERIFIED
         self.persistence.save_run(run)
+
+        # 5. Authoritative Oracle Reconciliation
+        try:
+            from reconciliation.oracle_reconciliation_service import oracle_reconciliation_service
+            recon_record = oracle_reconciliation_service.reconcile_certification_run(artifact.certification_id, persist=True)
+            if recon_record:
+                run.metadata["oracle_reconciliation_id"] = recon_record.reconciliation_id
+                run.metadata["oracle_reconciliation_status"] = recon_record.status.value
+                run.metadata["oracle_reconciliation_coverage"] = recon_record.coverage
+                self.persistence.save_run(run)
+        except Exception as orec_err:
+            logger.warning(f"Authoritative oracle reconciliation notice: {orec_err}")
 
         # 5. Mandatory structured audit event logging
         logged_event = audit_logger.log(

@@ -46,7 +46,7 @@ graph TD
 
 | Check | Command / Verification Target | Result | Status |
 | :--- | :--- | :--- | :---: |
-| **Phase 7 Reconciliation Suite** | `pytest tests/test_v2_phase7_reconciliation.py tests/test_phase7_*.py` | **40 passed in 1.57s** | **PASS** |
+| **Phase 7 Reconciliation Suite** | `pytest tests/test_v2_phase7_reconciliation.py tests/test_phase7_*.py` | **40 passed in 3.87s** | **PASS** |
 | **Phase 6 Discovery Suite** | `pytest tests/test_v2_phase6_discovery.py` | **36 passed in 1.03s** | **PASS** |
 | **Phase 5 Controlled Assessment Suite** | `pytest tests/test_v2_phase5_*.py` | **85 passed in 10.63s** | **PASS** |
 | **Phase 4 Evaluation Suite** | `pytest tests/test_v2_phase4_evaluation.py` | **88 passed in 1.23s** | **PASS** |

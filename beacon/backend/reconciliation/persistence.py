@@ -10,6 +10,7 @@ import sqlite3
 from typing import Any, Optional
 
 from .models import OracleSet, ReconciliationPolicy, ReconciliationResult
+from .oracle_reconciliation_models import OracleReconciliationRecord
 
 from common.config import settings
 
@@ -96,6 +97,27 @@ class ReconciliationPersistenceStore:
                     FOREIGN KEY (run_id) REFERENCES reconciliation_runs(run_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS oracle_reconciliations (
+                    reconciliation_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL,
+                    certification_id TEXT NOT NULL,
+                    application_id TEXT NOT NULL,
+                    oracle_set_id TEXT NOT NULL,
+                    oracle_set_hash TEXT NOT NULL,
+                    input_set_id TEXT NOT NULL,
+                    input_set_hash TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    coverage REAL,
+                    evidence_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_oracle_recon_run ON oracle_reconciliations(run_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_oracle_recon_cert ON oracle_reconciliations(certification_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_oracle_recon_app ON oracle_reconciliations(application_id)")
             conn.commit()
 
     def save_reconciliation_result(self, result: ReconciliationResult) -> None:
@@ -268,6 +290,74 @@ class ReconciliationPersistenceStore:
                     FROM reconciliation_runs ORDER BY created_at DESC
                 """)
             return [dict(r) for r in cursor.fetchall()]
+
+    def save_oracle_reconciliation(self, record: OracleReconciliationRecord) -> None:
+        """Persists an authoritative OracleReconciliationRecord immutably into SQLite."""
+        try:
+            with self._get_conn() as conn:
+                payload_json = json.dumps(record.model_dump(), default=str)
+                conn.execute("""
+                    INSERT OR REPLACE INTO oracle_reconciliations (
+                        reconciliation_id, run_id, certification_id, application_id,
+                        oracle_set_id, oracle_set_hash, input_set_id, input_set_hash,
+                        status, coverage, evidence_hash, created_at, updated_at, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    record.reconciliation_id,
+                    record.run_id,
+                    record.certification_id,
+                    record.application_id,
+                    record.oracle_set_id,
+                    record.oracle_set_hash,
+                    record.input_set_id,
+                    record.input_set_hash,
+                    record.status.value,
+                    record.coverage,
+                    record.evidence_hash,
+                    record.created_at,
+                    record.updated_at,
+                    payload_json,
+                ))
+                conn.commit()
+        except Exception as exc:
+            logger.error(f"Failed to persist oracle reconciliation '{record.reconciliation_id}': {exc}", exc_info=True)
+            raise ReconciliationPersistenceError(f"Database error writing oracle reconciliation: {exc}") from exc
+
+    def get_oracle_reconciliation(self, identifier: str) -> Optional[OracleReconciliationRecord]:
+        """Retrieves a persisted OracleReconciliationRecord by reconciliation_id, run_id, or certification_id."""
+        if not identifier:
+            return None
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT payload_json FROM oracle_reconciliations
+                WHERE reconciliation_id = ? OR run_id = ? OR certification_id = ?
+                ORDER BY created_at DESC LIMIT 1
+            """, (identifier, identifier, identifier))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            data = json.loads(row["payload_json"])
+            return OracleReconciliationRecord(**data)
+
+    def list_oracle_reconciliations(self, application_id: Optional[str] = None) -> list[OracleReconciliationRecord]:
+        """Lists persisted OracleReconciliationRecords optionally filtered by application_id."""
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            if application_id:
+                cursor.execute("""
+                    SELECT payload_json FROM oracle_reconciliations
+                    WHERE application_id = ? ORDER BY created_at DESC
+                """, (application_id,))
+            else:
+                cursor.execute("SELECT payload_json FROM oracle_reconciliations ORDER BY created_at DESC")
+            records = []
+            for row in cursor.fetchall():
+                try:
+                    records.append(OracleReconciliationRecord(**json.loads(row["payload_json"])))
+                except Exception:
+                    pass
+            return records
 
 
 reconciliation_persistence = ReconciliationPersistenceStore()

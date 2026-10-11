@@ -1321,12 +1321,30 @@ def export_certification_dossier(
     if not artifact:
         raise HTTPException(status_code=404, detail="Certification not found.")
 
+    from certification.models import compute_input_set_canonical_hash
+    from reconciliation.oracle_reconciliation_service import oracle_reconciliation_service
+
     cases = certification_repository.list_cases_for_input_set(artifact.input_set_id, run_id=artifact.certification_id)
+    if not cases:
+        cases = certification_repository.list_certification_cases(artifact.certification_id)
     input_set = certification_repository.get_input_set(artifact.input_set_id)
+    if not input_set and getattr(artifact, "certification_id", None):
+        input_set = certification_repository.get_input_set(f"INPSET-{artifact.certification_id}")
+    if not input_set and getattr(artifact, "context", None) and getattr(artifact.context, "certification_run_id", None):
+        input_set = certification_repository.get_input_set(f"INPSET-{artifact.context.certification_run_id}")
     if not input_set:
         raise HTTPException(status_code=409, detail="Cannot export dossier: Incomplete certification data (InputSet missing).")
-    integrity_report = certification_repository.verify_certification_run_integrity(certification_id)
 
+    if cases:
+        computed_input_hash = compute_input_set_canonical_hash(cases)
+        if input_set.canonical_hash and input_set.canonical_hash != computed_input_hash:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot export dossier: InputSet integrity check failed (stored '{input_set.canonical_hash}' != computed '{computed_input_hash}').",
+            )
+
+    integrity_report = certification_repository.verify_certification_run_integrity(certification_id)
+    recon_record = oracle_reconciliation_service.get_or_create_reconciliation(certification_id)
 
     if format == "json":
         ctx = artifact.context
@@ -1350,6 +1368,7 @@ def export_certification_dossier(
                 "oracle_set_hash": artifact.oracle_set_hash,
                 "summaries": [s.model_dump(mode="json") for s in artifact.oracle_summaries],
             },
+            "oracle_reconciliation": recon_record.model_dump(mode="json") if recon_record else None,
             "policy": {
                 "policy_id": artifact.certification_policy_id,
                 "policy_hash": artifact.certification_policy_hash,
@@ -1463,6 +1482,14 @@ The adjusted score is the observed behavioral equivalence score multiplied by th
 - **Counterexamples Detected:** `{artifact.metrics.counterexample_count}`
 - **Oracle Coverage:** `{coverage_text}`
 
+## Oracle Reconciliation Evidence
+- **Reconciliation ID:** `{recon_record.reconciliation_id if recon_record else 'N/A'}`
+- **Reconciliation Status:** **`{recon_record.status.value if recon_record else 'NOT_AVAILABLE'}`**
+- **Status Reason:** `{recon_record.status_reason if recon_record else 'None recorded'}`
+- **Oracle Coverage:** `{f"{recon_record.coverage * 100:.1f}%" if recon_record and recon_record.coverage is not None else "N/A"}`
+- **Evidence Digest (SHA-256):** `{recon_record.evidence_hash if recon_record else 'N/A'}`
+- **Binding Counts:** Required: {recon_record.binding_counts.total_required_bindings if recon_record else 0}, Matched: {recon_record.binding_counts.matched_bindings if recon_record else 0}, Missing: {recon_record.binding_counts.missing_bindings if recon_record else 0}, Conflicts: {recon_record.binding_counts.conflicting_bindings if recon_record else 0}
+
 ## Paired execution evidence
 The following persisted cases contain the input and outputs captured by this run. At most 100 cases are included in this Markdown dossier.
 """
@@ -1541,6 +1568,70 @@ def verify_certification_reproducibility(
 ):
     """Backward-compatible endpoint for checking artifact and input-set integrity."""
     return verify_certification_artifact(certification_id, current_user=current_user)
+
+
+@app.get("/api/certifications/{run_id}/oracle-reconciliation")
+@app.get("/api/v1/certification/{run_id}/oracle-reconciliation")
+def get_oracle_reconciliation_endpoint(
+    run_id: str,
+    current_user: User = Depends(require_project_permission(Permission.VIEW)),
+):
+    """Retrieves authoritative, persisted Oracle Reconciliation results for a certification run."""
+    clean_id = (run_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="run_id parameter cannot be empty.")
+
+    from workflow.persistence import workflow_persistence
+    from reconciliation.oracle_reconciliation_service import oracle_reconciliation_service
+
+    run = workflow_persistence.get_run(clean_id)
+    artifact = certification_repository.get_artifact(clean_id)
+    if not run and not artifact:
+        for r in workflow_persistence.list_runs():
+            if r.certification_id == clean_id:
+                run = r
+                break
+    if not run and not artifact:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Certification run or artifact '{clean_id}' not found.",
+        )
+
+    record = oracle_reconciliation_service.get_or_create_reconciliation(clean_id)
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No reconciliation record could be loaded or produced for run '{clean_id}'.",
+        )
+    return record.model_dump(mode="json")
+
+
+@app.post("/api/certifications/{run_id}/oracle-reconciliation")
+@app.post("/api/v1/certification/{run_id}/oracle-reconciliation")
+def trigger_oracle_reconciliation_endpoint(
+    run_id: str,
+    current_user: User = Depends(require_project_permission(Permission.CERTIFY)),
+):
+    """Executes on-demand authoritative Oracle Reconciliation and immutably persists the result."""
+    clean_id = (run_id or "").strip()
+    if not clean_id:
+        raise HTTPException(status_code=400, detail="run_id parameter cannot be empty.")
+
+    from workflow.persistence import workflow_persistence
+    from reconciliation.oracle_reconciliation_service import oracle_reconciliation_service
+
+    run = workflow_persistence.get_run(clean_id)
+    artifact = certification_repository.get_artifact(clean_id)
+    if not run and not artifact:
+        for r in workflow_persistence.list_runs():
+            if r.certification_id == clean_id:
+                run = r
+                break
+    if not run and not artifact:
+        raise HTTPException(status_code=404, detail=f"Certification run or artifact '{clean_id}' not found.")
+
+    record = oracle_reconciliation_service.reconcile_certification_run(clean_id, persist=True)
+    return record.model_dump(mode="json")
 
 
 # ==============================================================================

@@ -18,6 +18,17 @@ from .models import (
     RuleProvenanceSource,
     RuleRelationship,
 )
+from .oracle_reconciliation_models import (
+    OracleBinding,
+    OracleBindingCounts,
+    OracleBindingStatus,
+    OracleReconciliationRecord,
+    OracleReconciliationStatus,
+)
+from .oracle_reconciliation_service import (
+    OracleReconciliationService,
+    oracle_reconciliation_service,
+)
 from .persistence import ReconciliationPersistenceStore, reconciliation_persistence
 
 __all__ = [
@@ -36,4 +47,11 @@ __all__ = [
     "ReconciliationResult",
     "ReconciliationDiagnostic",
     "DecisionTraceRecord",
+    "OracleReconciliationStatus",
+    "OracleBindingStatus",
+    "OracleBinding",
+    "OracleBindingCounts",
+    "OracleReconciliationRecord",
+    "OracleReconciliationService",
+    "oracle_reconciliation_service",
 ]

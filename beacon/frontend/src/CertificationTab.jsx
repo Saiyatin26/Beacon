@@ -80,6 +80,11 @@ export default function CertificationTab({
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState(null);
 
+  // ── Authoritative Oracle Reconciliation State ─────────────────────────────
+  const [oracleRecon, setOracleRecon] = useState(null);
+  const [oracleReconLoading, setOracleReconLoading] = useState(false);
+  const [oracleReconError, setOracleReconError] = useState(null);
+
   // ── Step Tracking ──────────────────────────────────────────────────────────
   const [activeStep, setActiveStep] = useState("configure"); // configure | result
 
@@ -137,6 +142,42 @@ export default function CertificationTab({
   useEffect(() => {
     if (authToken) loadRecentRuns();
   }, [authToken]);
+
+  useEffect(() => {
+    const runId = workflowResult?.artifact_id || workflowResult?.workflow_run_id || workflowRunId;
+    if (!runId) {
+      setOracleRecon(null);
+      setOracleReconError(null);
+      return;
+    }
+    let isCancelled = false;
+    const fetchOracleReconciliation = async () => {
+      setOracleReconLoading(true);
+      setOracleReconError(null);
+      try {
+        const res = await _fetch(`${apiBase}/api/certifications/${encodeURIComponent(runId)}/oracle-reconciliation`);
+        if (isCancelled) return;
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || `HTTP ${res.status}: Failed to load oracle reconciliation`);
+        }
+        const data = await res.json();
+        if (!isCancelled) {
+          setOracleRecon(data);
+        }
+      } catch (err) {
+        if (!isCancelled) {
+          setOracleReconError(err.message || "Failed to load oracle reconciliation");
+        }
+      } finally {
+        if (!isCancelled) {
+          setOracleReconLoading(false);
+        }
+      }
+    };
+    fetchOracleReconciliation();
+    return () => { isCancelled = true; };
+  }, [workflowResult?.artifact_id, workflowResult?.workflow_run_id, workflowRunId, apiBase]);
 
   // ── Repository / Source Analysis Handler ────────────────────────────────────
   const handleAnalyzeRepositories = async () => {
@@ -1084,19 +1125,18 @@ export default function CertificationTab({
                     padding: "14px 18px",
                     borderRadius: "8px",
                     marginBottom: "16px",
-                    border: `1px solid ${
-                      analysisResult.status === "READY"
+                    border: `1px solid ${analysisResult.status === "READY"
                         ? "#86efac"
                         : analysisResult.status === "DISCOVERY_INSUFFICIENT"
-                        ? "#fcd34d"
-                        : "#fca5a5"
-                    }`,
+                          ? "#fcd34d"
+                          : "#fca5a5"
+                      }`,
                     background:
                       analysisResult.status === "READY"
                         ? "#f0fdf4"
                         : analysisResult.status === "DISCOVERY_INSUFFICIENT"
-                        ? "#fffbeb"
-                        : "#fef2f2",
+                          ? "#fffbeb"
+                          : "#fef2f2",
                     display: "flex",
                     justifyContent: "space-between",
                     alignItems: "center",
@@ -1111,8 +1151,8 @@ export default function CertificationTab({
                           analysisResult.status === "READY"
                             ? "#166534"
                             : analysisResult.status === "DISCOVERY_INSUFFICIENT"
-                            ? "#92400e"
-                            : "#991b1b",
+                              ? "#92400e"
+                              : "#991b1b",
                       }}
                     >
                       {analysisResult.status === "READY" && "✅ Analysis Complete — Sources Validated & Ready for Certification"}
@@ -1553,8 +1593,8 @@ export default function CertificationTab({
                   {reportBusy
                     ? "Preparing download…"
                     : workflowResult.artifact_id
-                    ? "Download Certificate (PDF)"
-                    : "Download Run Report (PDF; Not a Certificate)"}
+                      ? "Download Certificate (PDF)"
+                      : "Download Run Report (PDF; Not a Certificate)"}
                 </button>
                 {workflowResult.explanation && (
                   <button
@@ -1997,33 +2037,153 @@ export default function CertificationTab({
                     ⚖️ Oracle Reconciliation
                   </h3>
                   {(() => {
-                    const isReconciled = Boolean(
-                      meta.oracle_reconciliation_status === "VALIDATED" ||
-                      (meta.oracle_reconciliation_status && meta.oracle_reconciliation_status !== "NOT_AVAILABLE") ||
-                      (meta.oracle_coverage != null && oracleSetId && oracleSetId !== "—")
-                    );
+                    if (oracleReconLoading) {
+                      return (
+                        <span style={{ fontSize: "11px", fontWeight: "600", color: "#1e40af", background: "#eff6ff", border: "1px solid #bfdbfe", padding: "1px 6px", borderRadius: "4px" }}>
+                          Loading…
+                        </span>
+                      );
+                    }
+                    if (oracleReconError) {
+                      return (
+                        <span style={{ fontSize: "11px", fontWeight: "600", color: "#991b1b", background: "#fef2f2", border: "1px solid #fecaca", padding: "1px 6px", borderRadius: "4px" }}>
+                          API Unavailable
+                        </span>
+                      );
+                    }
+                    const st = oracleRecon?.status;
+                    const styleMap = {
+                      RECONCILED: { color: "#166534", bg: "#f0fdf4", border: "#bbf7d0", text: "RECONCILED" },
+                      PARTIALLY_RECONCILED: { color: "#854d0e", bg: "#fefce8", border: "#fef08a", text: "PARTIALLY RECONCILED" },
+                      CONFLICT: { color: "#991b1b", bg: "#fef2f2", border: "#fecaca", text: "CONFLICT" },
+                      NOT_AVAILABLE: { color: "#475569", bg: "#f8fafc", border: "#cbd5e1", text: "NOT AVAILABLE" },
+                      FAILED: { color: "#991b1b", bg: "#fef2f2", border: "#fecaca", text: "FAILED" },
+                      PENDING: { color: "#1e40af", bg: "#eff6ff", border: "#bfdbfe", text: "PENDING" },
+                    };
+                    const badge = styleMap[st] || { color: "#475569", bg: "#f8fafc", border: "#cbd5e1", text: st || "NOT AVAILABLE" };
                     return (
                       <span style={{
                         fontSize: "11px",
-                        fontWeight: "600",
-                        color: isReconciled ? "#166534" : "#991b1b",
-                        background: isReconciled ? "#f0fdf4" : "#fef2f2",
-                        border: isReconciled ? "1px solid #bbf7d0" : "1px solid #fecaca",
+                        fontWeight: "700",
+                        color: badge.color,
+                        background: badge.bg,
+                        border: `1px solid ${badge.border}`,
                         padding: "1px 6px",
                         borderRadius: "4px"
                       }}>
-                        {isReconciled ? "Evidence-Reconciled" : "Reconciliation Unavailable"}
+                        {badge.text}
                       </span>
                     );
                   })()}
                 </div>
-                <div style={{ fontSize: "12px", color: "#334155", lineHeight: "1.7" }}>
-                  <div><strong>Reconciliation Status:</strong> <span style={{ color: (meta.oracle_reconciliation_status === "VALIDATED" || meta.oracle_coverage != null) ? "#166534" : "#dc2626", fontWeight: "600" }}>{meta.oracle_reconciliation_status || (meta.oracle_coverage != null ? "VALIDATED" : "NOT_AVAILABLE")}</span></div>
-                  <div><strong>Oracle Coverage:</strong> <strong style={{ color: "#1e40af" }}>{oracleCoverage}</strong></div>
-                  <div><strong>Oracle Set ID:</strong> <span style={{ fontFamily: "monospace", color: "#0f172a" }}>{oracleSetId}</span></div>
-                  <div><strong>Oracle Hash (SHA-256):</strong> <span style={{ fontFamily: "monospace", color: "#475569", fontSize: "11px" }}>{oracleSetHash ? (oracleSetHash.length > 28 ? oracleSetHash.slice(0, 24) + "..." : oracleSetHash) : "—"}</span></div>
-                  <div><strong>Cross-Binding:</strong> <span style={{ color: (meta.oracle_reconciliation_status === "VALIDATED" || meta.oracle_coverage != null) ? "#166534" : "#64748b" }}>{(meta.oracle_reconciliation_status === "VALIDATED" || meta.oracle_coverage != null) ? "Verified to Execution & Input Identity" : "Not Reconciled"}</span></div>
-                </div>
+
+                {oracleReconLoading ? (
+                  <div style={{ fontSize: "12px", color: "#64748b", padding: "12px 0", fontStyle: "italic" }}>
+                    ⏳ Fetching authoritative cross-binding and reconciliation evidence…
+                  </div>
+                ) : oracleReconError ? (
+                  <div style={{ fontSize: "12px", color: "#991b1b", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "6px", padding: "10px", lineHeight: "1.6" }}>
+                    <strong>API Unavailable:</strong> {oracleReconError}
+                    <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px" }}>The backend oracle reconciliation endpoint could not be reached.</div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: "12px", color: "#334155", lineHeight: "1.7" }}>
+                    <div>
+                      <strong>Reconciliation Status:</strong>{" "}
+                      <span style={{
+                        color: oracleRecon?.status === "RECONCILED" ? "#166534" : (oracleRecon?.status === "PARTIALLY_RECONCILED" ? "#854d0e" : "#dc2626"),
+                        fontWeight: "700",
+                      }}>
+                        {oracleRecon?.status || "NOT_AVAILABLE"}
+                      </span>
+                      {oracleRecon?.status_reason && (
+                        <span style={{ fontSize: "11px", color: "#64748b", display: "block", marginTop: "1px" }}>
+                          {oracleRecon.status_reason}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <strong>Oracle Coverage:</strong>{" "}
+                      <strong style={{ color: "#1e40af" }}>
+                        {oracleRecon?.coverage != null ? `${(oracleRecon.coverage * 100).toFixed(1)}%` : (oracleRecon ? "Undefined (0 required rules)" : "—")}
+                      </strong>
+                    </div>
+                    <div>
+                      <strong>Oracle Set ID:</strong>{" "}
+                      <span style={{ fontFamily: "monospace", color: "#0f172a" }}>
+                        {oracleRecon?.oracle_set_id || oracleSetId || "—"}
+                      </span>
+                    </div>
+                    <div>
+                      <strong>Oracle Hash (SHA-256):</strong>{" "}
+                      <span style={{ fontFamily: "monospace", color: "#475569", fontSize: "11px" }}>
+                        {oracleRecon?.oracle_set_hash
+                          ? (oracleRecon.oracle_set_hash.length > 28 ? oracleRecon.oracle_set_hash.slice(0, 24) + "..." : oracleRecon.oracle_set_hash)
+                          : (oracleSetHash && oracleSetHash !== "—" ? (oracleSetHash.length > 28 ? oracleSetHash.slice(0, 24) + "..." : oracleSetHash) : "—")}
+                      </span>
+                    </div>
+                    <div>
+                      <strong>InputSet ID:</strong>{" "}
+                      <span style={{ fontFamily: "monospace", color: "#0f172a" }}>
+                        {oracleRecon?.input_set_id || meta.input_set_id || "—"}
+                      </span>
+                    </div>
+                    <div>
+                      <strong>InputSet Hash (SHA-256):</strong>{" "}
+                      <span style={{ fontFamily: "monospace", color: "#475569", fontSize: "11px" }}>
+                        {oracleRecon?.input_set_hash
+                          ? (oracleRecon.input_set_hash.length > 28 ? oracleRecon.input_set_hash.slice(0, 24) + "..." : oracleRecon.input_set_hash)
+                          : (meta.input_set_hash ? (meta.input_set_hash.length > 28 ? meta.input_set_hash.slice(0, 24) + "..." : meta.input_set_hash) : "—")}
+                      </span>
+                    </div>
+                    <div>
+                      <strong>Binding Counts:</strong>{" "}
+                      <span>
+                        Required: <strong>{oracleRecon?.binding_counts?.total_required_bindings ?? 0}</strong> • Matched: <strong style={{ color: "#166534" }}>{oracleRecon?.binding_counts?.matched_bindings ?? 0}</strong> • Missing: <strong style={{ color: (oracleRecon?.binding_counts?.missing_bindings ?? 0) > 0 ? "#dc2626" : "#64748b" }}>{oracleRecon?.binding_counts?.missing_bindings ?? 0}</strong> • Conflicts: <strong style={{ color: (oracleRecon?.binding_counts?.conflicting_bindings ?? 0) > 0 ? "#dc2626" : "#64748b" }}>{oracleRecon?.binding_counts?.conflicting_bindings ?? 0}</strong>
+                      </span>
+                    </div>
+                    <div>
+                      <strong>Cross-Binding:</strong>{" "}
+                      <span style={{
+                        color: oracleRecon?.status === "RECONCILED" ? "#166534" : (oracleRecon?.status === "PARTIALLY_RECONCILED" ? "#854d0e" : "#64748b"),
+                        fontWeight: "600",
+                      }}>
+                        {oracleRecon?.status === "RECONCILED"
+                          ? "Verified to Execution & Input Identity"
+                          : (oracleRecon?.status === "PARTIALLY_RECONCILED"
+                            ? "Partially Bound to Executions"
+                            : (oracleRecon?.status === "CONFLICT"
+                              ? "Contradictory Bindings Detected"
+                              : (oracleRecon?.status === "FAILED"
+                                ? "Integrity Check Failed"
+                                : "Not Reconciled")))}
+                      </span>
+                    </div>
+                    {oracleRecon?.evidence_hash && (
+                      <div>
+                        <strong>Evidence Digest (SHA-256):</strong>{" "}
+                        <span style={{ fontFamily: "monospace", color: "#475569", fontSize: "11px" }}>
+                          {oracleRecon.evidence_hash.length > 28 ? oracleRecon.evidence_hash.slice(0, 24) + "..." : oracleRecon.evidence_hash}
+                        </span>
+                      </div>
+                    )}
+                    {oracleRecon?.created_at && (
+                      <div style={{ fontSize: "11px", color: "#64748b" }}>
+                        <strong>Reconciled At:</strong> {new Date(oracleRecon.created_at).toLocaleString()}
+                      </div>
+                    )}
+                    {oracleRecon?.failure_reasons && oracleRecon.failure_reasons.length > 0 && (
+                      <div style={{ marginTop: "8px", padding: "8px 10px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: "6px", fontSize: "11px", color: "#991b1b", lineHeight: "1.5" }}>
+                        <strong>Integrity / Missing Evidence Reasons:</strong>
+                        <ul style={{ margin: "4px 0 0", paddingLeft: "16px" }}>
+                          {oracleRecon.failure_reasons.map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
               </section>
 
               {/* Automatic Threshold Resolution Card (Strictly Read-Only) */}

@@ -25,7 +25,7 @@ class MockHttpResponse:
 
 
 def test_gemini_missing_api_key():
-    provider = GeminiProvider(api_key="", model="gemini-1.5-flash")
+    provider = GeminiProvider(api_key="", model="gemini-3.8-flash")
     resp = provider.generate("Extract rules")
 
     assert resp.success is False
@@ -48,12 +48,12 @@ def test_gemini_success_with_valid_response(monkeypatch):
         })
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    provider = GeminiProvider(api_key="AIzaSyTestGeminiKey", model="gemini-1.5-flash")
+    provider = GeminiProvider(api_key="AIzaSyTestGeminiKey", model="gemini-3.8-flash")
     resp = provider.generate("Extract rules", json_mode=True)
 
     assert resp.success is True
     assert resp.provider_name == "gemini"
-    assert resp.model_name == "gemini-1.5-flash"
+    assert resp.model_name == "gemini-3.8-flash"
     assert resp.parsed_json == {"rules": [{"rule_id": "RULE-01"}], "test_cases": []}
 
 

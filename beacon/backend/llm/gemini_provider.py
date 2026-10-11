@@ -34,7 +34,7 @@ class GeminiProvider(LLMProvider):
     def model(self) -> str:
         if self._explicit_model is not None:
             return self._explicit_model.strip()
-        return (settings.gemini_model or "gemini-1.5-flash").strip()
+        return (settings.gemini_model or "gemini-3.8-flash").strip()
 
     @model.setter
     def model(self, val: Optional[str]) -> None:

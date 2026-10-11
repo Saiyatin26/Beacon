@@ -275,7 +275,7 @@ export default function App() {
       await fetch(`${API_BASE}/api/v1/auth/logout`, {
         method: "POST",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
-      }).catch(() => {});
+      }).catch(() => { });
     }
     setAuthToken(null);
     setCurrentUser(null);
@@ -1475,17 +1475,16 @@ export default function App() {
                 {/* 1. WHY CERTIFIED / WHY NOT CERTIFIED / WHY INCONCLUSIVE HERO CARD */}
                 <div style={{
                   ...cardStyle,
-                  borderLeft: `6px solid ${
-                    dossierExplanation.authoritative_status === "CERTIFIED" ? "#10b981" :
-                    dossierExplanation.authoritative_status === "INSUFFICIENT_COVERAGE" ? "#f97316" : "#ef4444"
-                  }`
+                  borderLeft: `6px solid ${dossierExplanation.authoritative_status === "CERTIFIED" ? "#10b981" :
+                      dossierExplanation.authoritative_status === "INSUFFICIENT_COVERAGE" ? "#f97316" : "#ef4444"
+                    }`
                 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "14px" }}>
                     <div>
                       <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                         <span style={{ fontSize: "20px" }}>
                           {dossierExplanation.authoritative_status === "CERTIFIED" ? "✅" :
-                           dossierExplanation.authoritative_status === "INSUFFICIENT_COVERAGE" ? "⚠️" : "❌"}
+                            dossierExplanation.authoritative_status === "INSUFFICIENT_COVERAGE" ? "⚠️" : "❌"}
                         </span>
                         <h3 style={{ margin: 0, fontSize: "17px", fontWeight: "800", color: "#0f172a" }}>
                           {dossierExplanation.headline}
@@ -2437,7 +2436,7 @@ export default function App() {
           />
         )}
       </main>
-  
+
       {/* Phase 17 Authentication & Login Modal */}
       {loginModalOpen && (
         <div style={{

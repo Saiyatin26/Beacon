@@ -306,6 +306,11 @@ class CertificationEngine:
                         )
                     )
 
+            resolved_inp_id = (context.input_set_id if context and context.input_set_id else "") or (f"INPSET-{cert_id}")
+            resolved_inp_hash = (context.input_set_hash if context and context.input_set_hash else "") or (compute_input_set_canonical_hash(test_inputs) if test_inputs else "")
+            final_context.input_set_id = resolved_inp_id
+            final_context.input_set_hash = resolved_inp_hash
+
             temp_artifact = CertificationArtifact(
                 certification_id=cert_id,
                 project_id=project_id,
@@ -314,8 +319,8 @@ class CertificationEngine:
                 oracle_set_id=oset_id,
                 oracle_set_version=oset_ver,
                 oracle_set_hash=oset_hash,
-                input_set_id=getattr(evaluation_result, "evaluation_id", ""),
-                input_set_hash="",
+                input_set_id=resolved_inp_id,
+                input_set_hash=resolved_inp_hash,
                 certification_policy_id=cert_policy.policy_id,
                 certification_policy_version=getattr(cert_policy, "version", 1),
                 certification_policy_hash=pol_hash,
