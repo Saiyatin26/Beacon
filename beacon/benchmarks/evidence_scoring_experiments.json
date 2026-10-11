@@ -1,0 +1,467 @@
+{
+  "suite_name": "BEACON Inventive Step Controlled Experiments",
+  "timestamp": "2026-10-11T09:48:26.536805+00:00",
+  "overall_passed": true,
+  "experiments_count": 8,
+  "passed_count": 8,
+  "failed_count": 0,
+  "experiments": [
+    {
+      "experiment_id": "EXP-01",
+      "title": "Raw versus Adjusted Score Verification",
+      "passed": true,
+      "details": [
+        {
+          "scenario": "perfect_evidence_high_behavioral",
+          "raw_score": 0.95,
+          "quality_score": 1.0,
+          "expected_quality": 1.0,
+          "adjusted_score": 0.95,
+          "expected_adjusted": 0.95,
+          "passed": true
+        },
+        {
+          "scenario": "degraded_evidence_high_behavioral",
+          "raw_score": 0.95,
+          "quality_score": 0.775,
+          "expected_quality": 0.775,
+          "adjusted_score": 0.73625,
+          "expected_adjusted": 0.73625,
+          "passed": true
+        },
+        {
+          "scenario": "poor_evidence_high_behavioral",
+          "raw_score": 0.95,
+          "quality_score": 0.51,
+          "expected_quality": 0.51,
+          "adjusted_score": 0.4845,
+          "expected_adjusted": 0.4845,
+          "passed": true
+        },
+        {
+          "scenario": "moderate_behavioral_perfect_evidence",
+          "raw_score": 0.8,
+          "quality_score": 1.0,
+          "expected_quality": 1.0,
+          "adjusted_score": 0.8,
+          "expected_adjusted": 0.8,
+          "passed": true
+        },
+        {
+          "scenario": "zero_behavioral_perfect_evidence",
+          "raw_score": 0.0,
+          "quality_score": 1.0,
+          "expected_quality": 1.0,
+          "adjusted_score": 0.0,
+          "expected_adjusted": 0.0,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "experiment_id": "EXP-02",
+      "title": "One-Factor Sensitivity Analysis",
+      "passed": true,
+      "factors": {
+        "oracle_coverage": {
+          "weight": 0.3,
+          "steps": [
+            {
+              "factor_value": 1.0,
+              "observed_quality": 1.0,
+              "expected_quality": 1.0,
+              "observed_adjusted": 1.0,
+              "expected_adjusted": 1.0,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.75,
+              "observed_quality": 0.925,
+              "expected_quality": 0.925,
+              "observed_adjusted": 0.925,
+              "expected_adjusted": 0.925,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.5,
+              "observed_quality": 0.85,
+              "expected_quality": 0.85,
+              "observed_adjusted": 0.85,
+              "expected_adjusted": 0.85,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.25,
+              "observed_quality": 0.775,
+              "expected_quality": 0.775,
+              "observed_adjusted": 0.775,
+              "expected_adjusted": 0.775,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.0,
+              "observed_quality": 0.7,
+              "expected_quality": 0.7,
+              "observed_adjusted": 0.7,
+              "expected_adjusted": 0.7,
+              "matches_model": true
+            }
+          ],
+          "factor_passed": true
+        },
+        "input_coverage": {
+          "weight": 0.2,
+          "steps": [
+            {
+              "factor_value": 1.0,
+              "observed_quality": 1.0,
+              "expected_quality": 1.0,
+              "observed_adjusted": 1.0,
+              "expected_adjusted": 1.0,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.75,
+              "observed_quality": 0.95,
+              "expected_quality": 0.95,
+              "observed_adjusted": 0.95,
+              "expected_adjusted": 0.95,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.5,
+              "observed_quality": 0.9,
+              "expected_quality": 0.9,
+              "observed_adjusted": 0.9,
+              "expected_adjusted": 0.9,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.25,
+              "observed_quality": 0.85,
+              "expected_quality": 0.85,
+              "observed_adjusted": 0.85,
+              "expected_adjusted": 0.85,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.0,
+              "observed_quality": 0.8,
+              "expected_quality": 0.8,
+              "observed_adjusted": 0.8,
+              "expected_adjusted": 0.8,
+              "matches_model": true
+            }
+          ],
+          "factor_passed": true
+        },
+        "execution_reliability": {
+          "weight": 0.2,
+          "steps": [
+            {
+              "factor_value": 1.0,
+              "observed_quality": 1.0,
+              "expected_quality": 1.0,
+              "observed_adjusted": 1.0,
+              "expected_adjusted": 1.0,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.75,
+              "observed_quality": 0.95,
+              "expected_quality": 0.95,
+              "observed_adjusted": 0.95,
+              "expected_adjusted": 0.95,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.5,
+              "observed_quality": 0.9,
+              "expected_quality": 0.9,
+              "observed_adjusted": 0.9,
+              "expected_adjusted": 0.9,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.25,
+              "observed_quality": 0.85,
+              "expected_quality": 0.85,
+              "observed_adjusted": 0.85,
+              "expected_adjusted": 0.85,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.0,
+              "observed_quality": 0.8,
+              "expected_quality": 0.8,
+              "observed_adjusted": 0.8,
+              "expected_adjusted": 0.8,
+              "matches_model": true
+            }
+          ],
+          "factor_passed": true
+        },
+        "oracle_confidence": {
+          "weight": 0.15,
+          "steps": [
+            {
+              "factor_value": 1.0,
+              "observed_quality": 1.0,
+              "expected_quality": 1.0,
+              "observed_adjusted": 1.0,
+              "expected_adjusted": 1.0,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.75,
+              "observed_quality": 0.9625,
+              "expected_quality": 0.9625,
+              "observed_adjusted": 0.9625,
+              "expected_adjusted": 0.9625,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.5,
+              "observed_quality": 0.925,
+              "expected_quality": 0.925,
+              "observed_adjusted": 0.925,
+              "expected_adjusted": 0.925,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.25,
+              "observed_quality": 0.8875,
+              "expected_quality": 0.8875,
+              "observed_adjusted": 0.8875,
+              "expected_adjusted": 0.8875,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.0,
+              "observed_quality": 0.85,
+              "expected_quality": 0.85,
+              "observed_adjusted": 0.85,
+              "expected_adjusted": 0.85,
+              "matches_model": true
+            }
+          ],
+          "factor_passed": true
+        },
+        "input_set_integrity": {
+          "weight": 0.1,
+          "steps": [
+            {
+              "factor_value": 1.0,
+              "observed_quality": 1.0,
+              "expected_quality": 1.0,
+              "observed_adjusted": 1.0,
+              "expected_adjusted": 1.0,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.75,
+              "observed_quality": 0.975,
+              "expected_quality": 0.975,
+              "observed_adjusted": 0.975,
+              "expected_adjusted": 0.975,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.5,
+              "observed_quality": 0.95,
+              "expected_quality": 0.95,
+              "observed_adjusted": 0.95,
+              "expected_adjusted": 0.95,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.25,
+              "observed_quality": 0.925,
+              "expected_quality": 0.925,
+              "observed_adjusted": 0.925,
+              "expected_adjusted": 0.925,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.0,
+              "observed_quality": 0.9,
+              "expected_quality": 0.9,
+              "observed_adjusted": 0.9,
+              "expected_adjusted": 0.9,
+              "matches_model": true
+            }
+          ],
+          "factor_passed": true
+        },
+        "source_hash_integrity": {
+          "weight": 0.05,
+          "steps": [
+            {
+              "factor_value": 1.0,
+              "observed_quality": 1.0,
+              "expected_quality": 1.0,
+              "observed_adjusted": 1.0,
+              "expected_adjusted": 1.0,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.75,
+              "observed_quality": 0.9875,
+              "expected_quality": 0.9875,
+              "observed_adjusted": 0.9875,
+              "expected_adjusted": 0.9875,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.5,
+              "observed_quality": 0.975,
+              "expected_quality": 0.975,
+              "observed_adjusted": 0.975,
+              "expected_adjusted": 0.975,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.25,
+              "observed_quality": 0.9625,
+              "expected_quality": 0.9625,
+              "observed_adjusted": 0.9625,
+              "expected_adjusted": 0.9625,
+              "matches_model": true
+            },
+            {
+              "factor_value": 0.0,
+              "observed_quality": 0.95,
+              "expected_quality": 0.95,
+              "observed_adjusted": 0.95,
+              "expected_adjusted": 0.95,
+              "matches_model": true
+            }
+          ],
+          "factor_passed": true
+        }
+      }
+    },
+    {
+      "experiment_id": "EXP-03",
+      "title": "Missing Evidence Availability-Aware Weighting",
+      "passed": true,
+      "all_omitted_fails_closed": true,
+      "omissions": [
+        {
+          "omitted_factor": "oracle_coverage",
+          "omitted_weight": 0.3,
+          "remaining_weight": 0.7,
+          "observed_quality": 0.8,
+          "expected_quality": 0.8,
+          "observed_adjusted": 0.68,
+          "expected_adjusted": 0.68,
+          "passed": true
+        },
+        {
+          "omitted_factor": "input_coverage",
+          "omitted_weight": 0.2,
+          "remaining_weight": 0.8,
+          "observed_quality": 0.8,
+          "expected_quality": 0.8,
+          "observed_adjusted": 0.68,
+          "expected_adjusted": 0.68,
+          "passed": true
+        },
+        {
+          "omitted_factor": "execution_reliability",
+          "omitted_weight": 0.2,
+          "remaining_weight": 0.8,
+          "observed_quality": 0.8,
+          "expected_quality": 0.8,
+          "observed_adjusted": 0.68,
+          "expected_adjusted": 0.68,
+          "passed": true
+        },
+        {
+          "omitted_factor": "oracle_confidence",
+          "omitted_weight": 0.15,
+          "remaining_weight": 0.85,
+          "observed_quality": 0.8,
+          "expected_quality": 0.8,
+          "observed_adjusted": 0.68,
+          "expected_adjusted": 0.68,
+          "passed": true
+        },
+        {
+          "omitted_factor": "input_set_integrity",
+          "omitted_weight": 0.1,
+          "remaining_weight": 0.9,
+          "observed_quality": 0.8,
+          "expected_quality": 0.8,
+          "observed_adjusted": 0.68,
+          "expected_adjusted": 0.68,
+          "passed": true
+        },
+        {
+          "omitted_factor": "source_hash_integrity",
+          "omitted_weight": 0.05,
+          "remaining_weight": 0.95,
+          "observed_quality": 0.8,
+          "expected_quality": 0.8,
+          "observed_adjusted": 0.68,
+          "expected_adjusted": 0.68,
+          "passed": true
+        }
+      ]
+    },
+    {
+      "experiment_id": "EXP-04",
+      "title": "Zero Evaluated Inputs Fail-Closed Verification",
+      "passed": true,
+      "scorer_returned": 0.0,
+      "cert_status": "INSUFFICIENT_COVERAGE",
+      "cert_certified": false,
+      "blocking_reasons": [
+        "Zero evaluated inputs: Equivalence certification requires genuine input evidence"
+      ]
+    },
+    {
+      "experiment_id": "EXP-05",
+      "title": "Genuine Behavioral Mismatch Detection",
+      "passed": true,
+      "cert_status": "NOT_CERTIFIED",
+      "certified": false,
+      "observed_deviation": 0.3,
+      "regressions_detected": 1,
+      "blocking_reasons": [
+        "Observed deviation (0.300000) exceeds resolved dynamic threshold (0.050000)",
+        "Evidence-adjusted score (61.3%) is below the policy threshold (95.0%)"
+      ]
+    },
+    {
+      "experiment_id": "EXP-06",
+      "title": "Unreliable Execution Degradation",
+      "passed": true,
+      "execution_reliability_factor": 0.5,
+      "evidence_quality_score": 0.75,
+      "adjusted_score": 0.75,
+      "certified": false,
+      "blocking_reasons": [
+        "Evidence-adjusted score (75.0%) is below the policy threshold (90.0%)"
+      ]
+    },
+    {
+      "experiment_id": "EXP-07",
+      "title": "Certificate Tamper Detection",
+      "passed": true,
+      "initial_verification": true,
+      "score_tamper_detected": true,
+      "version_tamper_detected": true,
+      "status_tamper_detected": true
+    },
+    {
+      "experiment_id": "EXP-08",
+      "title": "Deterministic Scoring & Hashing Reproducibility",
+      "passed": true,
+      "adjusted_score": 0.83444,
+      "quality_score": 0.907,
+      "input_set_hash": "48496ee815c18246e492209cee002c840c120ae49de7218d46a387239c0a04af",
+      "bitwise_identical": true
+    }
+  ]
+}

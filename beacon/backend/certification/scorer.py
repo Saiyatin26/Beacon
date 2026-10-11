@@ -62,7 +62,7 @@ def equivalence_score(oracle_results: list[dict], oracles_by_id: dict[str, Oracl
         weight = settings.severity_weights[oracle.severity] * oracle.confidence
         numerator += weight * result["pass_i"]
         denominator += weight
-    return round(numerator / denominator, 4) if denominator else 1.0
+    return round(numerator / denominator, 4) if denominator else 0.0
 
 
 def domain_scores(oracle_results: list[dict], oracles_by_id: dict[str, Oracle],

@@ -237,6 +237,7 @@ def _perform_repository_analysis(
             if modern_adapter_res.resolved_file
             else None
         ),
+        evaluation_mode=req.evaluation_mode,
     )
 
     app_id = f"APP-{legacy_prov.content_hash[:8]}-{modern_prov.content_hash[:8]}"
@@ -348,7 +349,7 @@ def _perform_repository_analysis(
         errors.append(f"Modern adapter: {modern_adapter_res.diagnostic_message}")
     if input_discovery_res.status != InputDiscoveryStatus.SUCCESS:
         if analysis_status == "READY":
-            analysis_status = "DISCOVERY_INSUFFICIENT"
+            analysis_status = input_discovery_res.provenance.get("error_category") or "DISCOVERY_INSUFFICIENT"
         errors.append(f"Inputs: {input_discovery_res.diagnostic_message}")
     if any(lang.lower() == "cobol" for lang in legacy_analysis.languages) and not discovered_rules:
         if analysis_status == "READY":
@@ -514,7 +515,8 @@ def _run_repository_certification_pipeline(
             metadata=run_record.metadata,
         )
 
-    if any(lang.lower() == "cobol" for lang in legacy_analysis.languages) and not repo_spec.discovered_rules:
+    legacy_languages = analysis_result.legacy.get("languages", []) if analysis_result and analysis_result.legacy else []
+    if any(lang.lower() == "cobol" for lang in legacy_languages) and not repo_spec.discovered_rules:
         provider_metadata = input_discovery_res.provenance.get("llm_provider", {})
         discovery_status = provider_metadata.get("rule_extraction_status", "NOT_RECORDED")
         inconclusive_run_id = f"run_{hashlib.sha256(f'{analysis_result.application_id}_rule_discovery_{datetime.now(timezone.utc).isoformat()}'.encode()).hexdigest()[:16]}"
@@ -560,25 +562,38 @@ def _run_repository_certification_pipeline(
             metadata=run_record.metadata,
         )
 
+    is_full_beacon = str(req.evaluation_mode).upper() == "FULL_BEACON"
     if (
         (input_discovery_res.status != InputDiscoveryStatus.SUCCESS or not repo_spec.discovered_inputs)
-        and not req.custom_inputs
+        and (is_full_beacon or not req.custom_inputs)
     ):
         inconclusive_run_id = f"run_{hashlib.sha256(f'{analysis_result.application_id}_insufficient_inputs_{datetime.now(timezone.utc).isoformat()}'.encode()).hexdigest()[:16]}"
+        prov_meta = input_discovery_res.provenance.get("llm_provider", {})
+        err_cat = (
+            input_discovery_res.provenance.get("error_category")
+            or prov_meta.get("error_category")
+            or "INSUFFICIENT_COVERAGE"
+        )
+        block_msg = (
+            f"Full BEACON input discovery blocked: {input_discovery_res.diagnostic_message}"
+            if is_full_beacon
+            else "Repository analysis discovered zero legitimate input test cases. Equivalence certification cannot proceed without genuine input evidence."
+        )
         run_record = WorkflowRun(
             workflow_run_id=inconclusive_run_id,
             application_id=analysis_result.application_id,
             request_fingerprint=analysis_result.specification_fingerprint,
             state=WorkflowState.INCONCLUSIVE,
             finalization_state=FinalizationState.COMPLETED,
-            certification_status="INSUFFICIENT_COVERAGE",
+            certification_status=err_cat,
             error_code=WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
-            error_message="Repository analysis discovered zero legitimate input test cases. Equivalence certification cannot proceed without genuine input evidence.",
+            error_message=block_msg,
             metadata={
-                "error": "INSUFFICIENT_COVERAGE",
-                "status": "INSUFFICIENT_COVERAGE",
-                "diagnostic_message": "Zero legitimate input test cases discovered. Equivalence certification cannot proceed without genuine input evidence.",
+                "error": err_cat,
+                "status": err_cat,
+                "diagnostic_message": block_msg,
                 "evidence": input_discovery_res.provenance,
+                "llm_provider": prov_meta,
             },
         )
         workflow_persistence.save_run(run_record)

@@ -8,7 +8,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-load_dotenv(PROJECT_ROOT / ".env", override=False)
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 BEACON_VERSION = "1.0.0"
 
@@ -36,15 +36,54 @@ class Settings:
     beacon_env: str = os.getenv("BEACON_ENV", "development").lower()
 
     # Multi-Provider LLM Configuration (Phases 6 & 7 Provider Decoupling)
-    llm_provider: str = os.getenv("LLM_PROVIDER", "auto").lower()
-    allow_auto_fallback: bool = os.getenv("ALLOW_AUTO_FALLBACK", "true").lower() in ("true", "1", "yes")
+    @property
+    def llm_provider(self) -> str:
+        load_dotenv(PROJECT_ROOT / ".env", override=True)
+        return os.getenv("LLM_PROVIDER", "openrouter").lower().strip()
+
+    @llm_provider.setter
+    def llm_provider(self, val: str) -> None:
+        os.environ["LLM_PROVIDER"] = (val or "").lower().strip()
+
+    @property
+    def allow_auto_fallback(self) -> bool:
+        load_dotenv(PROJECT_ROOT / ".env", override=True)
+        return os.getenv("ALLOW_AUTO_FALLBACK", "false").lower() in ("true", "1", "yes")
+
+    @allow_auto_fallback.setter
+    def allow_auto_fallback(self, val: bool) -> None:
+        os.environ["ALLOW_AUTO_FALLBACK"] = "true" if val else "false"
 
     # Primary Cloud Provider: OpenRouter
-    openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
-    openrouter_model: str = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3.5-lightning:free")
+    @property
+    def openrouter_api_key(self) -> str:
+        load_dotenv(PROJECT_ROOT / ".env", override=True)
+        return os.getenv("OPENROUTER_API_KEY", "")
+
+    @openrouter_api_key.setter
+    def openrouter_api_key(self, val: str) -> None:
+        os.environ["OPENROUTER_API_KEY"] = val or ""
+
+    @property
+    def openrouter_model(self) -> str:
+        load_dotenv(PROJECT_ROOT / ".env", override=True)
+        return os.getenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
+
+    @openrouter_model.setter
+    def openrouter_model(self, val: str) -> None:
+        os.environ["OPENROUTER_MODEL"] = val or ""
+
+    @property
+    def openrouter_max_tokens(self) -> int:
+        load_dotenv(PROJECT_ROOT / ".env", override=True)
+        try:
+            return int(os.getenv("OPENROUTER_MAX_TOKENS", "600"))
+        except (ValueError, TypeError):
+            return 600
+
     openrouter_fallback_model: str = os.getenv(
         "OPENROUTER_FALLBACK_MODEL",
-        "nvidia/nemotron-3.5-lightning:free",
+        "",
     )
     openrouter_base_url: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
@@ -53,8 +92,23 @@ class Settings:
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 
     # Supported Cloud Provider: Gemini
-    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    @property
+    def gemini_api_key(self) -> str:
+        load_dotenv(PROJECT_ROOT / ".env", override=True)
+        return os.getenv("GEMINI_API_KEY", "")
+
+    @gemini_api_key.setter
+    def gemini_api_key(self, val: str) -> None:
+        os.environ["GEMINI_API_KEY"] = val or ""
+
+    @property
+    def gemini_model(self) -> str:
+        load_dotenv(PROJECT_ROOT / ".env", override=True)
+        return os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+    @gemini_model.setter
+    def gemini_model(self, val: str) -> None:
+        os.environ["GEMINI_MODEL"] = val or ""
 
     # Local Fallback Provider: Ollama (Qwen / Mistral)
     ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")

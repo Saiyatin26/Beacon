@@ -38,13 +38,80 @@ class ProviderManager:
         system: Optional[str] = None,
         json_mode: bool = True,
         preferred_provider: Optional[str] = None,
+        allow_fallback: Optional[bool] = None,
     ) -> LLMResponse:
-        mode = (preferred_provider or settings.llm_provider or "auto").lower().strip()
+        mode = (preferred_provider or settings.llm_provider or "openrouter").lower().strip()
+        allow_fallback_effective = (
+            allow_fallback
+            if allow_fallback is not None
+            else settings.allow_auto_fallback
+        )
 
-        # Explicit single provider mode
+        # Strict single-provider policy when fallback is disabled (Full BEACON mode)
+        if not allow_fallback_effective:
+            target_provider_name = mode if mode in self.providers else "openrouter"
+            provider = self.providers.get(target_provider_name)
+            if not provider:
+                return LLMResponse(
+                    raw_text="",
+                    provider_name=target_provider_name,
+                    model_name="unknown",
+                    requested_provider=target_provider_name,
+                    success=False,
+                    error_category=f"{target_provider_name.upper()}_MODEL_UNAVAILABLE",
+                    error=f"{target_provider_name.title()} provider is not registered in ProviderManager.",
+                    metadata={"requested_provider": target_provider_name, "fallback_used": False},
+                )
+
+            if not provider.is_available():
+                return LLMResponse(
+                    raw_text="",
+                    provider_name=provider.name,
+                    model_name=provider.model,
+                    requested_provider=target_provider_name,
+                    success=False,
+                    error_category=f"{target_provider_name.upper()}_API_KEY_MISSING",
+                    error=f"{target_provider_name.title()} API key is not configured or missing.",
+                    metadata={
+                        "requested_provider": target_provider_name,
+                        "actual_provider": provider.name,
+                        "fallback_used": False,
+                        "error_category": f"{target_provider_name.upper()}_API_KEY_MISSING",
+                    },
+                )
+
+            resp = provider.generate(prompt, system=system, json_mode=json_mode)
+            resp.requested_provider = target_provider_name
+
+            # Strict provenance verification: reject if provider mismatch
+            if resp.provider_name.lower().strip() != target_provider_name:
+                return LLMResponse(
+                    raw_text="",
+                    provider_name=resp.provider_name,
+                    model_name=resp.model_name,
+                    requested_provider=target_provider_name,
+                    success=False,
+                    error_category=f"{target_provider_name.upper()}_INVALID_RESPONSE",
+                    error=f"Provenance rejection: requested {target_provider_name} but response reported provider '{resp.provider_name}'.",
+                    metadata={
+                        "requested_provider": target_provider_name,
+                        "actual_provider": resp.provider_name,
+                        "fallback_used": False,
+                        "error_category": f"{target_provider_name.upper()}_INVALID_RESPONSE",
+                    },
+                )
+
+            resp.fallback_chain = [target_provider_name]
+            resp.metadata["provider_config"] = f"{resp.provider_name}:{resp.model_name}"
+            resp.metadata["requested_provider"] = target_provider_name
+            resp.metadata["actual_provider"] = resp.provider_name
+            resp.metadata["fallback_used"] = False
+            return resp
+
+        # Explicit non-OpenRouter single provider mode with fallback check
         if mode != "auto" and mode in self.providers:
             provider = self.providers[mode]
-            if not provider.is_available() and not settings.allow_auto_fallback:
+            if not provider.is_available() and not allow_fallback_effective:
                 return LLMResponse(
                     raw_text="",
                     provider_name=provider.name,
@@ -58,17 +125,17 @@ class ProviderManager:
                         "fallback_used": False,
                     },
                 )
-            
+
             resp = provider.generate(prompt, system=system, json_mode=json_mode)
             resp.requested_provider = mode
-            if resp.success or not settings.allow_auto_fallback:
+            if resp.success or not allow_fallback_effective:
                 resp.fallback_chain = [mode]
                 resp.metadata["provider_config"] = f"{resp.provider_name}:{resp.model_name}"
                 resp.metadata["requested_provider"] = mode
                 resp.metadata["actual_provider"] = resp.provider_name
                 resp.metadata["fallback_used"] = resp.fallback_occurred
                 return resp
-            
+
             logger.warning(
                 f"Explicit provider '{mode}' failed ({resp.error}). Falling back via auto chain."
             )

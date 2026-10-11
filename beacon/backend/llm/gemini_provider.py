@@ -26,9 +26,19 @@ class GeminiProvider(LLMProvider):
         timeout: float = 30.0,
     ):
         self._explicit_api_key = api_key
-        self.model = model or settings.gemini_model or "gemini-1.5-flash"
+        self._explicit_model = model
         self.base_url = (base_url or "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
         self.timeout = timeout
+
+    @property
+    def model(self) -> str:
+        if self._explicit_model is not None:
+            return self._explicit_model.strip()
+        return (settings.gemini_model or "gemini-1.5-flash").strip()
+
+    @model.setter
+    def model(self, val: Optional[str]) -> None:
+        self._explicit_model = val
 
     @property
     def api_key(self) -> str:
@@ -83,8 +93,11 @@ class GeminiProvider(LLMProvider):
                 raw_text="",
                 provider_name=self.name,
                 model_name=self.model,
+                requested_provider=self.name,
                 success=False,
-                error="Google Gemini API key not configured.",
+                error_category="GEMINI_API_KEY_MISSING",
+                error="Google Gemini API key not configured or missing in .env (GEMINI_API_KEY).",
+                metadata={"error_category": "GEMINI_API_KEY_MISSING"},
             )
 
         endpoint = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
@@ -165,25 +178,55 @@ class GeminiProvider(LLMProvider):
 
         except urllib.error.HTTPError as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = f"Google Gemini HTTP request failed with status {exc.code}: {exc.reason}."
+            server_detail = ""
+            try:
+                body = exc.read().decode("utf-8", errors="ignore")
+                parsed_err = json.loads(body)
+                if isinstance(parsed_err, dict) and "error" in parsed_err:
+                    err_val = parsed_err["error"]
+                    if isinstance(err_val, dict):
+                        server_detail = str(err_val.get("message", "")).strip()
+                    elif isinstance(err_val, str):
+                        server_detail = err_val.strip()
+            except Exception:
+                pass
+
+            if exc.code in (400, 401, 403):
+                err_cat = "GEMINI_AUTHENTICATION_FAILED" if "key" in server_detail.lower() or "auth" in server_detail.lower() or "api_key" in server_detail.lower() else f"GEMINI_HTTP_{exc.code}"
+            elif exc.code == 429:
+                err_cat = "GEMINI_RATE_LIMITED"
+            elif exc.code == 404:
+                err_cat = "GEMINI_MODEL_UNAVAILABLE"
+            else:
+                err_cat = f"GEMINI_HTTP_{exc.code}"
+
+            detail_suffix = f": {server_detail}" if server_detail else f": {exc.reason}"
+            err_msg = f"Google Gemini HTTP request rejected ({err_cat}, status {exc.code}){detail_suffix}."
             logger.error(err_msg)
             return LLMResponse(
                 raw_text="",
                 provider_name=self.name,
                 model_name=self.model,
+                requested_provider=self.name,
                 latency_ms=latency_ms,
                 success=False,
+                error_category=err_cat,
                 error=err_msg,
+                metadata={"error_category": err_cat, "http_status": exc.code},
             )
         except Exception as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = f"Google Gemini request encountered an unexpected error: {str(exc)}"
+            err_cat = "GEMINI_NETWORK_ERROR"
+            err_msg = f"Google Gemini request error: {str(exc)}"
             logger.error(err_msg)
             return LLMResponse(
                 raw_text="",
                 provider_name=self.name,
                 model_name=self.model,
+                requested_provider=self.name,
                 latency_ms=latency_ms,
                 success=False,
+                error_category=err_cat,
                 error=err_msg,
+                metadata={"error_category": err_cat},
             )

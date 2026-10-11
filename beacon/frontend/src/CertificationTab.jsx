@@ -1292,10 +1292,21 @@ export default function CertificationTab({
                       AI discovery: <strong>{analysisResult.input_provenance.llm_provider.actual_provider || "unavailable"}</strong>
                       {analysisResult.input_provenance.llm_provider.model ? ` (${analysisResult.input_provenance.llm_provider.model})` : ""}
                       {" · "}
-                      <strong>{analysisResult.input_provenance.llm_provider.rule_extraction_status || "NOT_RECORDED"}</strong>
-                      {analysisResult.input_provenance.llm_provider.fallback_reason ? (
-                        <div style={{ color: "#92400e", marginTop: "3px" }}>
-                          Provider detail: {analysisResult.input_provenance.llm_provider.fallback_reason}
+                      <strong>{analysisResult.input_provenance.llm_provider.error_category || analysisResult.input_provenance.llm_provider.rule_extraction_status || "NOT_RECORDED"}</strong>
+                      {analysisResult.input_provenance.proposed_count !== undefined && (
+                        <span>
+                          {" · "}Proposed: <strong>{analysisResult.input_provenance.proposed_count}</strong>
+                          {" · "}Accepted: <strong>{analysisResult.input_provenance.accepted_count}</strong>
+                          {analysisResult.input_provenance.rejected_count > 0 && (
+                            <span style={{ color: "#b91c1c" }}>
+                              {" · "}Rejected: <strong>{analysisResult.input_provenance.rejected_count}</strong>
+                            </span>
+                          )}
+                        </span>
+                      )}
+                      {(analysisResult.input_provenance.llm_provider.error || analysisResult.input_provenance.llm_provider.fallback_reason) ? (
+                        <div style={{ color: "#b91c1c", marginTop: "3px", fontWeight: "500" }}>
+                          Provider detail: {analysisResult.input_provenance.llm_provider.error || analysisResult.input_provenance.llm_provider.fallback_reason}
                         </div>
                       ) : null}
                     </div>

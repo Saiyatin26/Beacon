@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -86,8 +87,11 @@ class OpenRouterProvider(LLMProvider):
                 raw_text="",
                 provider_name=self.name,
                 model_name=self.model,
+                requested_provider=self.name,
                 success=False,
-                error="OpenRouter API key not configured.",
+                error_category="OPENROUTER_API_KEY_MISSING",
+                error="OpenRouter API key not configured or missing.",
+                metadata={"error_category": "OPENROUTER_API_KEY_MISSING"},
             )
 
         endpoint = f"{self.base_url}/chat/completions"
@@ -107,6 +111,7 @@ class OpenRouterProvider(LLMProvider):
             "model": self.model,
             "messages": messages,
             "temperature": 0.0,
+            "max_tokens": getattr(settings, "openrouter_max_tokens", 1500),
         }
 
         start_time = time.perf_counter()
@@ -158,7 +163,6 @@ class OpenRouterProvider(LLMProvider):
 
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
-
             choices = resp_json.get("choices", [])
             if not choices:
                 return LLMResponse(
@@ -171,17 +175,44 @@ class OpenRouterProvider(LLMProvider):
                     fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
                     fallback_reason=fallback_reason,
                     success=False,
+                    error_category="OPENROUTER_INVALID_RESPONSE",
                     error="OpenRouter response contained no choices.",
                     metadata={
                         "configured_model": requested_model,
                         "actual_model": actual_model,
                         "model_fallback_used": fallback_reason is not None,
+                        "error_category": "OPENROUTER_INVALID_RESPONSE",
                     },
                 )
 
-            raw_text = choices[0].get("message", {}).get("content", "")
+            logger.info("OpenRouter resp_json: %s", json.dumps(resp_json))
+            raw_text = (choices[0].get("message", {}).get("content") or "").strip()
             parsed_json = extract_json_payload(raw_text) if json_mode else None
             response_model = resp_json.get("model", actual_model)
+
+            if json_mode and parsed_json is None:
+                return LLMResponse(
+                    raw_text=raw_text,
+                    parsed_json=None,
+                    provider_name=self.name,
+                    model_name=response_model,
+                    requested_provider=self.name,
+                    latency_ms=latency_ms,
+                    fallback_occurred=fallback_reason is not None,
+                    fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
+                    fallback_reason=fallback_reason,
+                    success=False,
+                    error_category="OPENROUTER_INVALID_RESPONSE",
+                    error="OpenRouter response could not be parsed as valid JSON.",
+                    metadata={
+                        "usage": resp_json.get("usage", {}),
+                        "model_id": response_model,
+                        "configured_model": requested_model,
+                        "actual_model": response_model,
+                        "model_fallback_used": fallback_reason is not None,
+                        "error_category": "OPENROUTER_INVALID_RESPONSE",
+                    },
+                )
 
             return LLMResponse(
                 raw_text=raw_text,
@@ -205,7 +236,72 @@ class OpenRouterProvider(LLMProvider):
 
         except urllib.error.HTTPError as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = f"OpenRouter HTTP request failed with status {exc.code}: {exc.reason}."
+            server_detail = ""
+            try:
+                body = exc.read().decode("utf-8", errors="ignore")
+                parsed_err = json.loads(body)
+                if isinstance(parsed_err, dict) and "error" in parsed_err:
+                    err_val = parsed_err["error"]
+                    if isinstance(err_val, dict):
+                        server_detail = str(err_val.get("message", "")).strip()
+                    elif isinstance(err_val, str):
+                        server_detail = err_val.strip()
+            except Exception:
+                pass
+
+            if exc.code in (401, 403):
+                err_cat = "OPENROUTER_AUTHENTICATION_FAILED"
+            elif exc.code == 402:
+                err_cat = "OPENROUTER_INSUFFICIENT_CREDITS"
+                afford_m = re.search(r"can only afford (\d+)", server_detail)
+                if afford_m:
+                    affordable = int(afford_m.group(1))
+                    curr_max = payload.get("max_tokens", 600)
+                    if affordable >= 100 and curr_max > affordable:
+                        retry_max = max(100, affordable - 30)
+                        logger.warning(
+                            f"OpenRouter 402: requested {curr_max} max_tokens, can only afford {affordable}. "
+                            f"Auto-adjusting max_tokens to {retry_max} and retrying..."
+                        )
+                        payload["max_tokens"] = retry_max
+                        req_data = json.dumps(payload).encode("utf-8")
+                        retry_req = urllib.request.Request(endpoint, data=req_data, headers=headers, method="POST")
+                        try:
+                            with urllib.request.urlopen(retry_req, timeout=self.timeout) as retry_resp:
+                                retry_json = json.loads(retry_resp.read().decode("utf-8"))
+                                r_choices = retry_json.get("choices", [])
+                                if r_choices:
+                                    r_raw_text = (r_choices[0].get("message", {}).get("content") or "").strip()
+                                    r_parsed_json = extract_json_payload(r_raw_text) if json_mode else None
+                                    r_model = retry_json.get("model", actual_model)
+                                    return LLMResponse(
+                                        raw_text=r_raw_text,
+                                        parsed_json=r_parsed_json,
+                                        provider_name=self.name,
+                                        model_name=r_model,
+                                        requested_provider=self.name,
+                                        latency_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                                        fallback_occurred=True,
+                                        fallback_reason=f"Auto-reduced max_tokens to {retry_max} to match OpenRouter capacity",
+                                        success=True,
+                                        metadata={
+                                            "usage": retry_json.get("usage", {}),
+                                            "model_id": r_model,
+                                            "configured_model": requested_model,
+                                            "actual_model": r_model,
+                                        },
+                                    )
+                        except Exception as retry_err:
+                            logger.error(f"Auto-token reduction retry failed: {retry_err}")
+            elif exc.code == 429:
+                err_cat = "OPENROUTER_RATE_LIMITED"
+            elif exc.code == 404:
+                err_cat = "OPENROUTER_MODEL_UNAVAILABLE"
+            else:
+                err_cat = f"OPENROUTER_HTTP_{exc.code}"
+
+            detail_suffix = f": {server_detail}" if server_detail else ""
+            err_msg = f"OpenRouter HTTP request rejected: {err_cat} (status {exc.code}){detail_suffix}."
             logger.error(err_msg)
             return LLMResponse(
                 raw_text="",
@@ -217,17 +313,22 @@ class OpenRouterProvider(LLMProvider):
                 fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
                 fallback_reason=fallback_reason,
                 success=False,
+                error_category=err_cat,
                 error=err_msg,
                 metadata={
                     "configured_model": requested_model,
                     "actual_model": actual_model,
                     "model_fallback_used": fallback_reason is not None,
+                    "http_status": exc.code,
+                    "error_category": err_cat,
                 },
             )
-        except Exception as exc:
+        except urllib.error.URLError as exc:
             latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-            err_msg = f"OpenRouter request failed: {exc}"
-            logger.exception("OpenRouter request failed.")
+            is_timeout = "timed out" in str(getattr(exc, "reason", "")).lower() or isinstance(getattr(exc, "reason", None), TimeoutError)
+            err_cat = "OPENROUTER_REQUEST_TIMEOUT" if is_timeout else "OPENROUTER_NETWORK_ERROR"
+            err_msg = f"OpenRouter network connection error: {err_cat}."
+            logger.error(err_msg)
             return LLMResponse(
                 raw_text="",
                 provider_name=self.name,
@@ -238,10 +339,37 @@ class OpenRouterProvider(LLMProvider):
                 fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
                 fallback_reason=fallback_reason,
                 success=False,
+                error_category=err_cat,
                 error=err_msg,
                 metadata={
                     "configured_model": requested_model,
                     "actual_model": actual_model,
                     "model_fallback_used": fallback_reason is not None,
+                    "error_category": err_cat,
+                },
+            )
+        except (TimeoutError, Exception) as exc:
+            latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
+            is_timeout = isinstance(exc, TimeoutError) or "timed out" in str(exc).lower()
+            err_cat = "OPENROUTER_REQUEST_TIMEOUT" if is_timeout else "OPENROUTER_NETWORK_ERROR"
+            err_msg = f"OpenRouter request error: {err_cat} ({exc})."
+            logger.error(err_msg, exc_info=True)
+            return LLMResponse(
+                raw_text="",
+                provider_name=self.name,
+                model_name=actual_model,
+                requested_provider=self.name,
+                latency_ms=latency_ms,
+                fallback_occurred=fallback_reason is not None,
+                fallback_chain=[requested_model, actual_model] if fallback_reason else [actual_model],
+                fallback_reason=fallback_reason,
+                success=False,
+                error_category=err_cat,
+                error=err_msg,
+                metadata={
+                    "configured_model": requested_model,
+                    "actual_model": actual_model,
+                    "model_fallback_used": fallback_reason is not None,
+                    "error_category": err_cat,
                 },
             )

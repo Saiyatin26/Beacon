@@ -213,7 +213,7 @@ Requirements:
 
 COBOL SOURCE:
 ```cobol
-{source_code[:120000]}
+{source_code[:6000]}
 ```
 
 Output ONLY a single valid JSON object matching this schema:

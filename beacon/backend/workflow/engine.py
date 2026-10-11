@@ -1363,12 +1363,12 @@ class CanonicalV2WorkflowEngine:
             benchmark_version=spec.version,
             legacy_implementation_id=getattr(ref_adapter, "name", "legacy_ref"),
             legacy_implementation_hash=(
-                (spec.legacy_source_identity or {}).get("content_hash")
+                (getattr(spec, "legacy_source_identity", None) or (getattr(spec, "metadata", {}) or {}).get("legacy_provenance") or {}).get("content_hash")
                 or getattr(ref_adapter, "implementation_hash", "")
             ),
             modernized_implementation_id=getattr(target_adapter, "name", "modern_target"),
             modernized_implementation_hash=(
-                (spec.modern_source_identity or {}).get("content_hash")
+                (getattr(spec, "modern_source_identity", None) or (getattr(spec, "metadata", {}) or {}).get("modern_provenance") or {}).get("content_hash")
                 or getattr(target_adapter, "implementation_hash", "")
             ),
             oracle_set_id=getattr(oracle_set, "oracle_set_id", ""),

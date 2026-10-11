@@ -18,6 +18,8 @@ data/evidence/
 tmp.json
 vite.config.js.timestamp-*.mjs
 frontend/vite.config.js.timestamp-*.mjs
+data/
+scratch/
 .coverage
 htmlcov/
 

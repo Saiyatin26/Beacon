@@ -112,17 +112,17 @@ class CertificationEngine:
                     total_inp = summ.total_inputs
                     equiv_inp = summ.equivalent_inputs
                     diff_inp = summ.different_inputs
-                    score = float(getattr(summ, "behavioral_score", 1.0 if total_inp > 0 and diff_inp == 0 else 0.0))
-                    obs_dev = float(getattr(summ, "observed_deviation", round(1.0 - score, 6)))
-                    cov = float(getattr(summ, "coverage", 1.0))
+                    score = float(getattr(summ, "behavioral_score", 0.0)) if total_inp > 0 else 0.0
+                    obs_dev = float(getattr(summ, "observed_deviation", round(1.0 - score, 6))) if total_inp > 0 else 1.0
+                    cov = float(getattr(summ, "coverage", 0.0)) if total_inp > 0 else 0.0
                     dim_scores = dict(getattr(summ, "dimension_scores", {}))
                 elif getattr(evaluation_result, "input_results", None):
                     total_inp = len(evaluation_result.input_results)
                     equiv_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.EQUIVALENT)
                     diff_inp = sum(1 for r in evaluation_result.input_results if getattr(r, "verdict", None) == EvaluationVerdict.DIFFERENT)
                     score = float(equiv_inp) / float(total_inp) if total_inp > 0 else 0.0
-                    obs_dev = round(1.0 - score, 6)
-                    cov = 1.0
+                    obs_dev = round(1.0 - score, 6) if total_inp > 0 else 1.0
+                    cov = 1.0 if total_inp > 0 else 0.0
 
                 observed_score = score
                 input_coverage = (
@@ -186,7 +186,11 @@ class CertificationEngine:
                 min_cov = float(getattr(cert_policy, "min_coverage", getattr(cert_policy, "min_oracle_coverage", 0.8)))
 
                 # Strict Predicate Evaluation (Normative Patent Contract)
-                if not threshold_resolution or not res_id or not res_fp or not str(res_id).strip() or not str(res_fp).strip():
+                if total_inp == 0:
+                    final_status = CertificationStatus.INSUFFICIENT_COVERAGE
+                    is_certified = False
+                    blocking_reasons = ["Zero evaluated inputs: Equivalence certification requires genuine input evidence"]
+                elif not threshold_resolution or not res_id or not res_fp or not str(res_id).strip() or not str(res_fp).strip():
                     final_status = CertificationStatus.INCONCLUSIVE
                     is_certified = False
                     blocking_reasons = ["Phase 8 ThresholdResolution authority missing, unanchored, or unverified"]
@@ -924,8 +928,15 @@ class CertificationEngine:
         warnings: list[str] = []
         final_status: CertificationStatus = CertificationStatus.CERTIFIED
 
+        # Flow Step 0: Input Coverage Check (Zero Inputs Protection)
+        if u_inputs == 0:
+            blocking_reasons.append(
+                "Insufficient input coverage: 0 inputs evaluated for behavioral equivalence"
+            )
+            final_status = CertificationStatus.INSUFFICIENT_COVERAGE
+
         # Flow Step 1: Coverage Check
-        if oracle_count == 0:
+        elif oracle_count == 0:
             blocking_reasons.append(
                 "Insufficient oracle coverage: 0 oracles available to evaluate behavioral equivalence"
             )

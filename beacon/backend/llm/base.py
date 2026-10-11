@@ -20,6 +20,7 @@ class LLMResponse(BaseModel):
     fallback_occurred: bool = False
     fallback_chain: list[str] = Field(default_factory=list)
     fallback_reason: Optional[str] = None
+    error_category: Optional[str] = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     error: Optional[str] = None
     success: bool = True
