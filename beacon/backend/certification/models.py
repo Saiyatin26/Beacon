@@ -44,6 +44,7 @@ class CertificationTestInput(BaseModel):
         "runtime_trace",
         "counterexample",
         "explicit_case",
+        "ai_generated",
     ] = "diverse_sampling"
     provenance: dict[str, Any] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list)

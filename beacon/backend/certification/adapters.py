@@ -520,7 +520,7 @@ class CobolCicsAdapter(ImplementationAdapter):
         if isinstance(input_normalizer, InputNormalizer):
             self._input_normalizer = input_normalizer.normalize
         else:
-            self._input_normalizer = input_normalizer or default_input_normalizer
+            self._input_normalizer = input_normalizer or PassthroughInputNormalizer().normalize
 
         if isinstance(output_normalizer, OutputNormalizer):
             self._output_normalizer = output_normalizer.normalize

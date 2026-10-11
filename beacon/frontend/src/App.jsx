@@ -58,16 +58,11 @@ export default function App() {
   // =========================================================================
   // Phase 17: Authentication, RBAC & Multi-Tenant Security State
   // =========================================================================
-  const [authToken, setAuthToken] = useState(() => sessionStorage.getItem("beacon_token") || null);
-  const [currentUser, setCurrentUser] = useState(() => {
-    try {
-      const saved = sessionStorage.getItem("beacon_user");
-      return saved ? JSON.parse(saved) : null;
-    } catch {
-      return null;
-    }
-  });
-  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [authToken, setAuthToken] = useState(null);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [loginModalOpen, setLoginModalOpen] = useState(
+    () => !sessionStorage.getItem("beacon_token")
+  );
   const [loginUsername, setLoginUsername] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
@@ -142,7 +137,7 @@ export default function App() {
 
   // Authenticated API client wrapper (uses native window.fetch)
   const authFetch = async (url, options = {}) => {
-    const token = authToken || sessionStorage.getItem("beacon_token");
+    const token = sessionStorage.getItem("beacon_token") || authToken;
     const headers = { ...(options.headers || {}) };
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
@@ -152,12 +147,14 @@ export default function App() {
     const reqSuffix = reqId ? ` (Reference ID: ${reqId})` : "";
 
     if (res.status === 401) {
-      setAuthToken(null);
-      setCurrentUser(null);
-      sessionStorage.removeItem("beacon_token");
-      sessionStorage.removeItem("beacon_user");
-      setLoginModalOpen(true);
-      setError(`Authentication required or session expired. Please sign in.${reqSuffix}`);
+      if (sessionStorage.getItem("beacon_token") === token) {
+        setAuthToken(null);
+        setCurrentUser(null);
+        sessionStorage.removeItem("beacon_token");
+        sessionStorage.removeItem("beacon_user");
+        setLoginModalOpen(true);
+        setError(`Authentication required or session expired. Please sign in.${reqSuffix}`);
+      }
     } else if (res.status === 403) {
       const errData = await res.clone().json().catch(() => ({}));
       const msg = errData.detail || errData.message || "Access Denied (403): You do not have permission for this project or operation.";
@@ -169,6 +166,54 @@ export default function App() {
     }
     return res;
   };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const restoreSession = async () => {
+      const token = sessionStorage.getItem("beacon_token");
+      if (!token) {
+        sessionStorage.removeItem("beacon_user");
+        setLoginModalOpen(true);
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE}/api/v1/auth/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (cancelled || sessionStorage.getItem("beacon_token") !== token) return;
+
+        if (!res.ok) {
+          if (res.status === 401) {
+            sessionStorage.removeItem("beacon_token");
+            sessionStorage.removeItem("beacon_user");
+            setError("Your session has expired. Please sign in again.");
+          } else {
+            setError(`Could not verify your session (HTTP ${res.status}). Please sign in again.`);
+          }
+          setLoginModalOpen(true);
+          return;
+        }
+
+        const user = await res.json();
+        if (cancelled || sessionStorage.getItem("beacon_token") !== token) return;
+        setAuthToken(token);
+        setCurrentUser(user);
+        sessionStorage.setItem("beacon_user", JSON.stringify(user));
+      } catch (err) {
+        if (!cancelled && sessionStorage.getItem("beacon_token") === token) {
+          setError(`Could not verify your session: ${err.message}`);
+          setLoginModalOpen(true);
+        }
+      }
+    };
+
+    restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const getCurrentRole = () => {
     if (!currentUser) return null;
@@ -215,6 +260,7 @@ export default function App() {
       sessionStorage.setItem("beacon_token", data.access_token);
       sessionStorage.setItem("beacon_user", JSON.stringify(data.user));
       setLoginModalOpen(false);
+      setError(null);
       setNotice(`Signed in as ${data.user.full_name} (${data.user.memberships?.[0]?.role || "SYSTEM_ADMIN"})`);
     } catch (err) {
       setLoginError(err.message);
@@ -225,9 +271,10 @@ export default function App() {
 
   const handleLogout = async () => {
     if (authToken) {
+      const token = sessionStorage.getItem("beacon_token") || authToken;
       await fetch(`${API_BASE}/api/v1/auth/logout`, {
         method: "POST",
-        headers: { Authorization: `Bearer ${authToken}` },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
       }).catch(() => {});
     }
     setAuthToken(null);
@@ -254,14 +301,14 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab === "operations") {
+    if (authToken && activeTab === "operations") {
       loadOperationsSummary();
     }
-  }, [activeTab, operationsProjectFilter, customProjectId]);
+  }, [authToken, activeTab, operationsProjectFilter, customProjectId]);
 
   useEffect(() => {
     let interval = null;
-    if (activeTab === "operations" && autoRefreshOperations) {
+    if (authToken && activeTab === "operations" && autoRefreshOperations) {
       interval = setInterval(() => {
         loadOperationsSummary();
       }, 3000);
@@ -269,7 +316,7 @@ export default function App() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [activeTab, autoRefreshOperations]);
+  }, [authToken, activeTab, autoRefreshOperations]);
 
   const invalidateCustomState = () => {
     setCustomPreflight(null);
@@ -580,9 +627,10 @@ export default function App() {
 
   // Initial Load
   useEffect(() => {
+    if (!authToken) return;
     loadHistoricalArtifacts();
     loadDrift();
-  }, []);
+  }, [authToken]);
 
   // Cryptographic Verification Action (8-Point Integrity Check)
   const verifyArtifactIntegrity = async (certId) => {
@@ -804,6 +852,7 @@ export default function App() {
           ].map((tab) => (
             <button
               key={tab.id}
+              disabled={!currentUser}
               onClick={() => {
                 setActiveTab(tab.id);
                 if (tab.id === "operations") loadOperationsSummary();
@@ -817,13 +866,14 @@ export default function App() {
                 border: "none",
                 borderBottom: activeTab === tab.id ? "3px solid #2563eb" : "3px solid transparent",
                 padding: "14px 4px",
-                cursor: "pointer",
+                cursor: currentUser ? "pointer" : "not-allowed",
                 fontWeight: activeTab === tab.id ? "700" : "500",
                 color: activeTab === tab.id ? "#1e40af" : "#64748b",
                 fontSize: "14px",
                 display: "flex",
                 alignItems: "center",
                 gap: "6px",
+                opacity: currentUser ? 1 : 0.6,
               }}
             >
               {tab.label}
@@ -855,6 +905,7 @@ export default function App() {
           <CertificationTab
             apiBase={API_BASE}
             authFetch={authFetch}
+            authToken={authToken}
             badgeStyle={badgeStyle}
             cardStyle={cardStyle}
             statusBadgeStyles={statusBadgeStyles}
@@ -2416,12 +2467,14 @@ export default function App() {
                 <span style={{ fontSize: "24px" }}>🔐</span>
                 <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#0f172a" }}>Sign In to BEACON</h3>
               </div>
-              <button
-                onClick={() => setLoginModalOpen(false)}
-                style={{ background: "transparent", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748b" }}
-              >
-                ✕
-              </button>
+              {currentUser && (
+                <button
+                  onClick={() => setLoginModalOpen(false)}
+                  style={{ background: "transparent", border: "none", fontSize: "18px", cursor: "pointer", color: "#64748b" }}
+                >
+                  ✕
+                </button>
+              )}
             </div>
 
             <p style={{ margin: "0 0 16px 0", fontSize: "13px", color: "#64748b" }}>

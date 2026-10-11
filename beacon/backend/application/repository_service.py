@@ -7,6 +7,7 @@ Strictly avoids shell command interpolation.
 
 from datetime import datetime, timezone
 from enum import Enum
+import ast
 import hashlib
 import json
 import logging
@@ -52,7 +53,45 @@ def _detect_source_language(path: Path) -> Optional[str]:
         ".yaml": "yaml",
         ".yml": "yaml",
     }
-    return mapping.get(ext)
+    language = mapping.get(ext)
+    if language:
+        return language
+    if not path.is_file():
+        return None
+    try:
+        return _infer_source_language(path.name, path.read_bytes())
+    except OSError:
+        return None
+
+
+def _infer_source_language(filename: str, content: bytes) -> Optional[str]:
+    """Infer Python or COBOL for extensionless uploads using conservative source signatures."""
+    if Path(filename).suffix:
+        return None
+    source = content.decode("utf-8", errors="ignore")
+    if (
+        re.search(r"(?im)^\s*IDENTIFICATION\s+DIVISION\s*\.", source)
+        and re.search(r"(?im)^\s*PROGRAM-ID\s*\.", source)
+        and re.search(r"(?im)^\s*PROCEDURE\s+DIVISION\s*\.", source)
+    ):
+        return "cobol"
+    try:
+        parsed = ast.parse(source, filename=filename)
+    except SyntaxError:
+        return None
+    if any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Import, ast.ImportFrom))
+        for node in parsed.body
+    ):
+        return "python"
+    return None
+
+
+def _append_inferred_extension(path: Path, content: bytes) -> Path:
+    """Give supported extensionless code a conventional suffix for existing adapters."""
+    language = _infer_source_language(path.name, content)
+    suffix = { "cobol": ".cbl", "python": ".py" }.get(language or "")
+    return path.with_name(path.name + suffix) if suffix else path
 
 
 def redact_url_credentials(url: str) -> str:
@@ -195,6 +234,32 @@ class RepositoryService:
         self.cache_dir = cache_dir or (base_dir / "data" / "repo_cache")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    def normalize_extensionless_sources(self, target_dir: Path) -> list[Path]:
+        """Normalize detectable extensionless source names in an isolated staged upload."""
+        if not target_dir.is_dir():
+            return []
+        renamed: list[Path] = []
+        for source_path in sorted(target_dir.rglob("*")):
+            if not source_path.is_file() or source_path.suffix:
+                continue
+            try:
+                content = source_path.read_bytes()
+            except OSError as exc:
+                raise RepositoryIngestionError(
+                    f"Could not inspect extensionless uploaded source '{source_path.name}': {exc}"
+                ) from exc
+            inferred_path = _append_inferred_extension(source_path, content)
+            if inferred_path == source_path:
+                continue
+            if inferred_path.exists():
+                raise RepositoryIngestionError(
+                    f"Cannot normalize uploaded source '{source_path.name}': "
+                    f"'{inferred_path.name}' already exists."
+                )
+            source_path.rename(inferred_path)
+            renamed.append(inferred_path)
+        return renamed
+
     def stage_uploaded_sources(
         self,
         upload_id: str,
@@ -232,6 +297,7 @@ class RepositoryService:
                                 dest_path = validate_path_containment(target_side_dir / member.filename, target_side_dir)
                                 dest_path.parent.mkdir(parents=True, exist_ok=True)
                                 mdata = zf.read(member)
+                                dest_path = _append_inferred_extension(dest_path, mdata)
                                 dest_path.write_bytes(mdata)
                                 rel_p = str(dest_path.relative_to(target_side_dir)).replace("\\", "/")
                                 chash = hashlib.sha256(mdata).hexdigest()
@@ -249,6 +315,7 @@ class RepositoryService:
                                         source_provenance={
                                             "upload_id": upload_id,
                                             "archive_source": fname,
+                                            "original_filename": Path(member.filename).name,
                                             "timestamp": datetime.now(timezone.utc).isoformat(),
                                         },
                                     )
@@ -257,6 +324,7 @@ class RepositoryService:
                         raise RepositoryIngestionError(f"Failed to unpack archive '{fname}': {zerr}")
                 else:
                     dest_path = validate_path_containment(target_side_dir / fname, target_side_dir)
+                    dest_path = _append_inferred_extension(dest_path, fbytes)
                     dest_path.parent.mkdir(parents=True, exist_ok=True)
                     dest_path.write_bytes(fbytes)
                     rel_p = str(dest_path.relative_to(target_side_dir)).replace("\\", "/")
@@ -264,7 +332,7 @@ class RepositoryService:
                     artifacts.append(
                         SourceArtifact(
                             artifact_id=hashlib.sha256(f"{side_label}:{rel_p}:{chash}".encode()).hexdigest()[:16],
-                            filename=fname,
+                            filename=dest_path.name,
                             relative_path=rel_p,
                             language=_detect_source_language(dest_path),
                             content_hash=chash,
@@ -274,6 +342,7 @@ class RepositoryService:
                             size_bytes=len(fbytes),
                             source_provenance={
                                 "upload_id": upload_id,
+                                "original_filename": fname,
                                 "timestamp": datetime.now(timezone.utc).isoformat(),
                             },
                         )

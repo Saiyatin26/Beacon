@@ -52,6 +52,8 @@ class InputDiscoveryEngine:
         legacy_analysis: RepositoryAnalysisReport,
         modern_analysis: RepositoryAnalysisReport,
         max_cases: int = 100,
+        legacy_entrypoint_file: Optional[Path] = None,
+        modern_entrypoint_file: Optional[Path] = None,
     ) -> InputDiscoveryResult:
         """Discovers and resolves canonical test inputs across legacy and modern repositories."""
         discovered_cases: list[dict[str, Any]] = []
@@ -150,23 +152,37 @@ class InputDiscoveryEngine:
         # Extract source-specific rules even when repository fixtures already supply inputs.
         cobol_candidates: list[Path] = []
         py_candidates: list[Path] = []
-        for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
-            if not repo_p_str:
-                continue
-            repo_p = Path(repo_p_str)
-            if repo_p.is_file():
-                if repo_p.suffix.lower() in (".cbl", ".cob", ".cpy"):
-                    cobol_candidates.append(repo_p)
-                elif repo_p.suffix.lower() == ".py":
-                    py_candidates.append(repo_p)
-            else:
-                for ext in ("*.cbl", "*.cob", "*.cpy", "*.CBL", "*.COB"):
-                    cobol_candidates.extend(list(repo_p.rglob(ext)))
-                py_candidates.extend(list(repo_p.rglob("*.py")))
+        if legacy_entrypoint_file and legacy_entrypoint_file.is_file() and legacy_entrypoint_file.suffix.lower() in (".cbl", ".cob"):
+            cobol_candidates.append(legacy_entrypoint_file)
+        if modern_entrypoint_file and modern_entrypoint_file.is_file() and modern_entrypoint_file.suffix.lower() == ".py":
+            py_candidates.append(modern_entrypoint_file)
+
+        legacy_root = Path(legacy_analysis.provenance.local_path)
+        if not cobol_candidates:
+            if legacy_root.is_file() and legacy_root.suffix.lower() in (".cbl", ".cob"):
+                cobol_candidates.append(legacy_root)
+            elif legacy_root.is_dir():
+                for pattern in ("*.cbl", "*.cob", "*.CBL", "*.COB"):
+                    cobol_candidates.extend(legacy_root.rglob(pattern))
+
+        modern_root = Path(modern_analysis.provenance.local_path)
+        if not py_candidates:
+            if modern_root.is_file() and modern_root.suffix.lower() == ".py":
+                py_candidates.append(modern_root)
+            elif modern_root.is_dir():
+                py_candidates.extend(modern_root.rglob("*.py"))
 
         if cobol_candidates:
-            primary_cbl = sorted(cobol_candidates, key=lambda path: str(path).lower())[0]
-            primary_py = sorted(py_candidates, key=lambda path: str(path).lower())[0] if py_candidates else None
+            primary_cbl = (
+                legacy_entrypoint_file
+                if legacy_entrypoint_file and legacy_entrypoint_file in cobol_candidates
+                else sorted(cobol_candidates, key=lambda path: str(path).lower())[0]
+            )
+            primary_py = (
+                modern_entrypoint_file
+                if modern_entrypoint_file and modern_entrypoint_file in py_candidates
+                else sorted(py_candidates, key=lambda path: str(path).lower())[0] if py_candidates else None
+            )
             ai_cases, ai_mined_rules, llm_provider_metadata = self._mine_cobol_conditions_with_ai(
                 primary_cbl,
                 primary_py,
@@ -248,15 +264,16 @@ class InputDiscoveryEngine:
                 CertificationTestInput(
                     input_id=inp_id,
                     values=input_values,
-                    metadata={
-                        "source": source_desc,
-                        "index": len(test_inputs) + 1,
-                        "condition_provenance": c_dict.get("__condition_provenance"),
-                    },
+                    origin=(
+                        "ai_generated"
+                        if method_desc == "AI_PROPOSED_INPUTS_SOURCE_VALIDATED"
+                        else "diverse_sampling"
+                    ),
                     provenance={
                         "discovery_method": method_desc,
                         "source": source_desc,
                         "input_hash": inp_hash,
+                        "condition_provenance": c_dict.get("__condition_provenance"),
                     },
                 )
             )
@@ -352,9 +369,10 @@ Modern Re-implementation Snippet:
 Requirements:
 1. Every rule must describe behavior observable from program inputs and outputs, not an implementation detail.
 2. Include a numeric source line and an exact short source_excerpt copied from that line.
-3. Generate a small set of concrete test input dictionaries using only declared input fields in the COBOL source or supplied copybooks.
+3. Generate 3-10 concrete candidate input dictionaries for cases that can be passed to BOTH selected entrypoints. Use fields declared in either source and values grounded in the source. For wrapper-based modern entrypoints, include their scenario selector when required (for example SCENARIO); include relevant COBOL terminal/CICS fields where applicable (for example EIBAID and EIBCALEN).
 4. Each case must include '__condition_provenance' naming the rule ID it exercises.
 5. Do not invent expected outputs. BEACON will execute both programs and compare observed outputs independently.
+6. These are candidate tests, not proof of equivalence. BEACON validates field names locally and independently executes both implementations before scoring.
 
 Return ONLY a valid JSON object in this exact schema:
 {{
@@ -436,7 +454,7 @@ Return ONLY a valid JSON object in this exact schema:
                                     re.sub(r"[-_]", "", identifier).upper()
                                     for identifier in re.findall(
                                         r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b",
-                                        (cbl_text + "\n" + copybook_summary).upper(),
+                                        (cbl_text + "\n" + copybook_summary + "\n" + py_text).upper(),
                                     )
                                 }
                             ]

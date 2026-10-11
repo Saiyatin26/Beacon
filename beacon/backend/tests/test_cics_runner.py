@@ -134,3 +134,31 @@ def test_execute_compiled_cobol_returns_captured_bms_fields(monkeypatch):
     assert outputs["ACCT_STATUS"] == "Y"
     assert outputs["MESSAGE"] == "Account found"
     assert "BEACON_INP_ACCTSIDI=00000000123" in captured["command"]
+
+
+def test_cobol_adapter_preserves_leading_zeroes_in_fixed_width_inputs(monkeypatch, tmp_path):
+    from certification.adapters import CobolCicsAdapter
+
+    source_file = tmp_path / "INPUTTEST.cbl"
+    source_file.write_text("       PROGRAM-ID. INPUTTEST.\n", encoding="utf-8")
+    adapter = CobolCicsAdapter(
+        program_id="INPUTTEST",
+        source_file=source_file,
+        role="reference",
+    )
+    adapter._compiled_binary_path = "/tmp/inputtest"
+    adapter.health_check = lambda: SimpleNamespace(is_ready=True, diagnostics="ready")
+    captured = {}
+
+    def fake_execute(binary_wsl_path, inputs):
+        captured.update(inputs)
+        return True, {"ACCT_ID": inputs["ACCT_ID"]}, "OUT-ACCT:value", ""
+
+    monkeypatch.setattr("certification.adapters.execute_compiled_cobol", fake_execute)
+
+    observation = adapter.execute({"ACCT_ID": "00100000001", "EIBCALEN": "100"})
+
+    assert observation.execution_status == "SUCCESS"
+    assert observation.normalized_inputs["ACCT_ID"] == "00100000001"
+    assert captured["ACCT_ID"] == "00100000001"
+    assert captured["EIBCALEN"] == "100"

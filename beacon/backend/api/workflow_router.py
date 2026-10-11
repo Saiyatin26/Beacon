@@ -153,6 +153,8 @@ def _perform_repository_analysis(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Staged upload workspace '{upload_id}' not found.",
                 )
+            repository_service.normalize_extensionless_sources(legacy_dir)
+            repository_service.normalize_extensionless_sources(modern_dir)
             legacy_content_hash = compute_implementation_hash(legacy_dir)
             modern_content_hash = compute_implementation_hash(modern_dir)
             legacy_identity = RepositoryIdentity(
@@ -222,7 +224,20 @@ def _perform_repository_analysis(
     modern_adapter_res = adapter_detector.resolve_adapter_for_repository(modern_analysis, role="target")
 
     # 4. Input & fixture discovery (no synthetic fallback, no keyword mapping)
-    input_discovery_res = input_discovery_engine.discover_inputs(legacy_analysis, modern_analysis)
+    input_discovery_res = input_discovery_engine.discover_inputs(
+        legacy_analysis,
+        modern_analysis,
+        legacy_entrypoint_file=(
+            Path(legacy_adapter_res.resolved_file)
+            if legacy_adapter_res.resolved_file
+            else None
+        ),
+        modern_entrypoint_file=(
+            Path(modern_adapter_res.resolved_file)
+            if modern_adapter_res.resolved_file
+            else None
+        ),
+    )
 
     app_id = f"APP-{legacy_prov.content_hash[:8]}-{modern_prov.content_hash[:8]}"
 
@@ -583,7 +598,7 @@ def _run_repository_certification_pipeline(
             metadata=run_record.metadata,
         )
 
-    test_inputs = list(repo_spec.discovered_inputs)
+    test_inputs = list(input_discovery_res.test_inputs)
     if req.custom_inputs:
         if len(test_inputs) + len(req.custom_inputs) > settings.max_input_records:
             raise HTTPException(

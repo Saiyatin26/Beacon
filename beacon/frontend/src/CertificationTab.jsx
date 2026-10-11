@@ -44,6 +44,7 @@ const WORKFLOW_STATE_COLORS = {
 export default function CertificationTab({
   apiBase = "",
   authFetch,
+  authToken,
   badgeStyle,
   cardStyle,
   statusBadgeStyles,
@@ -134,8 +135,8 @@ export default function CertificationTab({
   };
 
   useEffect(() => {
-    loadRecentRuns();
-  }, []);
+    if (authToken) loadRecentRuns();
+  }, [authToken]);
 
   // ── Repository / Source Analysis Handler ────────────────────────────────────
   const handleAnalyzeRepositories = async () => {
@@ -1283,7 +1284,20 @@ export default function CertificationTab({
                     </div>
                   ) : (
                     <div style={{ padding: "12px", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: "6px", fontSize: "12px", color: "#92400e" }}>
-                      ⚠️ No legitimate test fixtures or manifests discovered in repositories. Certification cannot proceed without genuine input evidence (fail-closed).
+                      ⚠️ No repository fixtures were found. BEACON also asks the configured AI provider to propose source-grounded test cases; proposed cases are only accepted after local validation and execution against both programs.
+                    </div>
+                  )}
+                  {analysisResult.input_provenance?.llm_provider && (
+                    <div style={{ marginTop: "8px", fontSize: "11px", color: "#475569" }}>
+                      AI discovery: <strong>{analysisResult.input_provenance.llm_provider.actual_provider || "unavailable"}</strong>
+                      {analysisResult.input_provenance.llm_provider.model ? ` (${analysisResult.input_provenance.llm_provider.model})` : ""}
+                      {" · "}
+                      <strong>{analysisResult.input_provenance.llm_provider.rule_extraction_status || "NOT_RECORDED"}</strong>
+                      {analysisResult.input_provenance.llm_provider.fallback_reason ? (
+                        <div style={{ color: "#92400e", marginTop: "3px" }}>
+                          Provider detail: {analysisResult.input_provenance.llm_provider.fallback_reason}
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </section>
