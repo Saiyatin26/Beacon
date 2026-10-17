@@ -1,6 +1,6 @@
 {
   "suite_name": "BEACON Inventive Step Controlled Experiments",
-  "timestamp": "2026-10-11T09:48:26.536805+00:00",
+  "timestamp": "2026-10-16T18:40:29.448387+00:00",
   "overall_passed": true,
   "experiments_count": 8,
   "passed_count": 8,
@@ -429,8 +429,7 @@
       "observed_deviation": 0.3,
       "regressions_detected": 1,
       "blocking_reasons": [
-        "Observed deviation (0.300000) exceeds resolved dynamic threshold (0.050000)",
-        "Evidence-adjusted score (61.3%) is below the policy threshold (95.0%)"
+        "Behavioral mismatches detected on 3 evaluated inputs"
       ]
     },
     {
@@ -442,7 +441,9 @@
       "adjusted_score": 0.75,
       "certified": false,
       "blocking_reasons": [
-        "Evidence-adjusted score (75.0%) is below the policy threshold (90.0%)"
+        "Execution reliability (50.0%) is below the required floor (90.0%)",
+        "Input-set integrity is missing or failed canonical hash verification",
+        "Legacy and modern source-hash provenance is missing or incomplete"
       ]
     },
     {

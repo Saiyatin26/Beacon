@@ -2,8 +2,8 @@
 
 > **Document Type:** Technical & Engineering Disclosure for Patent Review  
 > **System:** BEACON (Behavioral Equivalence Certifier) — Full Mode  
-> **Version:** 2.0 (Verified Implementation)  
-> **Notice:** This document constitutes an engineering and research disclosure describing the implemented technical mechanism and reproducible experimental evidence. It is prepared for review by a qualified patent attorney or patent agent. It does not constitute formal legal advice or a guarantee of patent grant or validity.
+> **Version:** 2.1 (implementation-aligned)
+> **Notice:** This is an engineering disclosure, not a novelty search, legal opinion, or guarantee of patentability. It distinguishes the implemented mechanism from legal findings that require qualified patent counsel and a jurisdiction-specific prior-art search.
 
 ---
 
@@ -28,14 +28,14 @@ During legacy system migration, software engineers must verify whether a newly c
 3. **Vulnerability to Tampering and Fabricated Provenance:**  
    When modern language models (LLMs) are used to assist in test discovery or rule generation, traditional test runners treat the generated cases as trusted oracles without enforcing cryptographic provenance, boundary validation against program ASTs, or tamper-evident binding between the evaluated source code, the input set, and the certificate.
 
-4. **Silent Provider Fallback and Pollution:**  
-   Existing multi-provider architectures silently degrade to local or offline mock providers when primary API calls fail, allowing ungrounded or mock test cases to masquerade as authentic verification evidence.
+4. **Unattributed Discovery Evidence:**
+   If generated candidates are used without recording their provider and model provenance, reviewers cannot determine how the input or rule evidence was produced.
 
 ---
 
 ## 2. Proposed Technical Mechanism and System Architecture
 
-BEACON introduces a **two-tier certification engine** that separates observed empirical agreement from the epistemic quality of the supporting evidence:
+BEACON implements a **two-tier certification engine** that separates observed empirical agreement from the quality of the supporting run evidence. Full BEACON Mode records the actual configured provider (including the project-supported offline fallback where applicable); it does not make provider identity a substitute for source grounding or execution evidence.
 
 ```
 +--------------------------------------------------------------------------------------------------+
@@ -50,8 +50,8 @@ BEACON introduces a **two-tier certification engine** that separates observed em
 |                               | SHA-256 Repository Hashes & AST AST Extraction                   |
 |                               v                                                                  |
 |   +------------------------------------------------------+                                       |
-|   |         Strict OpenRouter-Only AI Synthesis          |                                       |
-|   |  - Zero Fallback Policy (No Ollama/Offline/Mocks)    |                                       |
+|   |         Provenance-Recorded Candidate Synthesis      |                                       |
+|   |  - Actual provider/model recorded; no anonymous input evidence |                               |
 |   |  - Hypothesizes Behavioral Rules & Test Candidates   |                                       |
 |   +---------------------------+--------------------------+                                       |
 |                               | Candidates & Proposed Rules                                      |
@@ -126,7 +126,7 @@ BEACON defines six normalized quality dimensions $f_i \in [0.0, 1.0]$:
 
 ### 3.3 Dynamic Availability-Aware Renormalization
 Each factor $f_i$ is associated with a configured base weight $w_i > 0$. The default weight vector is:
-$$\mathbf{w} = [w_1=0.30, w_2=0.20, w_3=0.20, w_4=0.10, w_5=0.10, w_6=0.10], \quad \sum_{i=1}^6 w_i = 1.00$$
+$$\mathbf{w} = [w_1=0.30, w_2=0.20, w_3=0.20, w_4=0.15, w_5=0.10, w_6=0.05], \quad \sum_{i=1}^6 w_i = 1.00$$
 
 When a factor is *unavailable* (e.g., source hashes were not tracked, or oracle confidence was unmeasured), BEACON does **not** assume $f_i = 1.0$ (which would inflate the score) nor $f_i = 0.0$ (which would arbitrarily punish unmeasured attributes). Instead, it defines the set of available factor indices $\mathcal{A} \subseteq \{1, \dots, 6\}$ and dynamically renormalizes:
 
@@ -164,7 +164,11 @@ $$\text{Verdict} = \begin{cases}
 - **Gate 1 (Zero-Input Protection):** If $N_{\text{total}} = 0$ or $N_{\text{eval}} = 0$, status is immediately `INSUFFICIENT_COVERAGE` / `BLOCKED`. $R$ is assigned $0.0$, and certification is forbidden.
 - **Gate 2 (Execution Reliability Floor):** $f_{\text{reliability}} \ge 0.90$. If flaky execution or crashes exceed 10%, certification is blocked regardless of score.
 - **Gate 3 (Integrity Invariant):** $f_{\text{input\_integrity}} = 1.0$ and $f_{\text{source\_integrity}} = 1.0$. Any hash mismatch immediately invalidates the run.
-- **Gate 4 (Provider Exclusivity Invariant):** In `FULL_BEACON` mode, all accepted inputs must originate from an authentic OpenRouter response with traceable model provenance.
+- **Gate 4 (Full-Mode Provider Provenance):** In `FULL_BEACON` mode, a provider identity must be recorded in the certification context. The recorded provider may be a supported fallback; the certificate reports it rather than presenting it as an OpenRouter result.
+
+### 4.1 Implemented Safety Boundary
+
+The implementation in `backend/certification/certification_engine.py` evaluates the composite score and also records categorical evidence gates in every new certificate. Certification is blocked if execution reliability is below the policy floor (default 90%), input-set integrity fails, source-hash provenance is missing/incomplete, Full BEACON provider provenance is absent, or behavioral mismatches are observed. These gates are intentionally not compensable by a high score. The factor values and gate results are stored in `CertificationMetrics` and rendered in the Markdown certificate report.
 
 ---
 

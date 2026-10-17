@@ -32,6 +32,7 @@ def make_artifact():
             evidence_quality_score=0.9,
             evidence_adjusted_score=0.9,
             evidence_score_factors={"input_coverage": 0.8},
+            evidence_gate_results={"input_set_integrity": True},
         ),
     )
 
@@ -45,6 +46,8 @@ def test_markdown_certificate_report_includes_run_hashes_and_evidence_score():
     assert "Evidence-adjusted score" in report
     assert "`input_coverage`" in report
     assert "90.0%" in report
+    assert "Inventive-step evidence gates" in report
+    assert "input_set_integrity" in report
 
 
 def test_html_certificate_report_handles_missing_coverage_and_shows_execution_mode():
@@ -54,6 +57,7 @@ def test_html_certificate_report_handles_missing_coverage_and_shows_execution_mo
     assert "RUN-TEST" in report
     assert "legacy-sha256" in report
     assert "Evidence Factor" in report
+    assert "Inventive-Step Evidence Gates" in report
 
 
 def test_pdf_certificate_includes_summary_and_certificate_identity():

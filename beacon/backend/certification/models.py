@@ -299,6 +299,7 @@ class CertificationPolicy(BaseModel):
     allow_warnings: bool = False  # If True, non-critical regressions may yield CERTIFIED_WITH_WARNINGS
     max_permitted_execution_errors: int = 0
     max_permitted_invalid_inputs: int = 0
+    min_execution_reliability: float = 0.90
     block_on_critical_regression: bool = True
     block_on_reference_inconsistent: bool = True
     block_on_mutual_violation: bool = True
@@ -323,6 +324,7 @@ class CertificationPolicy(BaseModel):
             "allow_warnings": self.allow_warnings,
             "max_permitted_execution_errors": self.max_permitted_execution_errors,
             "max_permitted_invalid_inputs": self.max_permitted_invalid_inputs,
+            "min_execution_reliability": round(self.min_execution_reliability, 6),
             "block_on_critical_regression": self.block_on_critical_regression,
             "block_on_reference_inconsistent": self.block_on_reference_inconsistent,
             "block_on_mutual_violation": self.block_on_mutual_violation,
@@ -400,6 +402,10 @@ class CertificationMetrics(BaseModel):
     evidence_quality_score: Optional[float] = None
     evidence_adjusted_score: Optional[float] = None
     evidence_score_factors: dict[str, float] = Field(default_factory=dict)
+    # Immutable audit record of categorical evidence gates. Failed gates are not
+    # merely a score penalty and cannot result in a successful certification.
+    evidence_gate_results: dict[str, bool] = Field(default_factory=dict)
+    evidence_gate_reasons: list[str] = Field(default_factory=list)
 
 
 class CertificationArtifact(BaseModel):

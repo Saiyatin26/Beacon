@@ -282,7 +282,7 @@ def run_experiment_5_genuine_mismatch() -> dict:
         cert.certified is False
         and cert.status == CertificationStatus.NOT_CERTIFIED
         and len(cert.regressions) > 0
-        and any("exceeds resolved dynamic threshold" in r for r in cert.blocking_reasons)
+        and any("Behavioral mismatches detected" in r for r in cert.blocking_reasons)
     )
 
     return {

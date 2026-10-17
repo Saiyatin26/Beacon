@@ -45,6 +45,37 @@ from operations.logging_config import log_operational_event
 logger = logging.getLogger(__name__)
 
 
+def _evidence_gate_results(
+    factors: dict[str, float | None],
+    policy: CertificationPolicy,
+    *,
+    full_beacon: bool = False,
+    provider_recorded: bool = True,
+) -> tuple[dict[str, bool], list[str]]:
+    """Evaluate evidence safety predicates independently of the composite score."""
+    results = {
+        "execution_reliability": (factors.get("execution_reliability") or 0.0) >= policy.min_execution_reliability,
+        "input_set_integrity": factors.get("input_set_integrity") == 1.0,
+        "source_hash_integrity": factors.get("source_hash_integrity") == 1.0,
+    }
+    if full_beacon:
+        results["full_beacon_provider_provenance"] = provider_recorded
+
+    reasons: list[str] = []
+    if not results["execution_reliability"]:
+        reasons.append(
+            f"Execution reliability ({(factors.get('execution_reliability') or 0.0) * 100:.1f}%) is below "
+            f"the required floor ({policy.min_execution_reliability * 100:.1f}%)"
+        )
+    if not results["input_set_integrity"]:
+        reasons.append("Input-set integrity is missing or failed canonical hash verification")
+    if not results["source_hash_integrity"]:
+        reasons.append("Legacy and modern source-hash provenance is missing or incomplete")
+    if full_beacon and not results["full_beacon_provider_provenance"]:
+        reasons.append("FULL_BEACON provider provenance is missing")
+    return results, reasons
+
+
 class CertificationEngine:
     """Core Phase 10 Certification Engine."""
 
@@ -182,6 +213,12 @@ class CertificationEngine:
                         "source_hash_integrity": source_hash_integrity,
                     },
                 )
+                evidence_gates, evidence_gate_reasons = _evidence_gate_results(
+                    score_factors,
+                    cert_policy,
+                    full_beacon=(getattr(context, "evaluation_mode", "").upper() == "FULL_BEACON"),
+                    provider_recorded=bool(getattr(context, "provider", "")),
+                )
 
                 min_cov = float(getattr(cert_policy, "min_coverage", getattr(cert_policy, "min_oracle_coverage", 0.8)))
 
@@ -190,6 +227,14 @@ class CertificationEngine:
                     final_status = CertificationStatus.INSUFFICIENT_COVERAGE
                     is_certified = False
                     blocking_reasons = ["Zero evaluated inputs: Equivalence certification requires genuine input evidence"]
+                elif diff_inp > 0:
+                    final_status = CertificationStatus.NOT_CERTIFIED
+                    is_certified = False
+                    blocking_reasons = [f"Behavioral mismatches detected on {diff_inp} evaluated inputs"]
+                elif evidence_gate_reasons:
+                    final_status = CertificationStatus.NOT_CERTIFIED
+                    is_certified = False
+                    blocking_reasons = evidence_gate_reasons
                 elif not threshold_resolution or not res_id or not res_fp or not str(res_id).strip() or not str(res_fp).strip():
                     final_status = CertificationStatus.INCONCLUSIVE
                     is_certified = False
@@ -342,6 +387,8 @@ class CertificationEngine:
                     evidence_quality_score=evidence_quality,
                     evidence_adjusted_score=adjusted_score,
                     evidence_score_factors=score_factors,
+                    evidence_gate_results=evidence_gates,
+                    evidence_gate_reasons=evidence_gate_reasons,
                 ),
                 domain_scores=dim_scores,
                 oracle_summaries=oracle_summaries,
@@ -882,6 +929,13 @@ class CertificationEngine:
             phase9_report.overall_equivalence_score,
             evidence_factors,
         )
+        full_beacon = (getattr(context, "evaluation_mode", "").upper() == "FULL_BEACON")
+        evidence_gates, evidence_gate_reasons = _evidence_gate_results(
+            active_evidence_factors,
+            cert_policy,
+            full_beacon=full_beacon,
+            provider_recorded=bool(getattr(context, "provider", "")),
+        )
 
         metrics = CertificationMetrics(
             unique_input_count=u_inputs,
@@ -909,6 +963,8 @@ class CertificationEngine:
             evidence_quality_score=evidence_quality,
             evidence_adjusted_score=adjusted_score,
             evidence_score_factors=active_evidence_factors,
+            evidence_gate_results=evidence_gates,
+            evidence_gate_reasons=evidence_gate_reasons,
         )
 
         log_operational_event(
@@ -953,12 +1009,23 @@ class CertificationEngine:
             )
             final_status = CertificationStatus.INSUFFICIENT_COVERAGE
 
+        # Categorical evidence gates cannot be offset by behavioral agreement.
+        elif evidence_gate_reasons:
+            blocking_reasons.extend(evidence_gate_reasons)
+            final_status = CertificationStatus.NOT_CERTIFIED
+
         # Flow Step 2: Reference Inconsistency Check
         elif cert_policy.block_on_reference_inconsistent and metrics.reference_inconsistencies > 0:
             blocking_reasons.append(
                 f"Reference implementation contradicts frozen validated oracles ({metrics.reference_inconsistencies} occurrences)"
             )
             final_status = CertificationStatus.REFERENCE_INCONSISTENT
+
+        elif metrics.modern_regressions > 0:
+            blocking_reasons.append(
+                f"Modernized implementation has {metrics.modern_regressions} behavioral regression occurrences"
+            )
+            final_status = CertificationStatus.NOT_CERTIFIED
 
         # Flow Step 3: Modernized Critical Regression / Mutual Violation / Low Score Check
         elif cert_policy.block_on_critical_regression and metrics.critical_failures > 0:

@@ -32,6 +32,10 @@ def generate_html_report(artifact: CertificationArtifact) -> str:
         f"<td>{EVIDENCE_SCORE_WEIGHTS[name] / total_factor_weight * 100:.1f}%</td></tr>"
         for name, value in artifact.metrics.evidence_score_factors.items()
     ) if total_factor_weight else ""
+    evidence_gate_rows = "".join(
+        f"<tr><td>{html.escape(name)}</td><td>{'PASS' if passed else 'BLOCK'}</td></tr>"
+        for name, passed in artifact.metrics.evidence_gate_results.items()
+    )
     status_colors = {
         CertificationStatus.CERTIFIED: ("#10b981", "#ecfdf5", "CERTIFIED"),
         CertificationStatus.CERTIFIED_WITH_WARNINGS: ("#f59e0b", "#fffbeb", "CERTIFIED WITH WARNINGS"),
@@ -178,6 +182,10 @@ def generate_html_report(artifact: CertificationArtifact) -> str:
             <thead><tr><th>Evidence Factor</th><th>Observed Value</th><th>Normalized Weight</th></tr></thead>
             <tbody>{evidence_factor_rows or '<tr><td colspan="2">No factor data recorded</td></tr>'}</tbody>
         </table>
+        <h3 style="font-size: 16px; margin-bottom: 8px;">Inventive-Step Evidence Gates</h3>
+        <p style="font-size: 12px; color: #64748b;">A failed gate blocks certification; it cannot be offset by the composite score.</p>
+        <table><thead><tr><th>Gate</th><th>Result</th></tr></thead>
+            <tbody>{evidence_gate_rows or '<tr><td colspan="2">Gate data was not recorded for this legacy artifact.</td></tr>'}</tbody></table>
 
         {f'<h3 style="font-size: 16px; margin-bottom: 12px; color: #991b1b;">Behavioral Regressions &amp; Counterexamples ({len(artifact.regressions)})</h3>{"".join(regression_cards)}' if artifact.regressions else ''}
 
@@ -248,6 +256,17 @@ def generate_markdown_report(artifact: CertificationArtifact) -> str:
             md.append(f"| `{name}` | {value * 100:.1f}% | {normalized_weight * 100:.1f}% |")
     else:
         md.append("| Not recorded | N/A | N/A |")
+    md.append("\n## Inventive-step evidence gates")
+    md.append("These fail-closed gates prevent a high composite score from certifying a run with unreliable execution, failed integrity verification, or missing Full BEACON provenance.")
+    if artifact.metrics.evidence_gate_results:
+        md.append("| Gate | Result |")
+        md.append("| :--- | :--- |")
+        for name, passed in artifact.metrics.evidence_gate_results.items():
+            md.append(f"| `{name}` | {'PASS' if passed else 'BLOCK'} |")
+    else:
+        md.append("- Gate data was not recorded for this legacy artifact.")
+    if artifact.metrics.evidence_gate_reasons:
+        md.extend(f"- **Blocked:** {reason}" for reason in artifact.metrics.evidence_gate_reasons)
     if context:
         md.append("\n## Execution and provider provenance")
         md.append(f"- **Execution metadata**: `{json.dumps(context.execution_metadata, sort_keys=True, default=str)}`")
