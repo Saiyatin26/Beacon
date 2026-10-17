@@ -155,6 +155,10 @@ def test_provider_manager_strictly_forbids_fallback_on_openrouter_failure(monkey
     invoked_providers = []
 
     for name, p in pm.providers.items():
+        # This test exercises provider-selection policy, not local API-key or
+        # service configuration.  Ensure the manager reaches generate().
+        monkeypatch.setattr(p, "is_available", lambda: True)
+
         def make_generate(provider_name):
             def _gen(*args, **kwargs):
                 invoked_providers.append(provider_name)
