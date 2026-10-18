@@ -396,6 +396,6 @@ def build_application_spec_from_repository_execution_spec(
             "discovered_inputs_count": len(repo_spec.discovered_inputs),
             "creation_timestamp": repo_spec.creation_timestamp,
         },
+        provenance=repo_spec.provenance,
     )
     return spec
-

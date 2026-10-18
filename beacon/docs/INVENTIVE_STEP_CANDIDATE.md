@@ -35,7 +35,7 @@ During legacy system migration, software engineers must verify whether a newly c
 
 ## 2. Proposed Technical Mechanism and System Architecture
 
-BEACON implements a **two-tier certification engine** that separates observed empirical agreement from the quality of the supporting run evidence. Full BEACON Mode records the actual configured provider (including the project-supported offline fallback where applicable); it does not make provider identity a substitute for source grounding or execution evidence.
+BEACON implements a **two-tier certification engine** that separates observed empirical agreement from the quality of the supporting run evidence. Full BEACON Mode records the actual provider and model for each extraction, alignment, and test-generation call. Missing provenance, fallback, or source/evidence integrity failure is not accepted as a successful Full BEACON run.
 
 ```
 +--------------------------------------------------------------------------------------------------+
@@ -43,26 +43,26 @@ BEACON implements a **two-tier certification engine** that separates observed em
 +--------------------------------------------------------------------------------------------------+
 |                                                                                                  |
 |   +-----------------------+     +------------------------+                                       |
-|   | Legacy Source (COBOL) |     | Modern Source (Python) |                                       |
+|   | Legacy Source         |     | Modern Source          |                                       |
 |   +-----------+-----------+     +-----------+------------+                                       |
 |               |                             |                                                    |
 |               +-------------> + <-----------+                                                    |
-|                               | SHA-256 Repository Hashes & AST AST Extraction                   |
+|                               | Source-tree hashes and independent AI rule extraction            |
 |                               v                                                                  |
 |   +------------------------------------------------------+                                       |
 |   |         Provenance-Recorded Candidate Synthesis      |                                       |
-|   |  - Actual provider/model recorded; no anonymous input evidence |                               |
-|   |  - Hypothesizes Behavioral Rules & Test Candidates   |                                       |
+|   |  - Separate extraction from both source trees        |                                       |
+|   |  - Provider/model provenance and source anchors      |                                       |
 |   +---------------------------+--------------------------+                                       |
 |                               | Candidates & Proposed Rules                                      |
 |                               v                                                                  |
 |   +------------------------------------------------------+                                       |
 |   |         Deterministic Local Candidate Validation     |                                       |
-|   |  - AST & Copybook Identifier Vocabulary Verification  |                                       |
-|   |  - Structural & Field Grounding Gate                 |                                       |
-|   |  - Deterministic Canonical Candidate Deduplication   |                                       |
+|   |  - Exact source-line and source-file hash checks      |                                       |
+|   |  - Supported condition/output contract validation    |                                       |
+|   |  - Alignment and unsupported-behavior gap tracking   |                                       |
 |   +---------------------------+--------------------------+                                       |
-|                               | Accepted Authoritative Input Set (SHA-256 Merkle Root)           |
+|                               | Rule-directed input set (canonical SHA-256 hash)                   |
 |                               v                                                                  |
 |   +------------------------------------------------------+                                       |
 |   |         Synchronous Paired Behavioral Execution      |                                       |
@@ -87,7 +87,8 @@ BEACON implements a **two-tier certification engine** that separates observed em
 |   |  - Gate 1: Zero-Input Protection (Inputs > 0)        |                                       |
 |   |  - Gate 2: Reliability Threshold (Rel >= 0.90)       |                                       |
 |   |  - Gate 3: Adjusted Score Threshold (S_adj >= Theta) |                                       |
-|   |  - Gate 4: SHA-256 Cryptographic Evidence Binding    |                                       |
+|   |  - Source, input, and evaluation integrity gates      |                                       |
+|   |  - Provider, alignment, and targeted-coverage gates  |                                       |
 |   +---------------------------+--------------------------+                                       |
 |                               | Final Verdict                                                    |
 |                               v                                                                  |
@@ -164,88 +165,35 @@ $$\text{Verdict} = \begin{cases}
 - **Gate 1 (Zero-Input Protection):** If $N_{\text{total}} = 0$ or $N_{\text{eval}} = 0$, status is immediately `INSUFFICIENT_COVERAGE` / `BLOCKED`. $R$ is assigned $0.0$, and certification is forbidden.
 - **Gate 2 (Execution Reliability Floor):** $f_{\text{reliability}} \ge 0.90$. If flaky execution or crashes exceed 10%, certification is blocked regardless of score.
 - **Gate 3 (Integrity Invariant):** $f_{\text{input\_integrity}} = 1.0$ and $f_{\text{source\_integrity}} = 1.0$. Any hash mismatch immediately invalidates the run.
-- **Gate 4 (Full-Mode Provider Provenance):** In `FULL_BEACON` mode, a provider identity must be recorded in the certification context. The recorded provider may be a supported fallback; the certificate reports it rather than presenting it as an OpenRouter result.
+- **Gate 4 (Full-Mode Provider Provenance):** In `FULL_BEACON` mode, the legacy extraction, modern extraction, alignment, and test-generation calls must each record an actual supported provider and model, with no fallback.
+- **Gate 5 (Source-Rule Evidence):** A source-rule manifest, current source/tree hashes, exact condition/effect anchors, resolved dual-source alignment, and targeted paired-execution coverage must all validate.
 
 ### 4.1 Implemented Safety Boundary
 
-The implementation in `backend/certification/certification_engine.py` evaluates the composite score and also records categorical evidence gates in every new certificate. Certification is blocked if execution reliability is below the policy floor (default 90%), input-set integrity fails, source-hash provenance is missing/incomplete, Full BEACON provider provenance is absent, or behavioral mismatches are observed. These gates are intentionally not compensable by a high score. The factor values and gate results are stored in `CertificationMetrics` and rendered in the Markdown certificate report.
+The implementation in `backend/certification/certification_engine.py` evaluates the existing composite score and also records categorical evidence gates in every new certificate. In Full BEACON, certification is blocked if execution reliability is below the policy floor, input/evaluation integrity fails, source hashes or exact rule anchors are stale, provider provenance is absent, rules are unresolved, targeted rule coverage is incomplete, or behavior mismatches are observed. These gates are intentionally not compensable by a high score. Factor values and gate results are stored in `CertificationMetrics` and surfaced in the result UI.
 
 ---
 
 ## 5. Detailed Algorithm and Pseudocode
 
-```python
-def compute_evidence_adjusted_certification(
-    legacy_source_files: list[Path],
-    modern_source_files: list[Path],
-    openrouter_client: OpenRouterProvider,
-    policy_threshold: float = 0.85,
-) -> CertificationResult:
-    # 1. Compute Cryptographic Source Hashes
-    legacy_hash = sha256_tree(legacy_source_files)
-    modern_hash = sha256_tree(modern_source_files)
-
-    # 2. Strict OpenRouter Rule & Input Generation (No Fallbacks)
-    ai_response = openrouter_client.generate_candidates(legacy_source_files, modern_source_files)
-    if not ai_response.success or ai_response.provider != "openrouter":
-        return CertificationResult(status="BLOCKED", reason=ai_response.error_category)
-
-    # 3. Local Grounding & AST Validation
-    accepted_inputs = []
-    identifier_vocab = extract_ast_vocabulary(legacy_source_files, modern_source_files)
-    for candidate in ai_response.proposed_candidates:
-        if all(field in identifier_vocab for field in candidate.keys()):
-            if candidate not in accepted_inputs:
-                accepted_inputs.append(candidate)
-
-    if len(accepted_inputs) == 0:
-        return CertificationResult(status="INSUFFICIENT_COVERAGE", score=0.0)
-
-    # 4. Canonical Input Set Merkle Hash
-    input_set_hash = sha256_canonical([c.hash() for c in accepted_inputs])
-
-    # 5. Paired Behavioral Execution
-    matching_cases = 0
-    executed_cases = 0
-    for inp in accepted_inputs:
-        legacy_out = execute_legacy_adapter(inp)
-        modern_out = execute_modern_adapter(inp)
-        if legacy_out.status == "OK" and modern_out.status == "OK":
-            executed_cases += 1
-            if normalize(legacy_out.data) == normalize(modern_out.data):
-                matching_cases += 1
-
-    # 6. Compute Raw Behavioral Score
-    raw_score = matching_cases / executed_cases if executed_cases > 0 else 0.0
-
-    # 7. Compute Evidence Quality Factors
-    factors = {
-        "oracle_coverage": compute_rule_coverage(accepted_inputs, ai_response.rules),
-        "input_coverage": min(1.0, len(accepted_inputs) / 20.0),
-        "execution_reliability": executed_cases / len(accepted_inputs),
-        "oracle_confidence": 0.85,
-        "input_set_integrity": 1.0 if verify_hash(accepted_inputs, input_set_hash) else 0.0,
-        "source_hash_integrity": 1.0,
-    }
-
-    # 8. Dynamic Availability-Aware Renormalization & Scoring
-    quality_score = sum(WEIGHTS[k] * factors[k] for k in factors) / sum(WEIGHTS[k] for k in factors)
-    adjusted_score = raw_score * quality_score
-
-    # 9. Deterministic Certification Gating
-    verdict = "CERTIFIED" if (adjusted_score >= policy_threshold and factors["execution_reliability"] >= 0.90) else "NOT_EQUIVALENT"
-
-    return CertificationResult(
-        verdict=verdict,
-        raw_score=raw_score,
-        quality_score=quality_score,
-        adjusted_score=adjusted_score,
-        factors=factors,
-        input_set_hash=input_set_hash,
-        legacy_hash=legacy_hash,
-        modern_hash=modern_hash,
-    )
+```text
+1. Hash both repository snapshots.
+2. Ask the configured AI provider to extract each source independently; retain provider/model
+   provenance and exact condition/effect line anchors for every candidate.
+3. Reject malformed, duplicate, unsupported, or source-unanchored rules deterministically.
+   Ask the AI to align the remaining rules; retain unresolved, missing, or conflicting behavior
+   as gaps rather than converting it into a pass.
+4. Generate rule-directed inputs; validate the supported input/output assertions locally and
+   bind the ordered input set to its canonical hash.
+5. Execute both adapters on identical inputs. Persist and compare actual outputs, execution
+   status, errors, and available state observations; bind results to rule/input/evidence IDs.
+6. Recheck source tree hashes, exact anchors, input-set hash, evaluation hash, provider
+   provenance, rule alignment, and targeted-rule coverage before certification.
+7. Apply the existing evidence-adjusted score and policy thresholds. Issue a certificate only
+   when every mandatory gate passes; otherwise return the specific block reason.
 ```
+
+The current extracted-rule assertion contract is intentionally limited to one input comparison and one flat scalar output-field assertion per rule. Other behavior may still be captured and compared in execution evidence, but a rule outside this contract is a gap and cannot count as validated targeted coverage.
 
 ---
 
@@ -294,8 +242,10 @@ The following claim outline is structured to facilitate preparation of formal pa
 |:---|:---|:---|:---|
 | **Scoring Algorithm** | `backend/certification/scorer.py` | `evidence_adjusted_score()` | Mathematical implementation of $S_{\text{adj}} = R \times Q$ with dynamic renormalization. |
 | **Certification Engine** | `backend/certification/certification_engine.py` | `CertificationEngine.certify_run()` | Gatekeeper evaluating Zero-Input Protection, Reliability floors, and issuing verdicts. |
-| **Strict AI Policy** | `backend/llm/manager.py` | `ProviderManager.generate()` | Enforces OpenRouter-only generation; strictly rejects Ollama, Gemini, and mock fallbacks. |
-| **Candidate Grounding** | `backend/application/input_discovery.py` | `InputDiscoveryEngine.discover_inputs()` | AST identifier validation, deduplication, and Merkle root calculation. |
+| **Dual-Source Extraction** | `backend/mining/source_rule_extractor.py` | `extract_dual_source_rules()` | Independent provider calls, exact source anchors, alignment, and targeted-test proposals. |
+| **Candidate Grounding** | `backend/application/input_discovery.py` | `InputDiscoveryEngine.discover_inputs()` | Deterministic rule/anchor validation, input generation, and provenance assembly. |
+| **Paired Workflow** | `backend/workflow/engine.py` | `WorkflowEngine` | Paired execution, evidence links, stale-source/input checks, and Full BEACON certification context. |
+| **Evaluation Integrity** | `backend/evaluation/models.py` | `compute_evaluation_result_hash()` | Canonical hash shared by evaluation and certification integrity verification. |
 | **Experimental Harness** | `scripts/run_inventive_step_experiments.py` | `main()` | Reproducible execution of EXP-01 through EXP-08 with JSON export. |
 
 ---
@@ -308,3 +258,5 @@ The following claim outline is structured to facilitate preparation of formal pa
    The legacy execution adapter relies on GnuCOBOL and simulated terminal/BMS map parsing. It does not replicate proprietary CICS internal transaction managers or z/OS hardware features.
 3. **Patent Search Completeness:**  
    The prior-art scan conducted herein was bounded by accessible academic and patent databases. Prior to filing, patent counsel should conduct a formal novelty search across USPTO, EPO, and WIPO databases focusing on IPC subclasses G06F 11/36 (testing/monitoring software) and G06F 8/71 (version management).
+
+This document describes an engineering implementation and a research direction only. It is not a patentability opinion, and no legal novelty or non-obviousness conclusion is made here.

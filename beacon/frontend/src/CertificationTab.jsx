@@ -1256,9 +1256,9 @@ export default function CertificationTab({
                 <section style={{ ...cardStyle, marginBottom: "16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
                     <h4 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
-                      📜 AI-validated Behavioral Rules ({(analysisResult.rules || analysisResult.discovered_rules || []).length})
+                      📜 Dual-source AI-extracted Rules ({(analysisResult.rules || analysisResult.discovered_rules || []).length})
                     </h4>
-                    <span style={{ fontSize: "11px", color: "#64748b" }}>AI candidates anchored to source lines</span>
+                    <span style={{ fontSize: "11px", color: "#64748b" }}>Each side is extracted independently; exact anchors and alignment are retained</span>
                   </div>
                   {(analysisResult.rules?.length > 0 || analysisResult.discovered_rules?.length > 0) ? (
                     <div style={{ maxHeight: "180px", overflowY: "auto", border: "1px solid #e2e8f0", borderRadius: "6px" }}>
@@ -1267,8 +1267,9 @@ export default function CertificationTab({
                           <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
                             <th style={{ padding: "6px 10px", color: "#475569" }}>Rule ID</th>
                             <th style={{ padding: "6px 10px", color: "#475569" }}>Description / Invariant</th>
-                            <th style={{ padding: "6px 10px", color: "#475569" }}>Location / Source</th>
-                            <th style={{ padding: "6px 10px", color: "#475569" }}>Method</th>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Legacy source anchor</th>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Modern source anchor</th>
+                            <th style={{ padding: "6px 10px", color: "#475569" }}>Alignment</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1278,13 +1279,26 @@ export default function CertificationTab({
                                 {rule.rule_id || `rule_${rIdx + 1}`}
                               </td>
                               <td style={{ padding: "6px 10px", color: "#1e293b" }}>
-                                {rule.description || rule.name || "—"}
+                                <div>{rule.description || rule.name || "—"}</div>
+                                {rule.observable_effect && (
+                                  <div style={{ color: "#64748b", marginTop: "3px" }}>{rule.observable_effect}</div>
+                                )}
                               </td>
                               <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#64748b" }}>
-                                {rule.source_file ? `${rule.source_file}:${rule.source_location || 1}` : (rule.source || "STATIC_AST")}
+                                {rule.source_evidence?.legacy
+                                  ? `${rule.source_evidence.legacy.path}:${rule.source_evidence.legacy.line}\n${rule.source_evidence.legacy.excerpt}`
+                                  : "No source anchor"}
                               </td>
-                              <td style={{ padding: "6px 10px", color: "#475569" }}>
-                                {rule.discovery_method || "AST_ANALYSIS"}
+                              <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#64748b" }}>
+                                {rule.source_evidence?.modern
+                                  ? `${rule.source_evidence.modern.path}:${rule.source_evidence.modern.line}\n${rule.source_evidence.modern.excerpt}`
+                                  : "No source anchor"}
+                              </td>
+                              <td style={{ padding: "6px 10px", color: rule.alignment_status === "MATCH" ? "#166534" : "#991b1b" }}>
+                                <strong>{rule.alignment_status || "UNALIGNED"}</strong>
+                                {rule.alignment_rationale && (
+                                  <div style={{ color: "#64748b", marginTop: "3px" }}>{rule.alignment_rationale}</div>
+                                )}
                               </td>
                             </tr>
                           ))}
@@ -1293,7 +1307,9 @@ export default function CertificationTab({
                     </div>
                   ) : (
                     <div style={{ padding: "12px", background: "#f8fafc", borderRadius: "6px", fontSize: "12px", color: "#64748b" }}>
-                      No explicit AST invariants extracted. Equivalence certification will evaluate complete entrypoint signatures.
+                      {analysisResult.evaluation_mode === "FULL_BEACON"
+                        ? "No complete source-grounded rule manifest was produced. Full BEACON certification is blocked."
+                        : "No source-grounded behavioral rules were extracted for this analysis."}
                     </div>
                   )}
                 </section>
@@ -1532,6 +1548,10 @@ export default function CertificationTab({
         const oracleSetId = meta.oracle_set_id || workflowResult.oracle_set_id || "—";
         const oracleSetHash = meta.oracle_set_hash || workflowResult.oracle_set_hash || "—";
         const oracleCoverage = meta.oracle_coverage != null ? `${(meta.oracle_coverage * 100).toFixed(1)}%` : "Not available";
+        const sourceRuleEvidence = meta.source_rule_evidence || {};
+        const sourceRuleEvidenceEntries = Object.entries(sourceRuleEvidence.rules || {});
+        const evidenceGates = meta.evidence_gate_results || {};
+        const evidenceFactors = meta.evidence_score_factors || {};
 
         return (
           <div>
@@ -1874,10 +1894,10 @@ export default function CertificationTab({
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
                 <div>
                   <h3 style={{ margin: 0, fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
-                    📜 AI-validated Behavioral Rules & Inputs
+                    📜 Dual-source Behavioral Rules & Inputs
                   </h3>
                   <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#64748b" }}>
-                    AI-proposed behavioral rules are retained only when their cited source lines validate; execution evidence remains independently measured.
+                    Legacy and modern rules are extracted independently, anchored to exact source lines, and tested using paired executions.
                   </p>
                 </div>
                 <span style={{ fontSize: "12px", color: "#475569" }}>
@@ -1892,8 +1912,9 @@ export default function CertificationTab({
                       <tr style={{ background: "#f8fafc", textAlign: "left", borderBottom: "1px solid #e2e8f0" }}>
                         <th style={{ padding: "6px 10px", color: "#475569" }}>Rule ID</th>
                         <th style={{ padding: "6px 10px", color: "#475569" }}>Invariant / Description</th>
-                        <th style={{ padding: "6px 10px", color: "#475569" }}>Source Location</th>
-                        <th style={{ padding: "6px 10px", color: "#475569" }}>Discovery Method</th>
+                        <th style={{ padding: "6px 10px", color: "#475569" }}>Legacy source</th>
+                        <th style={{ padding: "6px 10px", color: "#475569" }}>Modern source</th>
+                        <th style={{ padding: "6px 10px", color: "#475569" }}>Alignment</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1903,13 +1924,26 @@ export default function CertificationTab({
                             {rule.rule_id || `rule_${rIdx + 1}`}
                           </td>
                           <td style={{ padding: "6px 10px", color: "#1e293b" }}>
-                            {rule.description || rule.name || "—"}
+                            <div>{rule.description || rule.name || "—"}</div>
+                            {rule.observable_effect && (
+                              <div style={{ color: "#64748b", marginTop: "3px" }}>{rule.observable_effect}</div>
+                            )}
                           </td>
                           <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#64748b" }}>
-                            {rule.source_file ? `${rule.source_file}:${rule.source_location || 1}` : "—"}
+                            {rule.source_evidence?.legacy
+                              ? `${rule.source_evidence.legacy.path}:${rule.source_evidence.legacy.line} — ${rule.source_evidence.legacy.excerpt}`
+                              : "No source anchor"}
                           </td>
-                          <td style={{ padding: "6px 10px", color: "#475569" }}>
-                            {rule.discovery_method || "AST_ANALYSIS"}
+                          <td style={{ padding: "6px 10px", fontFamily: "monospace", color: "#64748b" }}>
+                            {rule.source_evidence?.modern
+                              ? `${rule.source_evidence.modern.path}:${rule.source_evidence.modern.line} — ${rule.source_evidence.modern.excerpt}`
+                              : "No source anchor"}
+                          </td>
+                          <td style={{ padding: "6px 10px", color: rule.alignment_status === "MATCH" ? "#166534" : "#991b1b" }}>
+                            <strong>{rule.alignment_status || "UNALIGNED"}</strong>
+                            {rule.alignment_rationale && (
+                              <div style={{ color: "#64748b", marginTop: "3px" }}>{rule.alignment_rationale}</div>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -1918,11 +1952,103 @@ export default function CertificationTab({
                 </div>
               ) : (
                 <div style={{ padding: "10px 14px", background: "#f8fafc", borderRadius: "6px", fontSize: "12px", color: "#64748b", marginBottom: "10px" }}>
-                  Equivalence certified across complete adapter entrypoint signatures.
+                  {meta.evaluation_mode === "FULL_BEACON"
+                    ? "No complete source-grounded rule manifest is available; this run cannot support Full BEACON certification."
+                    : "No source-grounded behavioral rules were available for this run."}
                 </div>
               )}
               <div style={{ fontSize: "11px", color: "#64748b" }}>
                 Input Provenance: <strong>{discoveryMeta.input_provenance?.source || meta.input_discovery?.input_provenance?.source || "Validated Repository Fixtures / Legitimate Ingested Evidence"}</strong>
+              </div>
+            </section>
+
+            <section style={{ ...cardStyle, marginBottom: "20px" }}>
+              <h3 style={{ margin: "0 0 10px", fontSize: "14px", fontWeight: "700", color: "#0f172a" }}>
+                Evidence-Driven Adaptive Behavioral Certification (EDABC)
+              </h3>
+              <div style={{ fontSize: "12px", color: "#475569", marginBottom: "10px" }}>
+                Manifest: <code>{meta.source_rule_manifest_hash || "Unavailable"}</code>
+                {" · "}Rule coverage:{" "}
+                {meta.source_rule_coverage != null
+                  ? `${(meta.source_rule_coverage * 100).toFixed(1)}%`
+                  : "Unavailable"}
+                {" · "}Source integrity:{" "}
+                {meta.source_rule_integrity != null
+                  ? `${(meta.source_rule_integrity * 100).toFixed(1)}%`
+                  : "Unavailable"}
+              </div>
+              {sourceRuleEvidenceEntries.length > 0 ? (
+                <div style={{ overflowX: "auto", marginBottom: "12px" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px" }}>
+                    <thead>
+                      <tr style={{ background: "#f8fafc", textAlign: "left" }}>
+                        <th style={{ padding: "6px 8px" }}>Rule</th>
+                        <th style={{ padding: "6px 8px" }}>Targeted inputs</th>
+                        <th style={{ padding: "6px 8px" }}>Paired comparisons</th>
+                        <th style={{ padding: "6px 8px" }}>Execution evidence</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sourceRuleEvidenceEntries.map(([ruleId, evidence]) => (
+                        <tr key={ruleId} style={{ borderTop: "1px solid #e2e8f0" }}>
+                          <td style={{ padding: "6px 8px", fontFamily: "monospace" }}>{ruleId}</td>
+                          <td style={{ padding: "6px 8px" }}>
+                            {(evidence.targeted_input_ids || []).join(", ") || "None"}
+                          </td>
+                          <td style={{ padding: "6px 8px" }}>
+                            {(evidence.paired_comparison_outcomes || []).map((outcome) =>
+                              `${outcome.input_id}: ${outcome.comparison}`
+                            ).join("; ") || "Not evaluated"}
+                          </td>
+                          <td style={{ padding: "6px 8px", fontFamily: "monospace" }}>
+                            {(evidence.paired_comparison_outcomes || []).map((outcome) =>
+                              [outcome.legacy_evidence_id, outcome.modern_evidence_id].filter(Boolean).join(" / ")
+                            ).filter(Boolean).join("; ") || "Unavailable"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div style={{ fontSize: "12px", color: "#64748b", marginBottom: "12px" }}>
+                  Per-rule execution traceability is unavailable for this run.
+                </div>
+              )}
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <div>
+                  <strong style={{ fontSize: "12px" }}>Mandatory evidence gates</strong>
+                  {Object.keys(evidenceGates).length > 0 ? (
+                    <ul style={{ fontSize: "11px", margin: "6px 0", paddingLeft: "18px" }}>
+                      {Object.entries(evidenceGates).map(([name, passed]) => (
+                        <li key={name} style={{ color: passed ? "#166534" : "#991b1b" }}>
+                          {name.replaceAll("_", " ")}: {passed ? "PASS" : "BLOCK"}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div style={{ fontSize: "11px", color: "#64748b", marginTop: "6px" }}>Gate results unavailable.</div>
+                  )}
+                  {(meta.evidence_gate_reasons || []).length > 0 && (
+                    <ul style={{ fontSize: "11px", color: "#991b1b", margin: "6px 0", paddingLeft: "18px" }}>
+                      {meta.evidence_gate_reasons.map((reason, index) => <li key={index}>{reason}</li>)}
+                    </ul>
+                  )}
+                </div>
+                <div>
+                  <strong style={{ fontSize: "12px" }}>Evidence-quality factors</strong>
+                  {Object.keys(evidenceFactors).length > 0 ? (
+                    <ul style={{ fontSize: "11px", margin: "6px 0", paddingLeft: "18px" }}>
+                      {Object.entries(evidenceFactors).map(([name, value]) => (
+                        <li key={name}>
+                          {name.replaceAll("_", " ")}: {Number(value * 100).toFixed(1)}%
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div style={{ fontSize: "11px", color: "#64748b", marginTop: "6px" }}>Factor results unavailable.</div>
+                  )}
+                </div>
               </div>
             </section>
 
@@ -1992,9 +2118,35 @@ export default function CertificationTab({
                             </td>
                             <td style={{ padding: "8px 10px", fontFamily: "monospace", color: "#059669", fontWeight: "600" }}>
                               {JSON.stringify(c.legacy_output)}
+                              <div style={{ fontFamily: "inherit", fontSize: "10px", color: "#64748b", fontWeight: "400" }}>
+                                Status: {c.legacy_execution_status || "UNKNOWN"}
+                              </div>
+                              {c.legacy_error && (
+                                <div style={{ fontFamily: "inherit", fontSize: "10px", color: "#991b1b", fontWeight: "400" }}>
+                                  Error: {String(c.legacy_error)}
+                                </div>
+                              )}
+                              {c.legacy_state_changes && (
+                                <div style={{ fontFamily: "inherit", fontSize: "10px", color: "#475569", fontWeight: "400" }}>
+                                  State: {JSON.stringify(c.legacy_state_changes)}
+                                </div>
+                              )}
                             </td>
                             <td style={{ padding: "8px 10px", fontFamily: "monospace", color: isMatch ? "#059669" : "#dc2626", fontWeight: "600" }}>
                               {JSON.stringify(c.modern_output)}
+                              <div style={{ fontFamily: "inherit", fontSize: "10px", color: "#64748b", fontWeight: "400" }}>
+                                Status: {c.modern_execution_status || "UNKNOWN"}
+                              </div>
+                              {c.modern_error && (
+                                <div style={{ fontFamily: "inherit", fontSize: "10px", color: "#991b1b", fontWeight: "400" }}>
+                                  Error: {String(c.modern_error)}
+                                </div>
+                              )}
+                              {c.modern_state_changes && (
+                                <div style={{ fontFamily: "inherit", fontSize: "10px", color: "#475569", fontWeight: "400" }}>
+                                  State: {JSON.stringify(c.modern_state_changes)}
+                                </div>
+                              )}
                             </td>
                             <td style={{ padding: "8px 10px" }}>
                               <span

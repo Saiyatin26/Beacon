@@ -145,6 +145,10 @@ class CertificationCase(BaseModel):
     modern_output_json: str
     legacy_execution_status: str = "UNKNOWN"
     modern_execution_status: str = "UNKNOWN"
+    legacy_error_json: str = ""
+    modern_error_json: str = ""
+    legacy_state_json: str = ""
+    modern_state_json: str = ""
     execution_time_ms: float = 0.0
     oracle_result: str
     classification: str
@@ -201,6 +205,11 @@ class CertificationContext(BaseModel):
     is_forced_recompute: bool = False
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
     execution_metadata: dict[str, Any] = Field(default_factory=dict)
+    source_rule_manifest_hash: str = ""
+    source_rule_coverage: Optional[float] = None
+    source_rule_integrity: Optional[float] = None
+    dual_source_alignment_complete: bool = False
+    source_rule_evidence: dict[str, Any] = Field(default_factory=dict)
     run_status: str = "NOT_CERTIFIED"
     threshold_resolution_id: Optional[str] = None
     threshold_resolution_fingerprint: Optional[str] = None

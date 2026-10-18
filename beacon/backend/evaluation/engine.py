@@ -7,8 +7,6 @@ cryptographically bound, audit-ready EvaluationResult objects.
 """
 
 from datetime import datetime, timezone
-import hashlib
-import json
 import logging
 import uuid
 from typing import Any, Optional, Union
@@ -29,6 +27,7 @@ from .models import (
     EvaluationSummary,
     EvaluationVerdict,
     InputEvaluationResult,
+    compute_evaluation_result_hash,
 )
 from .policies import ComparisonPolicy, resolve_comparison_policy
 
@@ -118,6 +117,10 @@ class BehavioralEvaluationEngine:
                 "integrity_issues_count": len(integrity_issues),
                 "integrity_issues": integrity_issues,
                 "policy_description": active_policy.description,
+                "selected_dimensions": [
+                    dimension.value if hasattr(dimension, "value") else str(dimension)
+                    for dimension in selected_dimensions
+                ],
             },
         )
 
@@ -772,71 +775,13 @@ class BehavioralEvaluationEngine:
         result: EvaluationResult,
         selected_dimensions: Optional[list[BehaviorDimension]] = None,
     ) -> str:
-        """Computes deterministic SHA-256 fingerprint over canonical evaluation content."""
-        canonical_diffs = []
-        for d in result.differences:
-            canonical_diffs.append({
-                "dimension": d.dimension.value if hasattr(d.dimension, "value") else str(d.dimension),
-                "input_id": d.input_id,
-                "difference_type": d.difference_type.value if hasattr(d.difference_type, "value") else str(d.difference_type),
-                "field_path": d.field_path,
-                "reference_value": d.reference_value,
-                "target_value": d.target_value,
-                "reference_evidence_id": d.reference_evidence_id,
-                "target_evidence_id": d.target_evidence_id,
-                "comparison_method": d.comparison_method,
-                "details": d.details,
-            })
-        canonical_diffs.sort(key=lambda x: (x["input_id"], x["dimension"], x["difference_type"], str(x["field_path"])))
-
-        canonical_inputs = []
-        for inp in result.input_results:
-            dim_res_canonical = {}
-            for k, dr in inp.dimension_results.items():
-                k_str = k.value if hasattr(k, "value") else str(k)
-                dim_res_canonical[k_str] = {
-                    "verdict": dr.verdict.value if hasattr(dr.verdict, "value") else str(dr.verdict),
-                    "comparison_method": dr.comparison_method,
-                    "difference_type": dr.difference_type.value if hasattr(dr.difference_type, "value") and dr.difference_type else (str(dr.difference_type) if dr.difference_type else None),
-                }
-            canonical_inputs.append({
-                "input_id": inp.input_id,
-                "verdict": inp.verdict.value if hasattr(inp.verdict, "value") else str(inp.verdict),
-                "boundary_category": inp.boundary_category,
-                "dimensions": dim_res_canonical,
-            })
-        canonical_inputs.sort(key=lambda x: x["input_id"])
-
-        dim_names = [d.value if hasattr(d, "value") else str(d) for d in (selected_dimensions or list(BehaviorDimension))]
-        dim_names.sort()
-
-        canonical_dict = {
-            "bundle_id": result.bundle_id or "",
-            "application_id": result.application_id or "",
-            "bundle_hash": result.bundle_hash or "",
-            "policy_id": result.policy_id,
-            "policy_hash": result.policy_hash,
-            "selected_dimensions": dim_names,
-            "verdict": result.verdict.value if hasattr(result.verdict, "value") else str(result.verdict),
-            "summary": {
-                "total_inputs": result.summary.total_inputs,
-                "evaluated_inputs": result.summary.evaluated_inputs,
-                "equivalent_inputs": result.summary.equivalent_inputs,
-                "different_inputs": result.summary.different_inputs,
-                "inconclusive_inputs": result.summary.inconclusive_inputs,
-                "error_inputs": result.summary.error_inputs,
-                "not_applicable_inputs": result.summary.not_applicable_inputs,
-                "overall_verdict": result.summary.overall_verdict.value if hasattr(result.summary.overall_verdict, "value") else str(result.summary.overall_verdict),
-                "total_differences": result.summary.total_differences,
-                "behavioral_score": round(float(getattr(result.summary, "behavioral_score", 1.0)), 6),
-                "observed_deviation": round(float(getattr(result.summary, "observed_deviation", 0.0)), 6),
-                "coverage": round(float(getattr(result.summary, "coverage", 1.0)), 6),
-            },
-            "inputs": canonical_inputs,
-            "differences": canonical_diffs,
-        }
-        canonical_str = json.dumps(canonical_dict, sort_keys=True, separators=(",", ":"), default=str)
-        return hashlib.sha256(canonical_str.encode("utf-8")).hexdigest()
+        """Use the same canonical serializer as downstream integrity verification."""
+        if selected_dimensions is not None:
+            result.metadata["selected_dimensions"] = [
+                dimension.value if hasattr(dimension, "value") else str(dimension)
+                for dimension in selected_dimensions
+            ]
+        return compute_evaluation_result_hash(result)
 
 
 behavioral_evaluation_engine = BehavioralEvaluationEngine()

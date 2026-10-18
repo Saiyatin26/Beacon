@@ -1148,8 +1148,10 @@ export default function App() {
                     style={{ width: "100%", padding: "8px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", background: "#ffffff" }}
                   >
                     <option value="CONTROLLED">CONTROLLED (Frozen Deterministic OracleSet)</option>
-                    <option value="FULL_BEACON">FULL_BEACON (Invariant Discovery & Synthesis)</option>
                   </select>
+                  <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px" }}>
+                    Full BEACON source extraction and paired execution are available in the repository certification workflow.
+                  </div>
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: "12px", fontWeight: "600", color: "#475569", marginBottom: "4px" }}>Preferred Provider</label>
@@ -1177,7 +1179,7 @@ export default function App() {
                     onChange={(e) => { setCustomAllowExternalLLM(e.target.checked); invalidateCustomState(); }}
                   />
                   <span>
-                    <strong>Explicit Cloud LLM Consent:</strong> Allow sending dataset inputs and traces to external cloud providers (OpenRouter/Gemini/Anthropic) when in FULL_BEACON mode.
+                    <strong>Explicit Cloud LLM Consent:</strong> Allow sending data to external cloud providers for supported AI workflows.
                   </span>
                 </label>
                 <div style={{ fontSize: "11px", color: "#64748b", marginTop: "4px", marginLeft: "24px" }}>

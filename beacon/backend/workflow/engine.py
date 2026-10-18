@@ -31,8 +31,10 @@ import hashlib
 import json
 import logging
 import math
+from pathlib import Path
 import sqlite3
 import time
+from types import SimpleNamespace
 from typing import Any, Optional
 import uuid
 
@@ -360,6 +362,7 @@ class CanonicalV2WorkflowEngine:
                     ref_adapter=ref_adapter,
                     target_adapter=target_adapter,
                     test_inputs=test_inputs,
+                    evaluated_input_cases=evaluated_input_cases,
                     eval_result=eval_result,
                     oracle_set=oracle_set,
                     threshold_res=threshold_res,
@@ -435,6 +438,7 @@ class CanonicalV2WorkflowEngine:
                     explanation=explanation_dict,
                     audit_status=audit_status_str,
                     timings_ms=timings,
+                    metadata=run.metadata,
                 )
 
             except ApplicationResolutionError as exc:
@@ -586,40 +590,24 @@ class CanonicalV2WorkflowEngine:
             inp_id = getattr(inp, "input_id", f"inp_{idx+1}")
 
             # Execute reference
-            ref_res = ref_adapter.execute(inp_vals) if hasattr(ref_adapter, "execute") else ref_adapter(inp_vals)
-
-            # Strict Fail-Closed Guard: genuine COBOL execution must not fail or crash
-            if getattr(ref_res, "execution_status", "") == "EXCEPTION":
-                if getattr(ref_adapter, "adapter_type", "") == "cobol_cics":
-                    err_msg = getattr(ref_res, "error_message", "Genuine COBOL runtime execution failed")
-                    logger.warning(f"Fail-closed guard triggered: genuine COBOL runtime execution failed on input {inp_id}: {err_msg}")
-                    return self._fail_run(
-                        run,
-                        WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
-                        f"Genuine COBOL runtime execution failed on input '{inp_id}': {err_msg}. "
-                        "Authoritative execution evidence could not be obtained from real COBOL program. "
-                        "Certification is INCONCLUSIVE and never substitutes synthetic results.",
-                        audit_status="PERSISTED",
-                    )
-
-            if getattr(ref_res, "execution_status", "") != "SUCCESS":
-                return self._fail_run(
-                    run,
-                    WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
-                    (
-                        f"Legacy/reference execution did not succeed for input '{inp_id}' "
-                        f"(status={getattr(ref_res, 'execution_status', 'UNKNOWN')}): "
-                        f"{getattr(ref_res, 'error_message', '')}"
-                    ),
-                    audit_status="PERSISTED",
+            try:
+                ref_res = ref_adapter.execute(inp_vals) if hasattr(ref_adapter, "execute") else ref_adapter(inp_vals)
+            except Exception as exc:
+                logger.exception("Reference execution raised for input '%s'.", inp_id)
+                ref_res = SimpleNamespace(
+                    execution_status="EXCEPTION",
+                    error_message=str(exc),
+                    error_type=type(exc).__name__,
                 )
 
-            if hasattr(ref_res, "normalized_outputs") and ref_res.normalized_outputs is not None:
+            if getattr(ref_res, "normalized_outputs", None) is not None:
                 ref_val = ref_res.normalized_outputs
-            elif hasattr(ref_res, "raw_outputs") and ref_res.raw_outputs is not None:
+            elif getattr(ref_res, "raw_outputs", None) is not None:
                 ref_val = ref_res.raw_outputs
-            elif hasattr(ref_res, "output"):
+            elif getattr(ref_res, "output", None) is not None:
                 ref_val = ref_res.output
+            elif isinstance(ref_res, dict) and getattr(ref_res, "execution_status", None):
+                ref_val = None
             else:
                 ref_val = ref_res
 
@@ -628,9 +616,21 @@ class CanonicalV2WorkflowEngine:
             ref_exec_ids.append(ref_exec_id)
 
             ref_payload = {
-                "output": ref_val,
-                "input": inp_vals,
+                "normalized_output": (
+                    {
+                        "return_value": ref_val,
+                        "state_changes": getattr(ref_res, "state_changes", None),
+                        "side_effects": getattr(ref_res, "side_effects", []),
+                    }
+                    if getattr(ref_res, "state_changes", None) is not None
+                    or getattr(ref_res, "side_effects", None)
+                    else (ref_val if isinstance(ref_val, dict) else {"decision": ref_val} if ref_val is not None else {})
+                ),
                 "raw_output": getattr(ref_res, "raw_outputs", ref_val),
+                "execution_status": getattr(ref_res, "execution_status", "UNKNOWN"),
+                "error_message": getattr(ref_res, "error_message", None),
+                "exit_code": getattr(ref_res, "exit_code", None),
+                "duration_ms": getattr(ref_res, "duration_ms", 0.0),
             }
 
             rec_ref = EvidenceRecord(
@@ -660,27 +660,61 @@ class CanonicalV2WorkflowEngine:
                     persistence_status=EvidencePersistenceStatus.PERSISTED,
                 )
             )
-
-            # Execute target
-            tgt_res = target_adapter.execute(inp_vals) if hasattr(target_adapter, "execute") else target_adapter(inp_vals)
-            if getattr(tgt_res, "execution_status", "") != "SUCCESS":
-                return self._fail_run(
-                    run,
-                    WorkflowErrorCode.CERTIFICATION_INCONCLUSIVE,
-                    (
-                        f"Modern/target execution did not succeed for input '{inp_id}' "
-                        f"(status={getattr(tgt_res, 'execution_status', 'UNKNOWN')}): "
-                        f"{getattr(tgt_res, 'error_message', '')}"
-                    ),
-                    audit_status="PERSISTED",
+            ref_error_id = None
+            if getattr(ref_res, "execution_status", "") != "SUCCESS":
+                ref_error_id = f"EVID-REF-ERR-{run.workflow_run_id[:6]}-{idx+1}"
+                ref_error = EvidenceRecord(
+                    evidence_id=ref_error_id,
+                    session_id=session_id,
+                    execution_id=ref_exec_id,
+                    application_id=spec.application_id,
+                    role="reference",
+                    input_id=inp_id,
+                    evidence_type=EvidenceType.ERROR,
+                    payload={
+                        "category": getattr(ref_res, "error_type", None) or "EXECUTION_ERROR",
+                        "message": getattr(ref_res, "error_message", "") or "Execution did not complete successfully.",
+                        "exception_type": getattr(ref_res, "error_type", None),
+                        "execution_id": ref_exec_id,
+                        "provenance": {"execution_status": getattr(ref_res, "execution_status", "UNKNOWN")},
+                    },
+                    capture_status=EvidenceCaptureStatus.CAPTURED,
+                    persistence_status=EvidencePersistenceStatus.PERSISTED,
+                )
+                self.ev_store.save_record(ref_error)
+                all_evidence_records.append(ref_error)
+                manifest_items.append(
+                    EvidenceManifestItem(
+                        evidence_id=ref_error_id,
+                        evidence_type=EvidenceType.ERROR,
+                        role="reference",
+                        input_id=inp_id,
+                        content_hash=ref_error.content_hash,
+                        size_bytes=ref_error.size_bytes,
+                        capture_status=EvidenceCaptureStatus.CAPTURED,
+                        persistence_status=EvidencePersistenceStatus.PERSISTED,
+                    )
                 )
 
-            if hasattr(tgt_res, "normalized_outputs") and tgt_res.normalized_outputs is not None:
+            # Execute target
+            try:
+                tgt_res = target_adapter.execute(inp_vals) if hasattr(target_adapter, "execute") else target_adapter(inp_vals)
+            except Exception as exc:
+                logger.exception("Target execution raised for input '%s'.", inp_id)
+                tgt_res = SimpleNamespace(
+                    execution_status="EXCEPTION",
+                    error_message=str(exc),
+                    error_type=type(exc).__name__,
+                )
+
+            if getattr(tgt_res, "normalized_outputs", None) is not None:
                 tgt_val = tgt_res.normalized_outputs
-            elif hasattr(tgt_res, "raw_outputs") and tgt_res.raw_outputs is not None:
+            elif getattr(tgt_res, "raw_outputs", None) is not None:
                 tgt_val = tgt_res.raw_outputs
-            elif hasattr(tgt_res, "output"):
+            elif getattr(tgt_res, "output", None) is not None:
                 tgt_val = tgt_res.output
+            elif isinstance(tgt_res, dict) and getattr(tgt_res, "execution_status", None):
+                tgt_val = None
             else:
                 tgt_val = tgt_res
 
@@ -689,9 +723,21 @@ class CanonicalV2WorkflowEngine:
             tgt_exec_ids.append(tgt_exec_id)
 
             tgt_payload = {
-                "output": tgt_val,
-                "input": inp_vals,
+                "normalized_output": (
+                    {
+                        "return_value": tgt_val,
+                        "state_changes": getattr(tgt_res, "state_changes", None),
+                        "side_effects": getattr(tgt_res, "side_effects", []),
+                    }
+                    if getattr(tgt_res, "state_changes", None) is not None
+                    or getattr(tgt_res, "side_effects", None)
+                    else (tgt_val if isinstance(tgt_val, dict) else {"decision": tgt_val} if tgt_val is not None else {})
+                ),
                 "raw_output": getattr(tgt_res, "raw_outputs", tgt_val),
+                "execution_status": getattr(tgt_res, "execution_status", "UNKNOWN"),
+                "error_message": getattr(tgt_res, "error_message", None),
+                "exit_code": getattr(tgt_res, "exit_code", None),
+                "duration_ms": getattr(tgt_res, "duration_ms", 0.0),
             }
 
             rec_tgt = EvidenceRecord(
@@ -721,6 +767,41 @@ class CanonicalV2WorkflowEngine:
                     persistence_status=EvidencePersistenceStatus.PERSISTED,
                 )
             )
+            tgt_error_id = None
+            if getattr(tgt_res, "execution_status", "") != "SUCCESS":
+                tgt_error_id = f"EVID-TGT-ERR-{run.workflow_run_id[:6]}-{idx+1}"
+                tgt_error = EvidenceRecord(
+                    evidence_id=tgt_error_id,
+                    session_id=session_id,
+                    execution_id=tgt_exec_id,
+                    application_id=spec.application_id,
+                    role="target",
+                    input_id=inp_id,
+                    evidence_type=EvidenceType.ERROR,
+                    payload={
+                        "category": getattr(tgt_res, "error_type", None) or "EXECUTION_ERROR",
+                        "message": getattr(tgt_res, "error_message", "") or "Execution did not complete successfully.",
+                        "exception_type": getattr(tgt_res, "error_type", None),
+                        "execution_id": tgt_exec_id,
+                        "provenance": {"execution_status": getattr(tgt_res, "execution_status", "UNKNOWN")},
+                    },
+                    capture_status=EvidenceCaptureStatus.CAPTURED,
+                    persistence_status=EvidencePersistenceStatus.PERSISTED,
+                )
+                self.ev_store.save_record(tgt_error)
+                all_evidence_records.append(tgt_error)
+                manifest_items.append(
+                    EvidenceManifestItem(
+                        evidence_id=tgt_error_id,
+                        evidence_type=EvidenceType.ERROR,
+                        role="target",
+                        input_id=inp_id,
+                        content_hash=tgt_error.content_hash,
+                        size_bytes=tgt_error.size_bytes,
+                        capture_status=EvidenceCaptureStatus.CAPTURED,
+                        persistence_status=EvidencePersistenceStatus.PERSISTED,
+                    )
+                )
 
             evaluated_input_cases.append({
                 "input_id": inp_id,
@@ -731,6 +812,12 @@ class CanonicalV2WorkflowEngine:
                 "tgt_execution_status": getattr(tgt_res, "execution_status", "UNKNOWN"),
                 "ref_eid": ref_eid,
                 "tgt_eid": tgt_eid,
+                "ref_error": getattr(ref_res, "error_message", None),
+                "tgt_error": getattr(tgt_res, "error_message", None),
+                "ref_state_changes": getattr(ref_res, "state_changes", None),
+                "tgt_state_changes": getattr(tgt_res, "state_changes", None),
+                "ref_error_evidence_id": ref_error_id,
+                "tgt_error_evidence_id": tgt_error_id,
             })
 
         # Assemble canonical EvidenceManifest & EvidenceBundle
@@ -1306,6 +1393,7 @@ class CanonicalV2WorkflowEngine:
         ref_adapter: Any,
         target_adapter: Any,
         test_inputs: list[Any],
+        evaluated_input_cases: list[dict[str, Any]],
         eval_result: EvaluationResult,
         oracle_set: OracleSet,
         threshold_res: ThresholdResolution,
@@ -1348,6 +1436,195 @@ class CanonicalV2WorkflowEngine:
         llm_provider_metadata = (spec.provenance or {}).get("llm_provider", {})
         if not isinstance(llm_provider_metadata, dict):
             llm_provider_metadata = {}
+        is_full_beacon = cert_policy.evaluation_mode.upper() == "FULL_BEACON"
+        discovered_rules = (spec.metadata or {}).get("discovered_rules", [])
+        discovery_provenance = (spec.provenance or {}).get("input_discovery_provenance", {})
+        rule_manifest_hash = str(discovery_provenance.get("rule_manifest_hash", ""))
+        canonical_rule_hash = hashlib.sha256(
+            json.dumps(
+                discovered_rules,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest() if discovered_rules else ""
+        alignment_complete = bool(
+            is_full_beacon
+            and discovered_rules
+            and rule_manifest_hash
+            and rule_manifest_hash == canonical_rule_hash
+            and all(
+                rule.get("alignment_status") == "MATCH"
+                and rule.get("source_evidence", {}).get("legacy")
+                and rule.get("source_evidence", {}).get("modern")
+                for rule in discovered_rules
+            )
+        )
+        execution_results = {
+            item.input_id: item
+            for item in getattr(eval_result, "input_results", [])
+        }
+        execution_cases = {
+            item["input_id"]: item
+            for item in evaluated_input_cases
+            if item.get("input_id")
+        }
+        from mining.source_rule_extractor import rule_input_matches, rule_output_matches
+
+        rule_evidence: dict[str, Any] = {}
+        tested_rule_ids: set[str] = set()
+        for rule in discovered_rules:
+            rule_id = str(rule.get("rule_id", ""))
+            targeted_inputs = [
+                item
+                for item in test_inputs
+                if getattr(item, "provenance", {}).get("condition_provenance") == rule_id
+            ]
+            outcomes = []
+            for item in targeted_inputs:
+                evaluated = execution_results.get(item.input_id)
+                execution_case = execution_cases.get(item.input_id, {})
+                verdict = getattr(evaluated, "verdict", None) if evaluated else None
+                verdict = getattr(verdict, "value", verdict)
+                expected_behavior = rule.get("expected_behavior", {})
+                legacy_contract = expected_behavior.get("legacy", {})
+                modern_contract = expected_behavior.get("modern", {})
+                input_matches = bool(
+                    legacy_contract
+                    and modern_contract
+                    and rule_input_matches(
+                        legacy_contract.get("input_condition", {}),
+                        getattr(item, "values", {}),
+                    )
+                    and rule_input_matches(
+                        modern_contract.get("input_condition", {}),
+                        getattr(item, "values", {}),
+                    )
+                )
+                legacy_rule_validated = bool(
+                    input_matches
+                    and execution_case.get("ref_execution_status") == "SUCCESS"
+                    and rule_output_matches(
+                        legacy_contract.get("expected_output", {}),
+                        execution_case.get("ref_val"),
+                    )
+                )
+                modern_rule_validated = bool(
+                    input_matches
+                    and execution_case.get("tgt_execution_status") == "SUCCESS"
+                    and rule_output_matches(
+                        modern_contract.get("expected_output", {}),
+                        execution_case.get("tgt_val"),
+                    )
+                )
+                outcomes.append(
+                    {
+                        "input_id": item.input_id,
+                        "input_hash": getattr(item, "input_hash", ""),
+                        "comparison": verdict or "NOT_EVALUATED",
+                        "legacy_rule_validation": (
+                            "PASS" if legacy_rule_validated else "FAIL_OR_NOT_APPLICABLE"
+                        ),
+                        "modern_rule_validation": (
+                            "PASS" if modern_rule_validated else "FAIL_OR_NOT_APPLICABLE"
+                        ),
+                        "legacy_evidence_id": execution_case.get("ref_eid"),
+                        "modern_evidence_id": execution_case.get("tgt_eid"),
+                        "legacy_execution_status": execution_case.get("ref_execution_status", "UNKNOWN"),
+                        "modern_execution_status": execution_case.get("tgt_execution_status", "UNKNOWN"),
+                    }
+                )
+                if legacy_rule_validated and modern_rule_validated:
+                    tested_rule_ids.add(rule_id)
+            rule_evidence[rule_id] = {
+                "source_evidence": rule.get("source_evidence", {}),
+                "expected_behavior": rule.get("expected_behavior", {}),
+                "targeted_input_ids": [item.input_id for item in targeted_inputs],
+                "paired_comparison_outcomes": outcomes,
+            }
+        source_rule_coverage = (
+            len(tested_rule_ids) / len(discovered_rules)
+            if discovered_rules
+            else None
+        )
+        source_integrity: Optional[float] = None
+        if is_full_beacon:
+            source_integrity = 0.0
+            source_roots = {}
+            for role in ("legacy", "modern"):
+                provenance_key = f"{role}_provenance"
+                side_provenance = (spec.provenance or {}).get(provenance_key, {})
+                local_path = side_provenance.get("local_path")
+                expected_hash = side_provenance.get("content_hash")
+                if local_path and expected_hash:
+                    source_roots[role] = (Path(local_path), expected_hash)
+            if len(source_roots) == 2 and discovered_rules and alignment_complete:
+                try:
+                    from certification.adapters import compute_implementation_hash
+
+                    current_sources_match = all(
+                        compute_implementation_hash(root) == expected_hash
+                        for root, expected_hash in source_roots.values()
+                    )
+                    anchors_match = True
+                    for rule in discovered_rules:
+                        for role in ("legacy", "modern"):
+                            evidence = rule.get("source_evidence", {})
+                            anchors = (evidence.get(role, {}), evidence.get(f"{role}_effect", {}))
+                            root = source_roots[role][0]
+                            for anchor in anchors:
+                                anchor_path = root / anchor.get("path", "") if root.is_dir() else root
+                                if not anchor_path.is_file():
+                                    anchors_match = False
+                                    break
+                                current_file_hash = hashlib.sha256(anchor_path.read_bytes()).hexdigest()
+                                try:
+                                    current_lines = anchor_path.read_text(encoding="utf-8").splitlines()
+                                except (OSError, UnicodeDecodeError):
+                                    anchors_match = False
+                                    break
+                                line_number = int(anchor.get("line", 0))
+                                if (
+                                    current_file_hash != anchor.get("file_hash")
+                                    or line_number < 1
+                                    or line_number > len(current_lines)
+                                    or current_lines[line_number - 1].strip() != anchor.get("excerpt")
+                                ):
+                                    anchors_match = False
+                                    break
+                            if not anchors_match:
+                                break
+                        if not anchors_match:
+                            break
+                    input_hash_matches = (
+                        bool(run.input_set_hash)
+                        and compute_input_set_canonical_hash(test_inputs) == run.input_set_hash
+                    )
+                    source_integrity = float(
+                        current_sources_match and anchors_match and input_hash_matches
+                    )
+                except (OSError, ValueError):
+                    logger.exception(
+                        "Could not verify current source and input evidence for FULL_BEACON run '%s'.",
+                        run.workflow_run_id,
+                    )
+                    source_integrity = 0.0
+
+        provider_calls = llm_provider_metadata.get("provider_calls", {})
+        required_calls = {"legacy", "modern", "alignment", "test_generation"}
+        expected_ai_providers = {"openrouter", "gemini", "anthropic"}
+        provider_calls_valid = (
+            isinstance(provider_calls, dict)
+            and required_calls.issubset(provider_calls)
+            and all(
+                isinstance(provider_calls.get(name), dict)
+                and provider_calls[name].get("actual_provider") in expected_ai_providers
+                and not provider_calls[name].get("fallback_used", False)
+                for name in required_calls
+            )
+        )
+        actual_providers = llm_provider_metadata.get("actual_providers", [])
+        provider_name = next(iter(actual_providers), "") if isinstance(actual_providers, list) else ""
         execution_metadata: dict[str, Any] = {}
         for side, adapter in (("legacy", ref_adapter), ("modern", target_adapter)):
             if getattr(adapter, "adapter_type", "") == "cobol_cics":
@@ -1374,8 +1651,14 @@ class CanonicalV2WorkflowEngine:
             oracle_set_id=getattr(oracle_set, "oracle_set_id", ""),
             oracle_set_hash=getattr(oracle_set, "oracle_set_hash", "") or getattr(oracle_set, "fingerprint", ""),
             evaluation_mode=cert_policy.evaluation_mode or "CONTROLLED",
-            provider=str(llm_provider_metadata.get("actual_provider") or "offline"),
-            model=str(llm_provider_metadata.get("model") or "deterministic"),
+            provider=str(provider_name or llm_provider_metadata.get("actual_provider") or "offline"),
+            model=str(
+                llm_provider_metadata.get("provider_calls", {})
+                .get("legacy", {})
+                .get("model", "")
+                or llm_provider_metadata.get("model")
+                or "deterministic"
+            ),
             generation_method=(
                 "AI_ASSISTED_DISCOVERY"
                 if llm_provider_metadata.get("actual_provider") not in (None, "offline")
@@ -1383,6 +1666,18 @@ class CanonicalV2WorkflowEngine:
             ),
             provider_metadata=llm_provider_metadata,
             execution_metadata=execution_metadata,
+            source_rule_manifest_hash=rule_manifest_hash,
+            source_rule_coverage=source_rule_coverage,
+            source_rule_integrity=source_integrity,
+            dual_source_alignment_complete=alignment_complete,
+            source_rule_evidence={
+                "rule_manifest_hash": rule_manifest_hash,
+                "canonical_rule_hash": canonical_rule_hash,
+                "provider_calls_valid": provider_calls_valid,
+                "rules": rule_evidence,
+                "tested_rule_ids": sorted(tested_rule_ids),
+                "total_rule_count": len(discovered_rules),
+            },
             policy_id=cert_policy.policy_id,
             policy_version=cert_policy.version,
             policy_hash=cert_policy.policy_hash or cert_policy.compute_hash(),
@@ -1436,6 +1731,73 @@ class CanonicalV2WorkflowEngine:
         status_str = artifact.status.value if hasattr(artifact.status, "value") else str(artifact.status)
         run.certification_status = status_str
         run.certification_score = artifact.score
+        run.metadata.update(
+            {
+                "evaluation_mode": cert_ctx.evaluation_mode,
+                "discovered_rules": discovered_rules,
+                "source_rule_manifest_hash": cert_ctx.source_rule_manifest_hash,
+                "source_rule_coverage": cert_ctx.source_rule_coverage,
+                "source_rule_integrity": cert_ctx.source_rule_integrity,
+                "dual_source_alignment_complete": cert_ctx.dual_source_alignment_complete,
+                "source_rule_evidence": cert_ctx.source_rule_evidence,
+                "evidence_quality_score": artifact.metrics.evidence_quality_score,
+                "evidence_adjusted_score": artifact.metrics.evidence_adjusted_score,
+                "evidence_score_factors": artifact.metrics.evidence_score_factors,
+                "evidence_gate_results": artifact.metrics.evidence_gate_results,
+                "evidence_gate_reasons": artifact.metrics.evidence_gate_reasons,
+                "blocking_reasons": artifact.blocking_reasons,
+                "representative_cases": [
+                    {
+                        "case_index": index,
+                        "input_id": case["input_id"],
+                        "input": case["input_values"],
+                        "legacy_output": case["ref_val"],
+                        "modern_output": case["tgt_val"],
+                        "legacy_execution_status": case["ref_execution_status"],
+                        "modern_execution_status": case["tgt_execution_status"],
+                        "legacy_error": case["ref_error"],
+                        "modern_error": case["tgt_error"],
+                        "legacy_state_changes": case["ref_state_changes"],
+                        "modern_state_changes": case["tgt_state_changes"],
+                        "classification": (
+                            "MATCH"
+                            if getattr(
+                                execution_results.get(case["input_id"]),
+                                "verdict",
+                                None,
+                            )
+                            == EvaluationVerdict.EQUIVALENT
+                            else "REGRESSION"
+                            if getattr(
+                                execution_results.get(case["input_id"]),
+                                "verdict",
+                                None,
+                            )
+                            == EvaluationVerdict.DIFFERENT
+                            else "INCONCLUSIVE"
+                        ),
+                        "oracle_result": (
+                            "PASS"
+                            if getattr(
+                                execution_results.get(case["input_id"]),
+                                "verdict",
+                                None,
+                            )
+                            == EvaluationVerdict.EQUIVALENT
+                            else "FAIL"
+                            if getattr(
+                                execution_results.get(case["input_id"]),
+                                "verdict",
+                                None,
+                            )
+                            == EvaluationVerdict.DIFFERENT
+                            else "INCONCLUSIVE"
+                        ),
+                    }
+                    for index, case in enumerate(evaluated_input_cases[:25], start=1)
+                ],
+            }
+        )
         timings["certification_ms"] = round((time.perf_counter() - t_stage) * 1000.0, 2)
         return artifact
 
@@ -1545,6 +1907,10 @@ class CanonicalV2WorkflowEngine:
                     modern_output_json=modern_out_json,
                     legacy_execution_status=case_data.get("ref_execution_status", "UNKNOWN"),
                     modern_execution_status=case_data.get("tgt_execution_status", "UNKNOWN"),
+                    legacy_error_json=json.dumps(case_data.get("ref_error"), sort_keys=True, default=str),
+                    modern_error_json=json.dumps(case_data.get("tgt_error"), sort_keys=True, default=str),
+                    legacy_state_json=json.dumps(case_data.get("ref_state_changes"), sort_keys=True, default=str),
+                    modern_state_json=json.dumps(case_data.get("tgt_state_changes"), sort_keys=True, default=str),
                     execution_time_ms=0.0,
                     oracle_result="PASS" if is_equiv else "VIOLATED",
                     classification=cls_str,
@@ -1781,6 +2147,7 @@ class CanonicalV2WorkflowEngine:
                 explanation=None,
                 audit_status="PERSISTED",
                 timings_ms=run.stage_timings_ms,
+                metadata=run.metadata,
             )
         except Exception as e:
             logger.warning(f"Failed to verify existing completed run '{run.workflow_run_id}': {e}")

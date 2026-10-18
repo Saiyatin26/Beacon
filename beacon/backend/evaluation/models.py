@@ -258,35 +258,118 @@ class EvaluationRequest(BaseModel):
 
 
 def compute_evaluation_result_hash(eval_res: EvaluationResult) -> str:
-    """Computes deterministic canonical SHA-256 fingerprint over all material behavioral evaluation findings."""
-    diff_inputs = getattr(eval_res.summary, "different_inputs", getattr(eval_res.summary, "divergent_inputs", 0))
-    beh_score = getattr(eval_res.summary, "behavioral_score", 1.0)
-    obs_dev = getattr(eval_res.summary, "observed_deviation", 0.0)
-    cov = getattr(eval_res.summary, "coverage", 1.0)
+    """Hash the complete behavioral findings using the evaluator's canonical representation."""
+    selected_dimensions = eval_res.metadata.get("selected_dimensions")
+    if selected_dimensions is None:
+        selected_dimensions = [dimension.value for dimension in BehaviorDimension]
+
+    canonical_diffs = []
+    for difference in eval_res.differences:
+        canonical_diffs.append(
+            {
+                "dimension": (
+                    difference.dimension.value
+                    if hasattr(difference.dimension, "value")
+                    else str(difference.dimension)
+                ),
+                "input_id": difference.input_id,
+                "difference_type": (
+                    difference.difference_type.value
+                    if hasattr(difference.difference_type, "value")
+                    else str(difference.difference_type)
+                ),
+                "field_path": difference.field_path,
+                "reference_value": difference.reference_value,
+                "target_value": difference.target_value,
+                "reference_evidence_id": difference.reference_evidence_id,
+                "target_evidence_id": difference.target_evidence_id,
+                "comparison_method": difference.comparison_method,
+                "details": difference.details,
+            }
+        )
+    canonical_diffs.sort(
+        key=lambda item: (
+            item["input_id"],
+            item["dimension"],
+            item["difference_type"],
+            str(item["field_path"]),
+        )
+    )
+
+    canonical_inputs = []
+    for input_result in eval_res.input_results:
+        dimensions = {}
+        for key, dimension_result in input_result.dimension_results.items():
+            key_name = key.value if hasattr(key, "value") else str(key)
+            dimensions[key_name] = {
+                "verdict": (
+                    dimension_result.verdict.value
+                    if hasattr(dimension_result.verdict, "value")
+                    else str(dimension_result.verdict)
+                ),
+                "comparison_method": dimension_result.comparison_method,
+                "difference_type": (
+                    dimension_result.difference_type.value
+                    if hasattr(dimension_result.difference_type, "value")
+                    else str(dimension_result.difference_type)
+                    if dimension_result.difference_type
+                    else None
+                ),
+            }
+        canonical_inputs.append(
+            {
+                "input_id": input_result.input_id,
+                "verdict": (
+                    input_result.verdict.value
+                    if hasattr(input_result.verdict, "value")
+                    else str(input_result.verdict)
+                ),
+                "boundary_category": input_result.boundary_category,
+                "dimensions": dimensions,
+            }
+        )
+    canonical_inputs.sort(key=lambda item: item["input_id"])
+
+    dimension_names = [
+        dimension.value if hasattr(dimension, "value") else str(dimension)
+        for dimension in selected_dimensions
+    ]
     material_data = {
-        "evaluation_id": eval_res.evaluation_id,
         "bundle_id": eval_res.bundle_id or "",
         "application_id": eval_res.application_id or "",
-        "verdict": eval_res.verdict.value if hasattr(eval_res.verdict, "value") else str(eval_res.verdict),
+        "bundle_hash": eval_res.bundle_hash or "",
         "policy_id": eval_res.policy_id,
         "policy_hash": eval_res.policy_hash,
-        "total_inputs": eval_res.summary.total_inputs,
-        "equivalent_inputs": eval_res.summary.equivalent_inputs,
-        "different_inputs": diff_inputs,
-        "total_differences": eval_res.summary.total_differences,
-        "behavioral_score": round(float(beh_score), 6),
-        "observed_deviation": round(float(obs_dev), 6),
-        "coverage": round(float(cov), 6),
-        "input_results": [
-            {
-                "input_id": item.input_id,
-                "verdict": item.verdict.value if hasattr(item.verdict, "value") else str(item.verdict),
-                "diff_count": len(item.differences),
-            }
-            for item in sorted(eval_res.input_results, key=lambda x: x.input_id)
-        ],
+        "selected_dimensions": sorted(dimension_names),
+        "verdict": (
+            eval_res.verdict.value
+            if hasattr(eval_res.verdict, "value")
+            else str(eval_res.verdict)
+        ),
+        "summary": {
+            "total_inputs": eval_res.summary.total_inputs,
+            "evaluated_inputs": eval_res.summary.evaluated_inputs,
+            "equivalent_inputs": eval_res.summary.equivalent_inputs,
+            "different_inputs": eval_res.summary.different_inputs,
+            "inconclusive_inputs": eval_res.summary.inconclusive_inputs,
+            "error_inputs": eval_res.summary.error_inputs,
+            "not_applicable_inputs": eval_res.summary.not_applicable_inputs,
+            "overall_verdict": (
+                eval_res.summary.overall_verdict.value
+                if hasattr(eval_res.summary.overall_verdict, "value")
+                else str(eval_res.summary.overall_verdict)
+            ),
+            "total_differences": eval_res.summary.total_differences,
+            "behavioral_score": round(float(eval_res.summary.behavioral_score), 6),
+            "observed_deviation": round(float(eval_res.summary.observed_deviation), 6),
+            "coverage": round(float(eval_res.summary.coverage), 6),
+        },
+        "inputs": canonical_inputs,
+        "differences": canonical_diffs,
     }
-    canonical_json = json.dumps(material_data, sort_keys=True, separators=(",", ":"))
+    canonical_json = json.dumps(
+        material_data, sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 

@@ -44,6 +44,26 @@ from operations.logging_config import log_operational_event
 
 logger = logging.getLogger(__name__)
 
+_VERIFIED_AI_PROVIDERS = {"openrouter", "gemini", "anthropic"}
+_FULL_BEACON_PROVIDER_CALLS = {"legacy", "modern", "alignment", "test_generation"}
+
+
+def _provider_provenance_recorded(context: Any) -> bool:
+    provider = str(getattr(context, "provider", "")).lower()
+    metadata = getattr(context, "provider_metadata", {}) or {}
+    calls = metadata.get("provider_calls", {}) if isinstance(metadata, dict) else {}
+    return (
+        provider in _VERIFIED_AI_PROVIDERS
+        and isinstance(calls, dict)
+        and _FULL_BEACON_PROVIDER_CALLS.issubset(calls)
+        and all(
+            isinstance(calls.get(name), dict)
+            and calls[name].get("actual_provider") in _VERIFIED_AI_PROVIDERS
+            and not calls[name].get("fallback_used", False)
+            for name in _FULL_BEACON_PROVIDER_CALLS
+        )
+    )
+
 
 def _evidence_gate_results(
     factors: dict[str, float | None],
@@ -51,6 +71,10 @@ def _evidence_gate_results(
     *,
     full_beacon: bool = False,
     provider_recorded: bool = True,
+    source_rule_manifest_hash: str = "",
+    source_rule_coverage: float | None = None,
+    source_rule_integrity: float | None = None,
+    dual_source_alignment_complete: bool = False,
 ) -> tuple[dict[str, bool], list[str]]:
     """Evaluate evidence safety predicates independently of the composite score."""
     results = {
@@ -60,6 +84,10 @@ def _evidence_gate_results(
     }
     if full_beacon:
         results["full_beacon_provider_provenance"] = provider_recorded
+        results["source_rule_manifest"] = bool(source_rule_manifest_hash)
+        results["source_rule_integrity"] = source_rule_integrity == 1.0
+        results["dual_source_alignment"] = dual_source_alignment_complete
+        results["targeted_rule_coverage"] = source_rule_coverage == 1.0
 
     reasons: list[str] = []
     if not results["execution_reliability"]:
@@ -73,6 +101,14 @@ def _evidence_gate_results(
         reasons.append("Legacy and modern source-hash provenance is missing or incomplete")
     if full_beacon and not results["full_beacon_provider_provenance"]:
         reasons.append("FULL_BEACON provider provenance is missing")
+    if full_beacon and not results["source_rule_manifest"]:
+        reasons.append("FULL_BEACON dual-source rule manifest is missing")
+    if full_beacon and not results["source_rule_integrity"]:
+        reasons.append("FULL_BEACON source rule anchors or current source hashes failed integrity verification")
+    if full_beacon and not results["dual_source_alignment"]:
+        reasons.append("FULL_BEACON contains missing, conflicting, or unsupported source-rule alignment")
+    if full_beacon and not results["targeted_rule_coverage"]:
+        reasons.append("FULL_BEACON did not execute and compare targeted tests for every aligned source rule")
     return results, reasons
 
 
@@ -156,6 +192,7 @@ class CertificationEngine:
                     cov = 1.0 if total_inp > 0 else 0.0
 
                 observed_score = score
+                full_beacon = getattr(context, "evaluation_mode", "").upper() == "FULL_BEACON"
                 input_coverage = (
                     min(float(getattr(evaluation_result.summary, "evaluated_inputs", 0)) / total_inp, 1.0)
                     if evaluation_result is not None and total_inp > 0
@@ -187,7 +224,9 @@ class CertificationEngine:
                     context.modernized_implementation_hash if context else ""
                 )
                 source_hash_integrity = (
-                    None
+                    getattr(context, "source_rule_integrity", None)
+                    if full_beacon and context
+                    else None
                     if not legacy_hash and not modern_hash
                     else 1.0 if legacy_hash and modern_hash else 0.0
                 )
@@ -196,12 +235,24 @@ class CertificationEngine:
                     if evaluation_result is not None
                     and bool(evaluation_result.evaluation_hash)
                     and verify_evaluation_result_integrity(evaluation_result)
+                    and (
+                        not full_beacon
+                        or (
+                            bool(context and context.input_set_hash)
+                            and bool(test_inputs)
+                            and compute_input_set_canonical_hash(test_inputs) == context.input_set_hash
+                        )
+                    )
                     else 0.0
                 )
                 adjusted_score, evidence_quality, score_factors = evidence_adjusted_score(
                     observed_score,
                     {
-                        "oracle_coverage": cov,
+                        "oracle_coverage": (
+                            getattr(context, "source_rule_coverage", None)
+                            if full_beacon and context
+                            else cov
+                        ),
                         "input_coverage": input_coverage,
                         "execution_reliability": execution_reliability,
                         "oracle_confidence": (
@@ -216,8 +267,16 @@ class CertificationEngine:
                 evidence_gates, evidence_gate_reasons = _evidence_gate_results(
                     score_factors,
                     cert_policy,
-                    full_beacon=(getattr(context, "evaluation_mode", "").upper() == "FULL_BEACON"),
-                    provider_recorded=bool(getattr(context, "provider", "")),
+                    full_beacon=full_beacon,
+                    provider_recorded=(
+                        _provider_provenance_recorded(context)
+                        if full_beacon
+                        else bool(getattr(context, "provider", ""))
+                    ),
+                    source_rule_manifest_hash=getattr(context, "source_rule_manifest_hash", ""),
+                    source_rule_coverage=getattr(context, "source_rule_coverage", None),
+                    source_rule_integrity=getattr(context, "source_rule_integrity", None),
+                    dual_source_alignment_complete=getattr(context, "dual_source_alignment_complete", False),
                 )
 
                 min_cov = float(getattr(cert_policy, "min_coverage", getattr(cert_policy, "min_oracle_coverage", 0.8)))
@@ -934,7 +993,11 @@ class CertificationEngine:
             active_evidence_factors,
             cert_policy,
             full_beacon=full_beacon,
-            provider_recorded=bool(getattr(context, "provider", "")),
+            provider_recorded=(
+                _provider_provenance_recorded(context)
+                if full_beacon
+                else bool(getattr(context, "provider", ""))
+            ),
         )
 
         metrics = CertificationMetrics(

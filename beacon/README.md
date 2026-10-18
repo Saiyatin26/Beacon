@@ -2,10 +2,10 @@
 
 Database Management Systems Project — Team: Sai, Yatin, Navaneeth
 
-BEACON is a domain-agnostic verification layer that certifies whether modernized code preserves the
-behavior of the legacy system it replaces. It mines invariants, compiles them into language-agnostic
-executable oracles, certifies modernized code with a quantified equivalence score under a deterministic policy,
-and generates audit-grade grounded explanations.
+BEACON is a verification layer for assessing whether modernized code preserves legacy behavior. It
+supports established oracle-driven workflows and a Full BEACON EDABC workflow that extracts
+source-grounded rules independently from both implementations, tests them with paired execution,
+and issues a certificate only when behavioral and evidence gates pass.
 
 ---
 
@@ -29,70 +29,46 @@ and generates audit-grade grounded explanations.
 
 ---
 
-## Full End-to-End Lifecycle
+## Full BEACON EDABC Lifecycle
 
 ```
-Legacy Source
-     │
-     ▼
-Static / Dynamic Evidence (AST + Traces)
-     │
-     ▼
-Unified Evidence Package (Correlated Facts)
-     │
-     ▼
-LLM-Assisted Invariant Mining (OpenRouter -> Anthropic -> Ollama -> Offline)
-     │
-     ▼
-Semantic Grounding & Anti-Hallucination Gate
-     │
-     ▼
-Adversarial Validation & Property-Based Probing (Boundaries, Jitters, Combinatorial)
-     │
-     ▼
-Confidence Scorer (0.80 Certification Gate)
-     │
-     ▼
-Language-Independent Oracle Compiler (Pure AST, Canonical Serializer, SHA-256 Hasher)
-     │
-     ▼
-Frozen Oracle Set (Immutable, Content-Addressed)
-     │
-     ▼
-Same Shared Test Inputs Applied to Legacy and Modernized Adapters
-     │
-     │
-     ▼
-Deterministic Oracle Evaluation & 4-Way Classification
-(MATCH, MODERN_REGRESSION, REFERENCE_INCONSISTENT, MUTUAL_VIOLATION)
-     │
-     ▼
-Phase 11 Evidence Persistence & Reproducibility Verification
-(Immutable InputSets, Execution Cases, Canonical SHA-256 Hash Reconstruction, Atomic SQLite Persistence)
-     │
-     ▼
-Quantified Certification Policy Engine
-(CERTIFIED, CERTIFIED_WITH_WARNINGS, NOT_CERTIFIED, REFERENCE_INCONSISTENT, INSUFFICIENT_COVERAGE)
-     │
-     ▼
-Immutable Cryptographic Certification Artifact (JSON + SHA-256 Hash + HTML/Markdown Report)
-     │
-     ▼
-Interactive UI Dashboard with Per-Oracle Failure & Case-Level Audit Drill-Down & Dataset Export
-     │
-     ▼
-Post-Migration Drift Monitoring (Runtime Observations -> evaluate_oracle)
+Legacy source ──┐
+                ├─> Independent AI rule extraction with provider provenance
+Modern source ──┘              │
+                               ▼
+                   Source-line/hash validation
+                               │
+                               ▼
+                    Rule alignment and gap review
+                               │
+                               ▼
+                 Rule-directed input/test generation
+                               │
+                               ▼
+              Paired execution on both implementations
+                               │
+                               ▼
+       Persisted output/error/state evidence and comparison
+                               │
+                               ▼
+          Existing evidence-quality score + mandatory gates
+                               │
+                               ▼
+       Certificate only when behavior and evidence gates pass
 ```
 
 ---
 
-## The Core Separation Principle: Zero LLM in Certification
+Full BEACON keeps AI-generated rules as untrusted candidates. The AI does not execute code or make the certification decision. Full-mode extraction requires recorded calls to the configured supported provider; fallback or missing provider provenance blocks certification. Rules must have exact source anchors, be aligned across both source trees, and receive targeted paired execution evidence before they count toward coverage. The standard oracle-based workflows remain available separately; Full BEACON no longer uses that path to generate its source-grounded behavioral rules.
+
+## The Core Separation Principle: AI Discovery, Deterministic Certification
 
 BEACON preserves a strict separation of concerns:
-- **Discovery (Phase 6)**: LLMs (OpenRouter primary, Anthropic supported, Ollama local, or Offline fallback) act strictly as un-trusted candidate hypothesis generators.
-- **Validation (Phase 7)**: Independent property-based adversarial testing attempts to disprove candidate invariants against legacy execution.
-- **Compilation (Phase 8)**: Validated invariants are compiled into language-independent canonical AST oracles with SHA-256 content hashes.
-- **Certification (Phases 9–10)**: **Strictly deterministic and LLM-independent.** Certification authority is derived solely from the frozen validated oracle set, target implementation execution results, coverage metrics, and configured certification policy.
+- **Full BEACON discovery**: AI independently proposes rules for legacy and modern source, corresponding alignments, and targeted tests. Provider/model provenance is recorded; unsupported output, missing source evidence, unresolved alignment, or generation failure is not treated as success.
+- **Validation and execution**: Local source-anchor checks and deterministic assertions qualify the candidates, then both real implementations run against the same test inputs. Actual outputs, execution statuses, errors, and available state evidence are compared and linked to the rules and inputs.
+- **Certification**: Scoring and mandatory evidence gates are deterministic. A high score cannot compensate for stale source/input evidence, incomplete provider provenance, unresolved rules, incomplete targeted coverage, or execution/evaluation failures.
+
+The current source-rule contract deliberately supports a single input comparison and one flat scalar output-field assertion per rule. Behavior that cannot be represented or validated under that contract remains an evidence gap; it must not be promoted to certified rule coverage. BEACON provides evidence over executed inputs, not a proof of universal program equivalence.
 
 ---
 
@@ -107,6 +83,8 @@ BEACON preserves a strict separation of concerns:
 - **`CERTIFIED`**: High equivalence score ($\ge 80\%$), 100% oracle coverage, 0 regressions, 0 reference inconsistencies, 0 mutual violations, and 0 execution errors.
 
 > **Methodological Limitation Notice**: BEACON does not mathematically prove universal program equivalence; it certifies oracle-relative behavioral equivalence over the validated oracle set and tested input domain under a versioned certification policy.
+
+For Full BEACON, the coverage gate means every aligned source rule has validated targeted paired-execution evidence. It does not imply universal coverage of all possible program behavior.
 
 ## Phase 12 — Scientific Reproducibility & Benchmark Hardening
 
@@ -143,6 +121,8 @@ The discovery pipeline supports a 4-tier provider hierarchy:
 4. **Deterministic Offline Fallback** (Static AST + Dynamic Trace candidate generator when models are unavailable).
 
 The actual provider that produced the accepted response is truthfully preserved in `OracleProvenance.reproducibility["actual_provider"]` and `CertificationContext.provider`. Zero secrets, authorization headers, or private keys are ever stored or exposed.
+
+That hierarchy describes the standard discovery workflows. Full BEACON requires provenance for each configured legacy extraction, modern extraction, alignment, and test-generation call; fallback calls do not satisfy its provider gate.
 
 ### 4. Canonical Discovery Configuration Hashing
 In `FULL_BEACON` mode, OracleSets are cached and content-addressed by a 18-parameter canonical JSON SHA-256 digest: `SET-{BENCHMARK}-FULL-{config_hash[:12]}`. Mutating any element (model, provider, prompt version, candidate generator version, evidence hash, validator version, or dataset checksum) invalidates the cache and forces fresh execution.

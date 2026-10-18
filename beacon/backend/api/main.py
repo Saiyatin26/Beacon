@@ -1861,12 +1861,11 @@ def resolve_oracle_set(
     bench = benchmark_registry.get_benchmark(oracle_set_id)
     if bench:
         try:
-            use_llm = (mode.upper() == "FULL_BEACON" and allow_external_llm)
             orc_set = benchmark_registry.get_or_create_oracle_set(
                 bench.benchmark_id,
                 mode=mode,
                 preferred_provider=preferred_provider,
-                use_llm=use_llm,
+                use_llm=False,
             )
             if orc_set:
                 oracle_reg.register_oracle_set(orc_set)
@@ -1874,48 +1873,6 @@ def resolve_oracle_set(
         except Exception:
             pass
     return None
-
-
-def discover_custom_oracle_set(
-    legacy_adapter_id: str,
-    inferred_schema: dict[str, str],
-    preferred_provider: str = "offline",
-    allow_external_llm: bool = False,
-) -> tuple[Optional[OracleSet], list[str]]:
-    """Uses the existing evidence/discovery -> validation/grounding pipeline to obtain a compatible OracleSet.
-    If no compatible validated OracleSet can be established, returns (None, reasons).
-    """
-    matched_spec = None
-    for spec in benchmark_registry.list_benchmarks():
-        if spec.legacy_adapter_id == legacy_adapter_id:
-            matched_spec = spec
-            break
-    if not matched_spec:
-        return None, [f"No registered discovery pipeline for legacy adapter '{legacy_adapter_id}'."]
-
-    bench_id = matched_spec.benchmark_id
-    try:
-        use_llm = bool(allow_external_llm and preferred_provider in ("openrouter", "anthropic"))
-        candidate_orc_set = benchmark_registry.get_or_create_oracle_set(
-            bench_id,
-            mode="FULL_BEACON",
-            preferred_provider=preferred_provider,
-            use_llm=use_llm,
-        )
-        if not candidate_orc_set or not candidate_orc_set.oracles:
-            return None, [f"Discovery pipeline produced 0 validated oracles for benchmark '{bench_id}'."]
-
-        is_compat, missing_vars = check_oracle_set_compatibility(candidate_orc_set, inferred_schema)
-        if not is_compat:
-            return None, [
-                f"Discovered OracleSet '{candidate_orc_set.oracle_set_id}' requires schema fields {missing_vars} "
-                f"which are absent in dataset schema ({list(inferred_schema.keys())})."
-            ]
-
-        return candidate_orc_set, []
-    except Exception as e:
-        logger.warning(f"Error in FULL_BEACON custom oracle discovery: {e}")
-        return None, [f"FULL_BEACON oracle discovery failed: {str(e)}"]
 
 
 @app.get("/api/v1/custom/oracle-sets")
@@ -2087,58 +2044,11 @@ def validate_custom_certification(
                         f"OracleSet '{orc_set_id}' requires schema fields {missing_vars} which are absent in dataset '{req.dataset_id}'."
                     )
     elif mode == "FULL_BEACON":
-        # Privacy boundary check
-        prov_norm = req.preferred_provider.lower().strip()
-        if prov_norm in ("openrouter", "anthropic") and not req.allow_external_llm:
-            errors.append(
-                f"Privacy boundary violation: External cloud provider '{prov_norm}' selected without explicit user consent (allow_external_llm=False). "
-                "User data cannot leave local environment. Enable consent or select local/offline provider."
-            )
-        actual_provider = prov_norm if req.allow_external_llm else "offline"
-        if orc_set_id:
-            orc_set = resolve_oracle_set(
-                orc_set_id,
-                mode="FULL_BEACON",
-                preferred_provider=actual_provider,
-                allow_external_llm=req.allow_external_llm,
-            )
-            if not orc_set:
-                errors.append(f"OracleSet '{orc_set_id}' not found in registry.")
-            else:
-                orc_set_hash = orc_set.oracle_set_hash
-                is_compat, missing_vars = check_oracle_set_compatibility(orc_set, manifest.inferred_schema)
-                if not is_compat:
-                    errors.append(
-                        f"OracleSet '{orc_set_id}' requires schema fields {missing_vars} which are absent in dataset '{req.dataset_id}'."
-                    )
-        else:
-            # NO UNCONDITIONAL FALLBACK TO RETAIL.
-            # Use existing evidence/discovery -> validation/grounding pipeline to obtain a compatible OracleSet.
-            disc_orc_set, disc_reasons = discover_custom_oracle_set(
-                legacy_adapter_id=req.legacy_adapter_id,
-                inferred_schema=manifest.inferred_schema,
-                preferred_provider=actual_provider,
-                allow_external_llm=req.allow_external_llm,
-            )
-            if disc_orc_set:
-                orc_set = disc_orc_set
-                orc_set_hash = disc_orc_set.oracle_set_hash
-            else:
-                # No compatible validated OracleSet could be established.
-                # Rather than silently using Retail, construct empty OracleSet and emit warning.
-                orc_set = OracleSet(
-                    oracle_set_id="SET-EMPTY",
-                    name="Empty Discovered OracleSet",
-                    domain="Custom",
-                    oracle_ids=[],
-                    oracles=[],
-                    oracle_set_hash="",
-                )
-                orc_set_hash = ""
-                warnings.append(
-                    "No compatible validated OracleSet could be established for dataset schema. "
-                    "Certification status will be INSUFFICIENT_COVERAGE. " + " ".join(disc_reasons)
-                )
+        errors.append(
+            "FULL_BEACON requires source repositories for independent dual-source rule extraction and "
+            "paired execution. The custom dataset/adapter endpoint does not establish source-rule evidence; "
+            "use the repository certification workflow."
+        )
 
     # 5. Compute Deterministic Configuration Fingerprint
     leg_hash = getattr(leg_adp, "implementation_hash", "") or (hashlib.sha256(req.legacy_adapter_id.encode()).hexdigest() if leg_adp else "")
@@ -2244,6 +2154,15 @@ def run_custom_certification(
 
     # Mode & Privacy boundary
     mode = req.evaluation_mode.upper()
+    if mode == "FULL_BEACON":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "FULL_BEACON requires source repositories for independent dual-source rule extraction "
+                "and paired execution. Use the repository certification workflow instead of custom "
+                "dataset/adapter certification."
+            ),
+        )
     prov_norm = req.preferred_provider.lower().strip()
     if prov_norm in ("openrouter", "anthropic") and not req.allow_external_llm:
         raise HTTPException(
@@ -2268,45 +2187,6 @@ def run_custom_certification(
                 status_code=400,
                 detail=f"OracleSet '{orc_set_id}' is incompatible with dataset schema: missing fields {missing_vars}.",
             )
-    else:  # FULL_BEACON
-        if orc_set_id:
-            orc_set = resolve_oracle_set(
-                orc_set_id,
-                mode="FULL_BEACON",
-                preferred_provider=actual_provider,
-                allow_external_llm=req.allow_external_llm,
-            )
-            if not orc_set:
-                raise HTTPException(status_code=404, detail=f"OracleSet '{orc_set_id}' not found in registry.")
-            is_compat, missing_vars = check_oracle_set_compatibility(orc_set, manifest.inferred_schema)
-            if not is_compat:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"OracleSet '{orc_set_id}' is incompatible with dataset schema: missing fields {missing_vars}.",
-                )
-        else:
-            # NO UNCONDITIONAL FALLBACK TO RETAIL.
-            disc_orc_set, disc_reasons = discover_custom_oracle_set(
-                legacy_adapter_id=req.legacy_adapter_id,
-                inferred_schema=manifest.inferred_schema,
-                preferred_provider=actual_provider,
-                allow_external_llm=req.allow_external_llm,
-            )
-            if disc_orc_set:
-                orc_set = disc_orc_set
-            else:
-                # No compatible validated OracleSet could be established.
-                # Rather than silently using Retail or failing, construct empty OracleSet so CertificationEngine
-                # yields an authoritative INSUFFICIENT_COVERAGE outcome.
-                orc_set = OracleSet(
-                    oracle_set_id="SET-EMPTY",
-                    name="Empty Discovered OracleSet",
-                    domain="Custom",
-                    oracle_ids=[],
-                    oracles=[],
-                    oracle_set_hash="",
-                )
-
     orc_set_hash = orc_set.oracle_set_hash if orc_set else ""
 
     # Policy
@@ -2962,8 +2842,8 @@ def export_evidence_dossier_endpoint(
                 "evidence_reference",
             ])
             for c in cases:
-                leg_out = sanitize_details({"out": c.legacy_output_json}).get("out", c.legacy_output_json) if isinstance(c.legacy_output_json, dict) else c.legacy_output_json
-                mod_out = sanitize_details({"out": c.modern_output_json}).get("out", c.modern_output_json) if isinstance(c.modern_output_json, dict) else c.modern_output_json
+                leg_out = c.legacy_output_json
+                mod_out = c.modern_output_json
                 writer.writerow([
                     c.case_id,
                     c.case_index,

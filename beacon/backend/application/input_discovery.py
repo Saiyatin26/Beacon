@@ -10,7 +10,6 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-import re
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -48,6 +47,196 @@ class InputDiscoveryEngine:
     def __init__(self):
         self.beacon_root = Path(__file__).resolve().parent.parent.parent
 
+    def _discover_full_beacon_inputs(
+        self,
+        legacy_analysis: RepositoryAnalysisReport,
+        modern_analysis: RepositoryAnalysisReport,
+        max_cases: int,
+        legacy_entrypoint_file: Optional[Path],
+        modern_entrypoint_file: Optional[Path],
+    ) -> InputDiscoveryResult:
+        """Build source-grounded, rule-directed cases for both implementation roles."""
+        from mining.source_rule_extractor import (
+            SourceRuleExtractionError,
+            extract_aligned_rules_and_tests,
+        )
+
+        configured_provider = (getattr(settings, "llm_provider", None) or "openrouter").lower().strip()
+        if configured_provider == "auto":
+            configured_provider = "openrouter"
+        if configured_provider not in ("openrouter", "gemini", "anthropic"):
+            return InputDiscoveryResult(
+                status=InputDiscoveryStatus.FAILED,
+                discovery_method="FAILED",
+                provenance={
+                    "rule_extraction_status": "AI_PROVIDER_REQUIRED",
+                    "llm_provider": {
+                        "requested_provider": configured_provider,
+                        "actual_provider": None,
+                        "fallback_used": False,
+                    },
+                },
+                diagnostic_message=(
+                    "FULL_BEACON requires a configured cloud AI provider for independent dual-source "
+                    "rule extraction; offline or local fallback is not accepted as source evidence."
+                ),
+            )
+
+        legacy_root = Path(legacy_analysis.provenance.local_path)
+        modern_root = Path(modern_analysis.provenance.local_path)
+        try:
+            result = extract_aligned_rules_and_tests(
+                legacy_root=legacy_root,
+                modern_root=modern_root,
+                legacy_entrypoint=legacy_entrypoint_file,
+                modern_entrypoint=modern_entrypoint_file,
+                provider_name=configured_provider,
+            )
+        except SourceRuleExtractionError as exc:
+            logger.info("FULL_BEACON dual-source rule discovery was blocked: %s", exc)
+            return InputDiscoveryResult(
+                status=InputDiscoveryStatus.FAILED,
+                discovery_method="FAILED",
+                provenance={
+                    "rule_extraction_status": "SOURCE_RULE_EXTRACTION_FAILED",
+                    "diagnostic": str(exc),
+                    "llm_provider": {
+                        "requested_provider": configured_provider,
+                        "actual_provider": None,
+                        "fallback_used": False,
+                    },
+                },
+                diagnostic_message=f"Full BEACON source-grounded rule extraction failed closed: {exc}",
+            )
+
+        rules = result["rules"]
+        alignments = result["alignments"]
+        provider_metadata = result["providers"]
+        provider_names = {
+            item.get("actual_provider")
+            for item in provider_metadata.values()
+            if isinstance(item, dict)
+        }
+        rule_manifest_hash = hashlib.sha256(
+            json.dumps(rules, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+        ).hexdigest()
+        if not result["complete"]:
+            return InputDiscoveryResult(
+                status=InputDiscoveryStatus.INSUFFICIENT_COVERAGE,
+                discovery_method="DUAL_SOURCE_RULE_ALIGNMENT",
+                provenance={
+                    "rule_extraction_status": "RULE_ALIGNMENT_GAPS",
+                    "ai_mined_rules": rules,
+                    "rule_alignments": alignments,
+                    "rule_manifest_hash": rule_manifest_hash,
+                    "source_hashes": result["source_hashes"],
+                    "source_gaps": result["gaps"],
+                    "llm_provider": {
+                        "requested_provider": configured_provider,
+                        "actual_providers": sorted(name for name in provider_names if name),
+                        "provider_calls": provider_metadata,
+                        "fallback_used": False,
+                    },
+                },
+                diagnostic_message=(
+                    "Full BEACON blocked: independently extracted source rules include missing, "
+                    "conflicting, or ambiguous cross-implementation behavior."
+                ),
+            )
+
+        cases: list[CertificationTestInput] = []
+        seen: set[str] = set()
+        rule_ids = {rule["rule_id"] for rule in rules}
+        for item in result["test_cases"]:
+            if item["rule_id"] not in rule_ids:
+                continue
+            values = item["values"]
+            canonical = json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
+            signature = f"{item['rule_id']}:{canonical}"
+            if signature in seen:
+                continue
+            seen.add(signature)
+            input_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            cases.append(
+                CertificationTestInput(
+                    input_id=f"INP-EDABC-{len(cases) + 1:04d}-{input_hash[:8]}",
+                    values=values,
+                    origin="ai_generated",
+                    provenance={
+                        "source": "dual_source_rule_directed_ai_candidate",
+                        "condition_provenance": item["rule_id"],
+                        "rule_manifest_hash": rule_manifest_hash,
+                        "source_hashes": result["source_hashes"],
+                        "actual_providers": sorted(name for name in provider_names if name),
+                        "fallback_used": False,
+                        "input_hash": input_hash,
+                    },
+                    tags=["edabc", item["rule_id"]],
+                )
+            )
+            if len(cases) >= max_cases:
+                break
+
+        covered_rules = {case.provenance["condition_provenance"] for case in cases}
+        missing_rules = sorted(rule_ids - covered_rules)
+        if not cases or missing_rules:
+            return InputDiscoveryResult(
+                status=InputDiscoveryStatus.INSUFFICIENT_COVERAGE,
+                discovery_method="DUAL_SOURCE_RULE_DIRECTED_TESTING",
+                provenance={
+                    "rule_extraction_status": "TARGETED_TEST_COVERAGE_INSUFFICIENT",
+                    "ai_mined_rules": rules,
+                    "rule_alignments": alignments,
+                    "rule_manifest_hash": rule_manifest_hash,
+                    "missing_tested_rule_ids": missing_rules,
+                    "source_hashes": result["source_hashes"],
+                    "llm_provider": provider_metadata,
+                },
+                diagnostic_message=(
+                    "Full BEACON blocked: every aligned source rule requires at least one "
+                    "source-validated targeted test within the input limit."
+                ),
+            )
+
+        input_set_hash = hashlib.sha256(
+            json.dumps(
+                [{"id": case.input_id, "values": case.values} for case in cases],
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        return InputDiscoveryResult(
+            status=InputDiscoveryStatus.SUCCESS,
+            inputs_count=len(cases),
+            test_inputs=cases,
+            discovery_source="AI-generated tests directed by independently extracted and aligned source rules",
+            discovery_method="DUAL_SOURCE_RULE_DIRECTED_TESTING",
+            input_set_hash=input_set_hash,
+            provenance={
+                "rule_extraction_status": "SUCCESS",
+                "ai_mined_rules": rules,
+                "rule_alignments": alignments,
+                "rule_manifest_hash": rule_manifest_hash,
+                "source_hashes": result["source_hashes"],
+                "source_gaps": result["gaps"],
+                "rule_count": len(rules),
+                "covered_rule_count": len(covered_rules),
+                "targeted_input_count": len(cases),
+                "input_set_hash": input_set_hash,
+                "llm_provider": {
+                    "requested_provider": configured_provider,
+                    "actual_providers": sorted(name for name in provider_names if name),
+                    "provider_calls": provider_metadata,
+                    "fallback_used": False,
+                },
+            },
+            diagnostic_message=(
+                f"Extracted and aligned {len(rules)} source-grounded rules from both "
+                f"implementations and generated {len(cases)} rule-directed inputs."
+            ),
+        )
+
     def discover_inputs(
         self,
         legacy_analysis: RepositoryAnalysisReport,
@@ -59,163 +248,111 @@ class InputDiscoveryEngine:
         run_id: Optional[str] = None,
     ) -> InputDiscoveryResult:
         """Discovers and resolves canonical test inputs across legacy and modern repositories.
-        In FULL_BEACON mode, strictly requires OpenRouter AI-generated candidates with source grounding.
+        In FULL_BEACON mode, both implementations are independently analyzed and rules are
+        accepted only after exact local source-anchor validation and AI alignment.
         """
         is_full_beacon = str(evaluation_mode).upper() == "FULL_BEACON"
+        if is_full_beacon:
+            return self._discover_full_beacon_inputs(
+                legacy_analysis=legacy_analysis,
+                modern_analysis=modern_analysis,
+                max_cases=max_cases,
+                legacy_entrypoint_file=legacy_entrypoint_file,
+                modern_entrypoint_file=modern_entrypoint_file,
+            )
+
         discovered_cases: list[dict[str, Any]] = []
         source_desc = ""
-        method_desc = "AI_PROPOSED_INPUTS_SOURCE_VALIDATED" if is_full_beacon else "REPOSITORY_FIXTURES"
+        method_desc = "REPOSITORY_FIXTURES"
 
-        # Check repository fixtures ONLY if NOT in FULL_BEACON mode (controlled test-only mode)
-        if not is_full_beacon:
-            all_input_assets = legacy_analysis.input_candidates + modern_analysis.input_candidates
-            for asset in all_input_assets:
-                if asset.sample_values and len(asset.sample_values) > 0:
-                    try:
-                        f_path = Path(asset.file_path)
-                        if f_path.exists():
-                            raw_data = json.loads(f_path.read_text(encoding="utf-8", errors="ignore"))
-                            file_cases = []
-                            if isinstance(raw_data, list):
-                                file_cases = [item for item in raw_data if isinstance(item, dict)]
-                            elif isinstance(raw_data, dict):
-                                for k in ("cases", "test_cases", "inputs", "data", "scenarios"):
-                                    if k in raw_data and isinstance(raw_data[k], list):
-                                        file_cases = [item for item in raw_data[k] if isinstance(item, dict)]
-                                        break
-                                if not file_cases:
-                                    file_cases = [raw_data]
-                            if file_cases:
-                                discovered_cases.extend(file_cases)
-                                source_desc = f"Repository fixture '{asset.relative_path}'"
-                                method_desc = "REPOSITORY_FIXTURE_DISCOVERY"
-                                break
-                    except Exception:
-                        pass
-
-            if not discovered_cases:
-                for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
-                    if not repo_p_str:
-                        continue
-                    repo_p = Path(repo_p_str)
-                    manifest_file = repo_p / "benchmark_manifest.json"
-                    if not manifest_file.exists():
-                        manifest_file = repo_p / "beacon_manifest.json"
-                    if manifest_file.exists():
-                        try:
-                            manifest_data = json.loads(manifest_file.read_text(encoding="utf-8", errors="ignore"))
-                            ds_rel = manifest_data.get("dataset_path") or manifest_data.get("dataset_file")
-                            if ds_rel:
-                                ds_file = (repo_p / ds_rel).resolve()
-                                if ds_file.exists() and ds_file.is_file() and ds_file.suffix == ".json":
-                                    ds_raw = json.loads(ds_file.read_text(encoding="utf-8", errors="ignore"))
-                                    if isinstance(ds_raw, list):
-                                        discovered_cases.extend([d for d in ds_raw if isinstance(d, dict)])
-                                    elif isinstance(ds_raw, dict):
-                                        for k in ("test_cases", "cases", "inputs", "data"):
-                                            if k in ds_raw and isinstance(ds_raw[k], list):
-                                                discovered_cases.extend([d for d in ds_raw[k] if isinstance(d, dict)])
-                                                break
-                                    if discovered_cases:
-                                        source_desc = f"Explicit repository manifest '{manifest_file.name}' -> '{ds_rel}'"
-                                        method_desc = "EXPLICIT_MANIFEST_DISCOVERY"
-                                        break
-                        except Exception:
-                            pass
-
-                    ds_dir = repo_p / "dataset"
-                    if not discovered_cases and ds_dir.exists() and ds_dir.is_dir():
-                        for jf in sorted(ds_dir.glob("*.json")):
-                            if jf.stem.lower() == "validation":
-                                continue
-                            try:
-                                ds_raw = json.loads(jf.read_text(encoding="utf-8", errors="ignore"))
-                                cases = []
-                                if isinstance(ds_raw, list):
-                                    cases = [d for d in ds_raw if isinstance(d, dict)]
-                                elif isinstance(ds_raw, dict):
-                                    for k in ("test_cases", "scenarios", "cases", "data", "inputs"):
-                                        if k in ds_raw and isinstance(ds_raw[k], list):
-                                            cases = [d for d in ds_raw[k] if isinstance(d, dict)]
-                                            break
-                                    if not cases:
-                                        cases = [ds_raw]
-                                if cases:
-                                    discovered_cases.extend(cases)
-                                    source_desc = f"Repository dataset directory '{jf.name}'"
-                                    method_desc = "REPOSITORY_DATASET_DISCOVERY"
+        all_input_assets = legacy_analysis.input_candidates + modern_analysis.input_candidates
+        for asset in all_input_assets:
+            if asset.sample_values and len(asset.sample_values) > 0:
+                try:
+                    f_path = Path(asset.file_path)
+                    if f_path.exists():
+                        raw_data = json.loads(f_path.read_text(encoding="utf-8", errors="ignore"))
+                        file_cases = []
+                        if isinstance(raw_data, list):
+                            file_cases = [item for item in raw_data if isinstance(item, dict)]
+                        elif isinstance(raw_data, dict):
+                            for k in ("cases", "test_cases", "inputs", "data", "scenarios"):
+                                if k in raw_data and isinstance(raw_data[k], list):
+                                    file_cases = [item for item in raw_data[k] if isinstance(item, dict)]
                                     break
-                            except Exception:
-                                pass
-                    if discovered_cases:
-                        break
+                            if not file_cases:
+                                file_cases = [raw_data]
+                        if file_cases:
+                            discovered_cases.extend(file_cases)
+                            source_desc = f"Repository fixture '{asset.relative_path}'"
+                            method_desc = "REPOSITORY_FIXTURE_DISCOVERY"
+                            break
+                except (OSError, json.JSONDecodeError):
+                    logger.warning("Ignoring unreadable repository input fixture '%s'.", asset.file_path)
+
+        if not discovered_cases:
+            for repo_p_str in [legacy_analysis.provenance.local_path, modern_analysis.provenance.local_path]:
+                if not repo_p_str:
+                    continue
+                repo_p = Path(repo_p_str)
+                manifest_file = repo_p / "benchmark_manifest.json"
+                if not manifest_file.exists():
+                    manifest_file = repo_p / "beacon_manifest.json"
+                if manifest_file.exists():
+                    try:
+                        manifest_data = json.loads(manifest_file.read_text(encoding="utf-8", errors="ignore"))
+                        ds_rel = manifest_data.get("dataset_path") or manifest_data.get("dataset_file")
+                        if ds_rel:
+                            ds_file = (repo_p / ds_rel).resolve()
+                            if ds_file.exists() and ds_file.is_file() and ds_file.suffix == ".json":
+                                ds_raw = json.loads(ds_file.read_text(encoding="utf-8", errors="ignore"))
+                                if isinstance(ds_raw, list):
+                                    discovered_cases.extend([d for d in ds_raw if isinstance(d, dict)])
+                                elif isinstance(ds_raw, dict):
+                                    for k in ("test_cases", "cases", "inputs", "data"):
+                                        if k in ds_raw and isinstance(ds_raw[k], list):
+                                            discovered_cases.extend([d for d in ds_raw[k] if isinstance(d, dict)])
+                                            break
+                                if discovered_cases:
+                                    source_desc = f"Explicit repository manifest '{manifest_file.name}' -> '{ds_rel}'"
+                                    method_desc = "EXPLICIT_MANIFEST_DISCOVERY"
+                                    break
+                    except (OSError, json.JSONDecodeError):
+                        logger.warning("Ignoring unreadable dataset manifest '%s'.", manifest_file)
+
+                ds_dir = repo_p / "dataset"
+                if not discovered_cases and ds_dir.exists() and ds_dir.is_dir():
+                    for jf in sorted(ds_dir.glob("*.json")):
+                        if jf.stem.lower() == "validation":
+                            continue
+                        try:
+                            ds_raw = json.loads(jf.read_text(encoding="utf-8", errors="ignore"))
+                            cases = []
+                            if isinstance(ds_raw, list):
+                                cases = [d for d in ds_raw if isinstance(d, dict)]
+                            elif isinstance(ds_raw, dict):
+                                for k in ("test_cases", "scenarios", "cases", "data", "inputs"):
+                                    if k in ds_raw and isinstance(ds_raw[k], list):
+                                        cases = [d for d in ds_raw[k] if isinstance(d, dict)]
+                                        break
+                                if not cases:
+                                    cases = [ds_raw]
+                            if cases:
+                                discovered_cases.extend(cases)
+                                source_desc = f"Repository dataset directory '{jf.name}'"
+                                method_desc = "REPOSITORY_DATASET_DISCOVERY"
+                                break
+                        except (OSError, json.JSONDecodeError):
+                            logger.warning("Ignoring unreadable repository dataset '%s'.", jf)
+                if discovered_cases:
+                    break
 
         ai_mined_rules: list[dict[str, Any]] = []
         llm_provider_metadata: dict[str, Any] = {}
         proposed_cases_raw: list[dict[str, Any]] = []
         rejected_candidates: list[dict[str, Any]] = []
 
-        # Resolve COBOL and Modern entrypoints/source files
-        cobol_candidates: list[Path] = []
-        py_candidates: list[Path] = []
-        if legacy_entrypoint_file and legacy_entrypoint_file.is_file() and legacy_entrypoint_file.suffix.lower() in (".cbl", ".cob"):
-            cobol_candidates.append(legacy_entrypoint_file)
-        if modern_entrypoint_file and modern_entrypoint_file.is_file() and modern_entrypoint_file.suffix.lower() == ".py":
-            py_candidates.append(modern_entrypoint_file)
-
-        legacy_root = Path(legacy_analysis.provenance.local_path)
-        if not cobol_candidates:
-            if legacy_root.is_file() and legacy_root.suffix.lower() in (".cbl", ".cob"):
-                cobol_candidates.append(legacy_root)
-            elif legacy_root.is_dir():
-                for pattern in ("*.cbl", "*.cob", "*.CBL", "*.COB"):
-                    cobol_candidates.extend(legacy_root.rglob(pattern))
-
-        modern_root = Path(modern_analysis.provenance.local_path)
-        if not py_candidates:
-            if modern_root.is_file() and modern_root.suffix.lower() == ".py":
-                py_candidates.append(modern_root)
-            elif modern_root.is_dir():
-                py_candidates.extend(modern_root.rglob("*.py"))
-
-        primary_cbl = None
-        primary_py = None
-        if cobol_candidates:
-            primary_cbl = (
-                legacy_entrypoint_file
-                if legacy_entrypoint_file and legacy_entrypoint_file in cobol_candidates
-                else sorted(cobol_candidates, key=lambda path: str(path).lower())[0]
-            )
-            primary_py = (
-                modern_entrypoint_file
-                if modern_entrypoint_file and modern_entrypoint_file in py_candidates
-                else sorted(py_candidates, key=lambda path: str(path).lower())[0] if py_candidates else None
-            )
-
-            # Mine conditions and candidates via OpenRouter
-            ai_cases, ai_mined_rules, llm_provider_metadata = self._mine_cobol_conditions_with_ai(
-                primary_cbl,
-                primary_py,
-                legacy_analysis=legacy_analysis,
-                modern_analysis=modern_analysis,
-                run_id=run_id,
-            )
-            proposed_cases_raw = llm_provider_metadata.get("proposed_candidates", [])
-            rejected_candidates = llm_provider_metadata.get("rejected_candidates", [])
-
-            if is_full_beacon:
-                # FULL_BEACON requires AI-proposed cases exclusively
-                discovered_cases = list(ai_cases)
-                prov_title = str(llm_provider_metadata.get("actual_provider") or "AI").title()
-                source_desc = f"{prov_title} AI-proposed inputs from COBOL '{primary_cbl.name}'"
-                method_desc = "AI_PROPOSED_INPUTS_SOURCE_VALIDATED"
-            else:
-                if ai_cases and not discovered_cases:
-                    discovered_cases.extend(ai_cases)
-                    source_desc = f"AI-proposed inputs from COBOL '{primary_cbl.name}'"
-                    method_desc = "AI_PROPOSED_INPUTS_SOURCE_VALIDATED"
-
-        # Fail closed if zero inputs found or if OpenRouter failed in FULL_BEACON mode
+        # Outside FULL_BEACON, inputs must come from repository fixtures or manifests.
         if not discovered_cases:
             err_category = llm_provider_metadata.get("error_category") or "DISCOVERY_INSUFFICIENT"
             err_detail = llm_provider_metadata.get("error") or "No legitimate AI-grounded inputs could be discovered"
@@ -379,269 +516,5 @@ class InputDiscoveryEngine:
             },
             diagnostic_message=f"Discovered {len(test_inputs)} authoritative test cases via {method_desc}.",
         )
-
-    def _mine_cobol_conditions_with_ai(
-        self,
-        cbl_file: Path,
-        py_file: Optional[Path] = None,
-        legacy_analysis: Optional[Any] = None,
-        modern_analysis: Optional[Any] = None,
-        run_id: Optional[str] = None,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
-        """Extracts source-anchored behavioral rules and proposes executable cases using OpenRouter exclusively."""
-        cbl_text = cbl_file.read_text(encoding="utf-8", errors="ignore")
-        py_text = py_file.read_text(encoding="utf-8", errors="ignore") if py_file and py_file.exists() else ""
-
-        # Collect copybook context if available across parent directories
-        cpy_context = []
-        referenced_cpys = set(re.findall(r"COPY\s+([A-Za-z0-9_-]+)", cbl_text, re.IGNORECASE))
-        for parent_dir in (cbl_file.parent, cbl_file.parent.parent):
-            if not parent_dir.is_dir():
-                continue
-            for cf in parent_dir.rglob("*.cpy"):
-                if cf.stem.upper() in referenced_cpys:
-                    try:
-                        cpy_context.append(f"--- COPYBOOK: {cf.name} ---\n{cf.read_text(encoding='utf-8', errors='ignore')[:1000]}")
-                    except Exception:
-                        pass
-                if len(cpy_context) >= 6:
-                    break
-        copybook_summary = "\n".join(cpy_context)[:1200]
-
-        # Extract focused, line-numbered source windows to keep prompt tokens comfortably under 2,000 tokens
-        cbl_lines = cbl_text.splitlines()
-        proc_line = 0
-        for i, l in enumerate(cbl_lines):
-            if "PROCEDURE DIVISION" in l.upper():
-                proc_line = i
-                break
-
-        selected_lines = []
-        # First 35 lines (headers and primary working storage fields)
-        for idx in range(min(35, len(cbl_lines))):
-            selected_lines.append(f"{idx+1}: {cbl_lines[idx]}")
-        selected_lines.append("... [intermediate declarations omitted] ...")
-        # Core procedure division logic (primary branching and evaluation)
-        start = proc_line
-        end = min(len(cbl_lines), proc_line + 85)
-        for idx in range(start, end):
-            selected_lines.append(f"{idx+1}: {cbl_lines[idx]}")
-
-        cbl_snippet = "\n".join(selected_lines)[:4200]
-        py_snippet = py_text[:1500]
-
-        configured_provider = (getattr(settings, "llm_provider", None) or "openrouter").lower().strip()
-        if configured_provider not in ("openrouter", "gemini", "anthropic"):
-            configured_provider = "openrouter"
-
-        discovered_rules: list[dict[str, Any]] = []
-        test_cases: list[dict[str, Any]] = []
-        proposed_cases: list[dict[str, Any]] = []
-        rejected_candidates: list[dict[str, Any]] = []
-        llm_provider_metadata: dict[str, Any] = {}
-
-        # AI proposes candidates only; source anchors are checked locally before use.
-        try:
-            from llm.manager import get_provider_manager
-            pm = get_provider_manager()
-            prompt = f"""You are BEACON's source-grounded behavioral rule extractor.
-Identify at most 5 externally observable business/behavioral rules in this program. Keep descriptions short and focused. Prefer rules that describe observable input/output behavior.
-
-COBOL Program: {cbl_file.name}
-COBOL Source:
-```cobol
-{cbl_snippet}
-```
-
-Associated Copybooks:
-```cobol
-{copybook_summary}
-```
-
-Modern Re-implementation Snippet:
-```python
-{py_snippet}
-```
-
-Requirements:
-1. Every rule must describe behavior observable from program inputs and outputs, not an implementation detail.
-2. Include a numeric source line and an exact short source_excerpt copied from that line.
-3. Generate 3-5 concise candidate input dictionaries (2-4 fields each, e.g. EIBAID, EIBCALEN, SCENARIO) for cases that can be passed to BOTH entrypoints. Keep dictionaries short.
-4. Each case must include '__condition_provenance' naming the rule ID it exercises.
-5. Do not invent expected outputs. BEACON will execute both programs and compare observed outputs independently.
-6. These are candidate tests, not proof of equivalence. BEACON validates field names locally and independently executes both implementations before scoring.
-
-Return ONLY a valid JSON object in this exact schema:
-{{
-  "rules": [
-    {{"rule_id": "candidate-1", "description": "Observable business behavior", "source_location": "Line 12", "source_excerpt": "exact COBOL source text"}}
-  ],
-  "test_cases": [
-    {{"field_name": "value", "__condition_provenance": "RULE-001"}}
-  ]
-}}
-"""
-            # Strict provider invocation with fallback disabled
-            try:
-                resp = pm.generate(
-                    prompt,
-                    json_mode=True,
-                    preferred_provider=configured_provider,
-                    allow_fallback=False,
-                )
-            except TypeError:
-                resp = pm.generate(prompt, json_mode=True)
-
-            valid_ai_providers = {"openrouter", "gemini", "anthropic"}
-            provider_name = getattr(resp, "provider_name", "unknown")
-            provider_is_valid = str(provider_name).lower().strip() in valid_ai_providers
-
-            error_cat = getattr(resp, "error_category", None) or (getattr(resp, "metadata", {}) or {}).get("error_category", "")
-            if not provider_is_valid and not error_cat:
-                error_cat = "AI_PROVIDER_UNAVAILABLE"
-
-            llm_provider_metadata = {
-                "requested_provider": getattr(resp, "requested_provider", provider_name if provider_is_valid else configured_provider),
-                "actual_provider": provider_name,
-                "model": getattr(resp, "model_name", ""),
-                "fallback_used": getattr(resp, "fallback_occurred", False),
-                "fallback_reason": getattr(resp, "fallback_reason", None),
-                "success": getattr(resp, "success", False),
-                "error": getattr(resp, "error", None),
-                "error_category": error_cat,
-                "raw_text": getattr(resp, "raw_text", ""),
-            }
-
-            if resp.success and provider_is_valid and resp.parsed_json and isinstance(resp.parsed_json, dict):
-                llm_rules = resp.parsed_json.get("rules", [])
-                llm_cases = resp.parsed_json.get("test_cases", [])
-                source_lines = cbl_text.splitlines()
-                validated_rules: list[dict[str, Any]] = []
-
-                if isinstance(llm_rules, list):
-                    for r in llm_rules:
-                        if not isinstance(r, dict):
-                            continue
-                        description = str(r.get("description", "")).strip()
-                        source_excerpt = str(r.get("source_excerpt", "")).strip()
-                        location_match = re.search(r"\blines?\s+(\d+)\b", str(r.get("source_location", "")), re.IGNORECASE)
-                        if not description or not source_excerpt or not location_match:
-                            continue
-                        source_line = int(location_match.group(1))
-                        if source_line < 1 or source_line > len(source_lines):
-                            continue
-                        excerpt_normalized = re.sub(r"\s+", "", source_excerpt).upper()
-                        nearby_source = re.sub(
-                            r"\s+",
-                            "",
-                            "\n".join(source_lines[max(0, source_line - 6):min(len(source_lines), source_line + 8)]),
-                        ).upper()
-                        if not excerpt_normalized or excerpt_normalized not in nearby_source:
-                            continue
-                        if not re.search(r"\bIF\b|\bWHEN\b|\bEVALUATE\b|\bPERFORM\b|\bMOVE\b|\bEXEC\b", source_excerpt, re.IGNORECASE):
-                            continue
-                        validated_rules.append({
-                            "description": description,
-                            "source_location": f"Line {source_line}",
-                            "source_excerpt": source_excerpt,
-                            "discovery_method": "AI_SOURCE_ANCHORED_RULE_EXTRACTION",
-                            "source": "AI_CANDIDATE_SOURCE_VALIDATED",
-                        })
-
-                unique_rules: dict[tuple[int, str], dict[str, Any]] = {}
-                for rule in validated_rules:
-                    key = (
-                        int(re.search(r"\d+", rule["source_location"]).group()),
-                        re.sub(r"\s+", " ", rule["description"]).casefold(),
-                    )
-                    unique_rules.setdefault(key, rule)
-
-                for rule_idx, rule in enumerate(
-                    sorted(unique_rules.values(), key=lambda item: (int(re.search(r"\d+", item["source_location"]).group()), item["description"].casefold()))[:20],
-                    start=1,
-                ):
-                    rule["rule_id"] = f"AI-RULE-{rule_idx:03d}"
-                    discovered_rules.append(rule)
-
-                # Collect valid identifier vocabulary from sources
-                valid_identifiers = {
-                    re.sub(r"[-_]", "", identifier).upper()
-                    for identifier in re.findall(
-                        r"\b[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*\b",
-                        (cbl_text + "\n" + copybook_summary + "\n" + py_text).upper(),
-                    )
-                }
-
-                if isinstance(llm_cases, list):
-                    for idx, tc in enumerate(llm_cases):
-                        if not isinstance(tc, dict) or len(tc) == 0:
-                            rejected_candidates.append({
-                                "candidate_index": idx,
-                                "reason": "EMPTY_OR_INVALID_DICTIONARY",
-                                "candidate": tc,
-                            })
-                            continue
-                        proposed_cases.append(tc)
-                        field_keys = [k for k in tc.keys() if not k.startswith("__")]
-                        if not field_keys:
-                            rejected_candidates.append({
-                                "candidate_index": idx,
-                                "reason": "NO_BUSINESS_FIELD_KEYS",
-                                "candidate": tc,
-                            })
-                            continue
-
-                        valid_fields = [
-                            key for key in field_keys
-                            if re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", key)
-                            and re.sub(r"[-_]", "", key).upper() in valid_identifiers
-                        ]
-
-                        if len(valid_fields) != len(field_keys):
-                            ungrounded = set(field_keys) - set(valid_fields)
-                            rejected_candidates.append({
-                                "candidate_index": idx,
-                                "reason": f"UNGROUNDED_FIELDS: {list(ungrounded)}",
-                                "candidate": tc,
-                            })
-                            continue
-
-                        if not tc.get("__condition_provenance"):
-                            tc["__condition_provenance"] = "RULE-001"
-
-                        test_cases.append(tc)
-
-                llm_provider_metadata["proposed_candidates"] = proposed_cases
-                llm_provider_metadata["rejected_candidates"] = rejected_candidates
-                llm_provider_metadata["rule_extraction_status"] = "SUCCESS" if discovered_rules else "NO_VALID_SOURCE_ANCHORED_RULES"
-                llm_provider_metadata["validated_rule_count"] = len(discovered_rules)
-                llm_provider_metadata["validated_input_count"] = len(test_cases)
-            else:
-                err_category = error_cat or (
-                    "AI_PROVIDER_UNAVAILABLE"
-                    if not provider_is_valid
-                    else f"{str(provider_name).upper()}_REQUEST_FAILED"
-                )
-                llm_provider_metadata["rule_extraction_status"] = err_category
-                llm_provider_metadata["error_category"] = err_category
-                llm_provider_metadata["error"] = getattr(resp, "error", None) or err_category
-                llm_provider_metadata["proposed_candidates"] = proposed_cases
-                llm_provider_metadata["rejected_candidates"] = rejected_candidates
-        except Exception as e:
-            logger.debug("AI behavioral rule extraction failed: %s", type(e).__name__)
-            llm_provider_metadata = {
-                "requested_provider": configured_provider,
-                "actual_provider": configured_provider,
-                "success": False,
-                "error_type": type(e).__name__,
-                "error": str(e),
-                "error_category": f"{configured_provider.upper()}_UNEXPECTED_EXCEPTION",
-                "rule_extraction_status": f"{configured_provider.upper()}_UNEXPECTED_EXCEPTION",
-                "proposed_candidates": proposed_cases,
-                "rejected_candidates": rejected_candidates,
-            }
-
-        return test_cases, discovered_rules, llm_provider_metadata
-
 
 input_discovery_engine = InputDiscoveryEngine()
