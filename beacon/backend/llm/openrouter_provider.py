@@ -253,12 +253,43 @@ class OpenRouterProvider(LLMProvider):
                 err_cat = "OPENROUTER_AUTHENTICATION_FAILED"
             elif exc.code == 402:
                 err_cat = "OPENROUTER_INSUFFICIENT_CREDITS"
+                if "in-flight requests" in server_detail.lower():
+                    logger.warning("OpenRouter 402 due to in-flight credit reservations; waiting 6s for requests to settle...")
+                    time.sleep(6.0)
+                    retry_req = urllib.request.Request(endpoint, data=req_data, headers=headers, method="POST")
+                    try:
+                        with urllib.request.urlopen(retry_req, timeout=self.timeout) as retry_resp:
+                            retry_json = json.loads(retry_resp.read().decode("utf-8"))
+                            r_choices = retry_json.get("choices", [])
+                            if r_choices:
+                                r_raw_text = (r_choices[0].get("message", {}).get("content") or "").strip()
+                                r_parsed_json = extract_json_payload(r_raw_text) if json_mode else None
+                                r_model = retry_json.get("model", actual_model)
+                                return LLMResponse(
+                                    raw_text=r_raw_text,
+                                    parsed_json=r_parsed_json,
+                                    provider_name=self.name,
+                                    model_name=r_model,
+                                    requested_provider=self.name,
+                                    latency_ms=round((time.perf_counter() - start_time) * 1000, 2),
+                                    fallback_occurred=True,
+                                    fallback_reason="Retried after in-flight requests settled",
+                                    success=True,
+                                    metadata={
+                                        "usage": retry_json.get("usage", {}),
+                                        "model_id": r_model,
+                                        "configured_model": requested_model,
+                                        "actual_model": r_model,
+                                    },
+                                )
+                    except Exception as retry_err:
+                        logger.error(f"In-flight retry failed: {retry_err}")
                 afford_m = re.search(r"can only afford (\d+)", server_detail)
                 if afford_m:
                     affordable = int(afford_m.group(1))
                     curr_max = payload.get("max_tokens", 600)
-                    if affordable >= 100 and curr_max > affordable:
-                        retry_max = max(100, affordable - 30)
+                    if affordable >= 100:
+                        retry_max = max(100, int(affordable * 0.75))
                         logger.warning(
                             f"OpenRouter 402: requested {curr_max} max_tokens, can only afford {affordable}. "
                             f"Auto-adjusting max_tokens to {retry_max} and retrying..."

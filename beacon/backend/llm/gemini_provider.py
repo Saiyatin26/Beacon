@@ -23,7 +23,7 @@ class GeminiProvider(LLMProvider):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         base_url: Optional[str] = None,
-        timeout: float = 30.0,
+        timeout: float = 60.0,
     ):
         self._explicit_api_key = api_key
         self._explicit_model = model

@@ -27,7 +27,7 @@ class ProviderManager:
             "ollama": OllamaProvider(),
             "offline": OfflineProvider(),
         }
-        self.fallback_priority = ["openrouter", "gemini", "anthropic", "ollama", "offline"]
+        self.fallback_priority = ["gemini", "openrouter", "anthropic", "ollama", "offline"]
 
     def get_provider(self, name: str) -> Optional[LLMProvider]:
         return self.providers.get(name.lower().strip())
@@ -40,16 +40,16 @@ class ProviderManager:
         preferred_provider: Optional[str] = None,
         allow_fallback: Optional[bool] = None,
     ) -> LLMResponse:
-        mode = (preferred_provider or settings.llm_provider or "openrouter").lower().strip()
+        mode = (preferred_provider or settings.llm_provider or "gemini").lower().strip()
         allow_fallback_effective = (
             allow_fallback
             if allow_fallback is not None
             else settings.allow_auto_fallback
         )
 
-        # Strict single-provider policy when fallback is disabled (Full BEACON mode)
+        # Strict single-provider policy when fallback is disabled
         if not allow_fallback_effective:
-            target_provider_name = mode if mode in self.providers else "openrouter"
+            target_provider_name = mode if mode in self.providers else "gemini"
             provider = self.providers.get(target_provider_name)
             if not provider:
                 return LLMResponse(
@@ -145,6 +145,8 @@ class ProviderManager:
         last_error: Optional[str] = None
 
         for p_name in self.fallback_priority:
+            if mode != "auto" and p_name == mode:
+                continue
             provider = self.providers[p_name]
             fallback_chain.append(p_name)
 
@@ -197,13 +199,13 @@ class ProviderManager:
                     "available": self.providers["openrouter"].check_connectivity(),
                     "model": settings.openrouter_model,
                     "configured": self.providers["openrouter"].is_configured(),
-                    "role": "Primary Cloud Provider",
+                    "role": "Fallback Cloud Provider" if settings.llm_provider == "gemini" else "Primary Cloud Provider",
                 },
                 "gemini": {
                     "available": self.providers["gemini"].check_connectivity(),
                     "model": settings.gemini_model,
                     "configured": self.providers["gemini"].is_configured(),
-                    "role": "Supported Cloud Provider",
+                    "role": "Primary Cloud Provider" if settings.llm_provider == "gemini" else "Supported Cloud Provider",
                 },
                 "anthropic": {
                     "available": self.providers["anthropic"].is_available(),

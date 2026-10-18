@@ -61,9 +61,9 @@ class InputDiscoveryEngine:
             extract_aligned_rules_and_tests,
         )
 
-        configured_provider = (getattr(settings, "llm_provider", None) or "openrouter").lower().strip()
+        configured_provider = (getattr(settings, "llm_provider", None) or "gemini").lower().strip()
         if configured_provider == "auto":
-            configured_provider = "openrouter"
+            configured_provider = "gemini"
         if configured_provider not in ("openrouter", "gemini", "anthropic"):
             return InputDiscoveryResult(
                 status=InputDiscoveryStatus.FAILED,
@@ -84,6 +84,7 @@ class InputDiscoveryEngine:
 
         legacy_root = Path(legacy_analysis.provenance.local_path)
         modern_root = Path(modern_analysis.provenance.local_path)
+        allow_fallback = bool(getattr(settings, "allow_auto_fallback", False))
         try:
             result = extract_aligned_rules_and_tests(
                 legacy_root=legacy_root,
@@ -91,6 +92,7 @@ class InputDiscoveryEngine:
                 legacy_entrypoint=legacy_entrypoint_file,
                 modern_entrypoint=modern_entrypoint_file,
                 provider_name=configured_provider,
+                allow_fallback=allow_fallback,
             )
         except SourceRuleExtractionError as exc:
             logger.info("FULL_BEACON dual-source rule discovery was blocked: %s", exc)
@@ -133,9 +135,15 @@ class InputDiscoveryEngine:
                     "source_gaps": result["gaps"],
                     "llm_provider": {
                         "requested_provider": configured_provider,
+                        "actual_provider": next((name for name in provider_names if name), configured_provider),
                         "actual_providers": sorted(name for name in provider_names if name),
+                        "rule_extraction_status": "RULE_ALIGNMENT_GAPS",
                         "provider_calls": provider_metadata,
-                        "fallback_used": False,
+                        "fallback_used": any(
+                            bool(m.get("fallback_used"))
+                            for m in provider_metadata.values()
+                            if isinstance(m, dict)
+                        ),
                     },
                 },
                 diagnostic_message=(
@@ -226,9 +234,15 @@ class InputDiscoveryEngine:
                 "input_set_hash": input_set_hash,
                 "llm_provider": {
                     "requested_provider": configured_provider,
+                    "actual_provider": next((name for name in provider_names if name), configured_provider),
                     "actual_providers": sorted(name for name in provider_names if name),
+                    "rule_extraction_status": "SUCCESS",
                     "provider_calls": provider_metadata,
-                    "fallback_used": False,
+                    "fallback_used": any(
+                        bool(m.get("fallback_used"))
+                        for m in provider_metadata.values()
+                        if isinstance(m, dict)
+                    ),
                 },
             },
             diagnostic_message=(

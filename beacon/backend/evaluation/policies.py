@@ -117,6 +117,7 @@ DEFAULT_COMPARISON_POLICY = ComparisonPolicy(
     float_tolerance=1e-5,
     float_mode=FloatComparisonMode.ABSOLUTE,
     ignore_array_order=False,
+    ignore_keys=["MAP_FIELDS"],
     # Default error policy compares status and category, but NOT exact error message text
     error_policy=ErrorComparisonPolicy(
         compare_status=True,

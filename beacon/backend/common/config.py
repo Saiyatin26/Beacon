@@ -39,7 +39,7 @@ class Settings:
     @property
     def llm_provider(self) -> str:
         load_dotenv(PROJECT_ROOT / ".env", override=True)
-        return os.getenv("LLM_PROVIDER", "openrouter").lower().strip()
+        return os.getenv("LLM_PROVIDER", "gemini").lower().strip()
 
     @llm_provider.setter
     def llm_provider(self, val: str) -> None:

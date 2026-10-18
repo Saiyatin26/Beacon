@@ -1230,6 +1230,10 @@ class CanonicalV2WorkflowEngine:
                 out = getattr(rec, "output", None)
                 if out is None and hasattr(rec, "payload") and isinstance(rec.payload, dict):
                     out = rec.payload.get("output")
+                    if out is None:
+                        out = rec.payload.get("normalized_output")
+                    if out is None:
+                        out = rec.payload.get("raw_output")
                 rec_obs_found = False
                 if isinstance(out, (int, float)) and not (isinstance(out, bool) or math.isnan(out) or math.isinf(out)):
                     clean_observations.append(float(out))

@@ -242,7 +242,7 @@ def prepare_cics_source(
             # Capture program name if variable or literal
             prog_m = re.search(r"PROGRAM\s*\(\s*([A-Za-z0-9_-]+)\s*\)", block)
             prog_var = prog_m.group(1) if prog_m else "CDEMO-TO-PROGRAM"
-            return f"           DISPLAY 'OUT-XCTL:' {prog_var}\n           STOP RUN"
+            return f"           DISPLAY 'OUT-XCTL: ' {prog_var}\n           STOP RUN"
         elif "RETURN" in block:
             return (
                 "           DISPLAY 'BEACON-OP:RETURN'\n"
@@ -326,19 +326,21 @@ def prepare_cics_source(
                "BEACON_DS_BAL"
 {map_input_accepts}
 
-           IF WS-BINP-CALN = '0'
-               MOVE 0 TO EIBCALEN
-           ELSE
-               MOVE 100 TO EIBCALEN
-           END-IF
+           EVALUATE WS-BINP-CALN
+               WHEN '0'
+                   MOVE 0 TO EIBCALEN
+               WHEN OTHER
+                   MOVE 100 TO EIBCALEN
+           END-EVALUATE
 
-           IF WS-BINP-AID = 'PF3' OR WS-BINP-AID = 'DFHPF3'
-               MOVE DFHPF3 TO EIBAID
-           ELSE IF WS-BINP-AID = 'PF5' OR WS-BINP-AID = 'DFHPF5'
-               MOVE DFHPF5 TO EIBAID
-           ELSE
-               MOVE DFHENTER TO EIBAID
-           END-IF
+           EVALUATE TRUE
+               WHEN WS-BINP-AID = 'PF3' OR WS-BINP-AID = 'DFHPF3'
+                   MOVE DFHPF3 TO EIBAID
+               WHEN WS-BINP-AID = 'PF5' OR WS-BINP-AID = 'DFHPF5'
+                   MOVE DFHPF5 TO EIBAID
+               WHEN OTHER
+                   MOVE DFHENTER TO EIBAID
+           END-EVALUATE
 """
     source = re.sub(rf"^\s*{entry_para}\.", init_code, source, count=1, flags=re.MULTILINE)
     return source
@@ -405,10 +407,16 @@ def execute_compiled_cobol(
     successful observation; outputs are never inferred from the input vector.
     Returns (success, parsed_outputs, stdout, stderr).
     """
-    aid = str(inputs.get("EIBAID") or "ENTER").strip().upper()
-    calen = inputs.get("EIBCALEN", 100)
-
     normalized_inputs = {str(key).upper(): value for key, value in inputs.items()}
+    aid = str(
+        normalized_inputs.get("EIBAID")
+        or ("PF3" if normalized_inputs.get("CCARD-AID-PFK03") or normalized_inputs.get("CCARD_AID_PFK03") else None)
+        or "ENTER"
+    ).strip().upper()
+    calen = normalized_inputs.get("EIBCALEN", 100)
+    if str(normalized_inputs.get("EIBCALEN", "")).strip() == "0":
+        calen = 0
+
     acct_id = str(
         normalized_inputs.get("ACCT_ID")
         or normalized_inputs.get("ACCTSIDI")
@@ -439,11 +447,12 @@ def execute_compiled_cobol(
     }
     for key, value in inputs.items():
         field_name = str(key).upper()
+        clean_field = re.sub(r"[-]", "_", field_name)
         if (
-            re.fullmatch(r"[A-Z][A-Z0-9_]*", field_name)
+            re.fullmatch(r"[A-Z][A-Z0-9_]*", clean_field)
             and isinstance(value, (str, int, float, bool))
         ):
-            env_vars[f"BEACON_INP_{field_name}"] = str(value)
+            env_vars[f"BEACON_INP_{clean_field}"] = str(value)
     for canonical_name, map_field_name in _BMS_INPUT_ALIASES.items():
         value = normalized_inputs.get(canonical_name)
         if isinstance(value, (str, int, float, bool)):
@@ -516,6 +525,10 @@ def execute_compiled_cobol(
         if "XCTL_PROGRAM" in observed_fields:
             outputs["XCTL_PROGRAM"] = parsed_xctl
             outputs["RETURN_TO_PREV"] = "Y"
+            outputs.setdefault("ACCT_ID", "")
+            outputs.setdefault("ACCT_STATUS", "")
+            outputs.setdefault("ACCT_BAL", "")
+            outputs.setdefault("MESSAGE", "")
         if "MAP_FIELDS" in observed_fields:
             outputs["MAP_FIELDS"] = parsed_map_fields
             outputs.update(
