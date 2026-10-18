@@ -525,10 +525,6 @@ def execute_compiled_cobol(
         if "XCTL_PROGRAM" in observed_fields:
             outputs["XCTL_PROGRAM"] = parsed_xctl
             outputs["RETURN_TO_PREV"] = "Y"
-            outputs.setdefault("ACCT_ID", "")
-            outputs.setdefault("ACCT_STATUS", "")
-            outputs.setdefault("ACCT_BAL", "")
-            outputs.setdefault("MESSAGE", "")
         if "MAP_FIELDS" in observed_fields:
             outputs["MAP_FIELDS"] = parsed_map_fields
             outputs.update(

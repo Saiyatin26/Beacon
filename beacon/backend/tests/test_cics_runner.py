@@ -136,6 +136,28 @@ def test_execute_compiled_cobol_returns_captured_bms_fields(monkeypatch):
     assert "BEACON_INP_ACCTSIDI=00000000123" in captured["command"]
 
 
+def test_execute_compiled_cobol_preserves_observed_empty_bms_fields(monkeypatch):
+    monkeypatch.setattr(
+        cics_runner.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="OUT-MAP-FIELD:INFOMSGO:\n",
+            stderr="",
+        ),
+    )
+
+    ok, outputs, _, _ = cics_runner.execute_compiled_cobol(
+        "/tmp/beacon-cobol",
+        {"acct_id": "100000001"},
+    )
+
+    assert ok is True
+    assert outputs["MAP_FIELDS"] == {"INFOMSGO": ""}
+    assert outputs["MESSAGE"] == ""
+    assert "ACCT_ID" not in outputs
+
+
 def test_cobol_adapter_preserves_leading_zeroes_in_fixed_width_inputs(monkeypatch, tmp_path):
     from certification.adapters import CobolCicsAdapter
 

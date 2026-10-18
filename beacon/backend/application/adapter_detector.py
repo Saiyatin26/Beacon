@@ -6,10 +6,12 @@ Preserves detection evidence and execution provenance.
 """
 
 from enum import Enum
+import hashlib
 import importlib.util
 import logging
 from pathlib import Path
 import sys
+import types
 from typing import Any, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -127,36 +129,27 @@ class AdapterDetector:
         search_dirs = [parent_dir]
         if standard_py_dir.is_dir():
             search_dirs.append(standard_py_dir)
-            if str(standard_py_dir) not in sys.path:
-                sys.path.insert(0, str(standard_py_dir))
+        for search_dir in search_dirs:
+            if str(search_dir) not in sys.path:
+                sys.path.insert(0, str(search_dir))
 
-        for s_dir in search_dirs:
-            for companion in s_dir.glob("*.py"):
-                if companion.resolve() != file_path.resolve():
-                    comp_name = companion.stem
-                    if comp_name not in sys.modules:
-                        try:
-                            c_spec = importlib.util.spec_from_file_location(comp_name, str(companion))
-                            if c_spec and c_spec.loader:
-                                c_mod = importlib.util.module_from_spec(c_spec)
-                                sys.modules[comp_name] = c_mod
-                                sys.modules[f"{parent_dir.name}.{comp_name}"] = c_mod
-                                c_spec.loader.exec_module(c_mod)
-                        except Exception as c_err:
-                            logger.debug(f"Companion pre-load note for {comp_name}: {c_err}")
+        module_key = str(file_path.resolve())
+        module_suffix = hashlib.sha256(module_key.encode("utf-8")).hexdigest()[:12]
+        package_name = f"beacon_dyn_{file_path.stem}_{module_suffix}"
+        package = types.ModuleType(package_name)
+        package.__path__ = [str(search_dir) for search_dir in search_dirs]
+        package.__package__ = package_name
+        sys.modules[package_name] = package
 
-        module_name = f"beacon_dyn_{file_path.stem}_{hash(str(file_path)) & 0xFFFFFFFF}"
+        module_name = f"{package_name}.{file_path.stem}"
         spec = importlib.util.spec_from_file_location(
             module_name,
             str(file_path),
-            submodule_search_locations=[str(parent_dir)],
         )
         if not spec or not spec.loader:
             raise ImportError(f"Could not load module spec for '{file_path}'")
         module = importlib.util.module_from_spec(spec)
-        module.__package__ = parent_dir.name
         sys.modules[module_name] = module
-        sys.modules[f"{parent_dir.name}.{file_path.stem}"] = module
 
         spec.loader.exec_module(module)
         if not hasattr(module, fn_name):

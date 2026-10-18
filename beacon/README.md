@@ -233,7 +233,25 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### 2. Backend & Dashboard
+The requirements file includes `pymongo`, used by the optional MongoDB-backed
+domain storage. Install the full requirements file rather than installing only
+the API framework dependencies.
+
+### 2. GnuCOBOL Runtime (Windows)
+
+The genuine COBOL adapter compiles and runs programs in the `Ubuntu` WSL
+distribution. Install GnuCOBOL there before running the real COBOL integration
+tests:
+
+```powershell
+wsl.exe --install -d Ubuntu
+# Start Ubuntu once and complete its initial username setup.
+wsl.exe -d Ubuntu -- sudo apt-get update
+wsl.exe -d Ubuntu -- sudo apt-get install -y gnucobol
+wsl.exe -d Ubuntu -- cobc --version
+```
+
+### 3. Backend & Dashboard
 ```powershell
 # Terminal 1: Backend API (Development Mode)
 .\.venv\Scripts\python.exe -m uvicorn backend.api.main:app --reload --port 8000
@@ -244,16 +262,22 @@ npm.cmd install
 npm.cmd run dev
 ```
 
-### 3. CLI Command
+### 4. CLI Command
 ```powershell
 .\.venv\Scripts\python.exe -m backend.cli certify --implementation buggy --format text
 ```
 
-### 4. Run Test Suite & Production Build
+### 5. Static Audit, Tests & Production Build
 ```powershell
-# Run full automated test suite
-python -m pytest -q tests
+# Run the complete backend suite, including real WSL/GnuCOBOL integration tests
+.\.venv\Scripts\python.exe -m pytest -q backend\tests
+
+# Run BEACON's backend static audit
+.\.venv\Scripts\python.exe scripts\static_audit.py
 
 # Run frontend production build
-cd frontend && npm run build
+Push-Location frontend
+npm.cmd ci
+npm.cmd run build
+Pop-Location
 ```
