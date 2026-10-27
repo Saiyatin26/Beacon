@@ -1,0 +1,213 @@
+{
+  "experiment": "evidence_sufficiency_case_examples",
+  "description": "Representative examples of correct refusals to certify and cases where inadequate evidence was evaluated",
+  "correct_refusals_to_certify": [
+    {
+      "case_id": "CTRL_00",
+      "category": "clean_control",
+      "ground_truth": "EQUIVALENT",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 0,
+      "verdict": "INSUFFICIENT_COVERAGE",
+      "reason": "G1 Gate Failure: Zero evaluated inputs provided",
+      "factors": {
+        "oracle_coverage": 0.0,
+        "input_coverage": 0.0,
+        "execution_reliability": 0.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_CALC_01",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 0,
+      "verdict": "INSUFFICIENT_COVERAGE",
+      "reason": "G1 Gate Failure: Zero evaluated inputs provided",
+      "factors": {
+        "oracle_coverage": 0.0,
+        "input_coverage": 0.0,
+        "execution_reliability": 0.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_CALC_02",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 0,
+      "verdict": "INSUFFICIENT_COVERAGE",
+      "reason": "G1 Gate Failure: Zero evaluated inputs provided",
+      "factors": {
+        "oracle_coverage": 0.0,
+        "input_coverage": 0.0,
+        "execution_reliability": 0.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_CALC_03",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 0,
+      "verdict": "INSUFFICIENT_COVERAGE",
+      "reason": "G1 Gate Failure: Zero evaluated inputs provided",
+      "factors": {
+        "oracle_coverage": 0.0,
+        "input_coverage": 0.0,
+        "execution_reliability": 0.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_CALC_04",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 0,
+      "verdict": "INSUFFICIENT_COVERAGE",
+      "reason": "G1 Gate Failure: Zero evaluated inputs provided",
+      "factors": {
+        "oracle_coverage": 0.0,
+        "input_coverage": 0.0,
+        "execution_reliability": 0.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_CALC_05",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 0,
+      "verdict": "INSUFFICIENT_COVERAGE",
+      "reason": "G1 Gate Failure: Zero evaluated inputs provided",
+      "factors": {
+        "oracle_coverage": 0.0,
+        "input_coverage": 0.0,
+        "execution_reliability": 0.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    }
+  ],
+  "inadequate_evidence_false_certifications": [
+    {
+      "case_id": "DEF_CALC_11",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 100,
+      "verdict": "CERTIFIED",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "factors": {
+        "oracle_coverage": 1.0,
+        "input_coverage": 1.0,
+        "execution_reliability": 1.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_TX_12",
+      "category": "incorrect_transaction_handling",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 100,
+      "verdict": "CERTIFIED",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "factors": {
+        "oracle_coverage": 1.0,
+        "input_coverage": 1.0,
+        "execution_reliability": 1.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_CALC_11",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 90,
+      "verdict": "CERTIFIED",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "factors": {
+        "oracle_coverage": 1.0,
+        "input_coverage": 1.0,
+        "execution_reliability": 1.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_TX_12",
+      "category": "incorrect_transaction_handling",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 90,
+      "verdict": "CERTIFIED",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "factors": {
+        "oracle_coverage": 1.0,
+        "input_coverage": 1.0,
+        "execution_reliability": 1.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_CALC_11",
+      "category": "incorrect_calculation",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 75,
+      "verdict": "CERTIFIED",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "factors": {
+        "oracle_coverage": 1.0,
+        "input_coverage": 1.0,
+        "execution_reliability": 1.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    },
+    {
+      "case_id": "DEF_TX_12",
+      "category": "incorrect_transaction_handling",
+      "ground_truth": "DEFECTIVE",
+      "pattern": "random_input_removal",
+      "coverage_level_pct": 75,
+      "verdict": "CERTIFIED",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "factors": {
+        "oracle_coverage": 1.0,
+        "input_coverage": 1.0,
+        "execution_reliability": 1.0,
+        "oracle_confidence": 0.95,
+        "input_set_integrity": 1.0,
+        "source_hash_integrity": 1.0
+      }
+    }
+  ],
+  "observations": "Under Full BEACON, when evidence drops below the 80% coverage floor or 90% reliability floor, BEACON safely yields INSUFFICIENT_COVERAGE, completely preventing false certifications. In contrast, output-only testing exhibits a catastrophic rise in false certification up to 96.7% because it cannot distinguish between 'evidence verified equivalent' and 'evidence not collected'."
+}

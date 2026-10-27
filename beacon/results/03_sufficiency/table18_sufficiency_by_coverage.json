@@ -1,0 +1,1589 @@
+{
+  "experiment": "benchmark_linked_evidence_sufficiency",
+  "table_id": "table18",
+  "generated_at": "2026-10-27T15:16:50Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "seeds": [
+    12345,
+    12346,
+    12347,
+    12348,
+    12349
+  ],
+  "n_cases": 76,
+  "definitions": {
+    "coverage_level_pct": "Nominal evidence coverage percentage (100% down to 0%)",
+    "certification_rate": "Fraction of all cases certified (CERTIFIED or CERTIFIED_WITH_WARNINGS)",
+    "false_certification_rate": "Defective cases incorrectly assigned CERTIFIED",
+    "insufficient_coverage_rate": "Cases safely assigned INSUFFICIENT_COVERAGE"
+  },
+  "status": "complete",
+  "data": {
+    "random_input_removal": [
+      {
+        "coverage_level_pct": 100,
+        "target_coverage_ratio": 1.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 90,
+        "target_coverage_ratio": 0.9,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 75,
+        "target_coverage_ratio": 0.75,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 50,
+        "target_coverage_ratio": 0.5,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 25,
+        "target_coverage_ratio": 0.25,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2632,
+          "certification_rate_ci_95": [
+            0.1773,
+            0.3718
+          ],
+          "false_certification_rate": 0.0667,
+          "false_certification_rate_ci_95": [
+            0.0262,
+            0.1593
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9333
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2632,
+          "certification_rate_ci_95": [
+            0.1773,
+            0.3718
+          ],
+          "false_certification_rate": 0.0667,
+          "false_certification_rate_ci_95": [
+            0.0262,
+            0.1593
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9333
+        }
+      },
+      {
+        "coverage_level_pct": 10,
+        "target_coverage_ratio": 0.1,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2895,
+          "certification_rate_ci_95": [
+            0.1996,
+            0.3996
+          ],
+          "false_certification_rate": 0.1,
+          "false_certification_rate_ci_95": [
+            0.0466,
+            0.2015
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2895,
+          "certification_rate_ci_95": [
+            0.1996,
+            0.3996
+          ],
+          "false_certification_rate": 0.1,
+          "false_certification_rate_ci_95": [
+            0.0466,
+            0.2015
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9
+        }
+      },
+      {
+        "coverage_level_pct": 0,
+        "target_coverage_ratio": 0.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 1.0,
+          "certification_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "false_certification_rate": 1.0,
+          "false_certification_rate_ci_95": [
+            0.9398,
+            1.0
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.0
+        }
+      }
+    ],
+    "targeted_input_removal": [
+      {
+        "coverage_level_pct": 100,
+        "target_coverage_ratio": 1.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 90,
+        "target_coverage_ratio": 0.9,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 75,
+        "target_coverage_ratio": 0.75,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 50,
+        "target_coverage_ratio": 0.5,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 25,
+        "target_coverage_ratio": 0.25,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 10,
+        "target_coverage_ratio": 0.1,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.3158,
+          "certification_rate_ci_95": [
+            0.2223,
+            0.427
+          ],
+          "false_certification_rate": 0.1333,
+          "false_certification_rate_ci_95": [
+            0.0691,
+            0.2417
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.8667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.3158,
+          "certification_rate_ci_95": [
+            0.2223,
+            0.427
+          ],
+          "false_certification_rate": 0.1333,
+          "false_certification_rate_ci_95": [
+            0.0691,
+            0.2417
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.8667
+        }
+      },
+      {
+        "coverage_level_pct": 0,
+        "target_coverage_ratio": 0.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.7895,
+          "certification_rate_ci_95": [
+            0.685,
+            0.866
+          ],
+          "false_certification_rate": 1.0,
+          "false_certification_rate_ci_95": [
+            0.9398,
+            1.0
+          ],
+          "insufficient_coverage_rate": 0.2105,
+          "insufficient_coverage_rate_ci_95": [
+            0.134,
+            0.315
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 1.0,
+          "certification_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "false_certification_rate": 1.0,
+          "false_certification_rate_ci_95": [
+            0.9398,
+            1.0
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.0
+        }
+      }
+    ],
+    "rule_removal": [
+      {
+        "coverage_level_pct": 100,
+        "target_coverage_ratio": 1.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 90,
+        "target_coverage_ratio": 0.9,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 75,
+        "target_coverage_ratio": 0.75,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 50,
+        "target_coverage_ratio": 0.5,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 25,
+        "target_coverage_ratio": 0.25,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 10,
+        "target_coverage_ratio": 0.1,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 0,
+        "target_coverage_ratio": 0.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      }
+    ],
+    "observation_removal": [
+      {
+        "coverage_level_pct": 100,
+        "target_coverage_ratio": 1.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 90,
+        "target_coverage_ratio": 0.9,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 75,
+        "target_coverage_ratio": 0.75,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 50,
+        "target_coverage_ratio": 0.5,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 25,
+        "target_coverage_ratio": 0.25,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 10,
+        "target_coverage_ratio": 0.1,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 0,
+        "target_coverage_ratio": 0.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 1.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.9519,
+            1.0
+          ],
+          "recall": 0.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      }
+    ],
+    "conflicting_evidence": [
+      {
+        "coverage_level_pct": 100,
+        "target_coverage_ratio": 1.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 90,
+        "target_coverage_ratio": 0.9,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 75,
+        "target_coverage_ratio": 0.75,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 50,
+        "target_coverage_ratio": 0.5,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 25,
+        "target_coverage_ratio": 0.25,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 10,
+        "target_coverage_ratio": 0.1,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 0,
+        "target_coverage_ratio": 0.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      }
+    ],
+    "invalid_evidence": [
+      {
+        "coverage_level_pct": 100,
+        "target_coverage_ratio": 1.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 90,
+        "target_coverage_ratio": 0.9,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 0.9667
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 75,
+        "target_coverage_ratio": 0.75,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 1.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 50,
+        "target_coverage_ratio": 0.5,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 1.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 25,
+        "target_coverage_ratio": 0.25,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 1.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 10,
+        "target_coverage_ratio": 0.1,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 1.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      },
+      {
+        "coverage_level_pct": 0,
+        "target_coverage_ratio": 0.0,
+        "n_cases": 76,
+        "full_beacon": {
+          "certification_rate": 0.0,
+          "certification_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci_95": [
+            0.0,
+            0.0481
+          ],
+          "recall": 1.0
+        },
+        "output_only_baseline": {
+          "certification_rate": 0.2368,
+          "certification_rate_ci_95": [
+            0.1554,
+            0.3436
+          ],
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci_95": [
+            0.0092,
+            0.1136
+          ],
+          "insufficient_coverage_rate": 0.0,
+          "recall": 0.9667
+        }
+      }
+    ]
+  }
+}

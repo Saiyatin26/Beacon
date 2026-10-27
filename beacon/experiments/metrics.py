@@ -46,8 +46,12 @@ def spearman_correlation(x: list[float], y: list[float]) -> tuple[float, float]:
     """Computes Spearman rank correlation rho and p-value."""
     if len(x) < 3 or len(y) < 3:
         return (0.0, 1.0)
+    if len(set(x)) <= 1 or len(set(y)) <= 1:
+        return (0.0, 1.0)
     res = stats.spearmanr(x, y)
-    return (round(float(res.statistic), 4), round(float(res.pvalue), 6))
+    rho = float(res.statistic) if not math.isnan(res.statistic) else 0.0
+    pval = float(res.pvalue) if not math.isnan(res.pvalue) else 1.0
+    return (round(rho, 4), round(pval, 6))
 
 
 def classify_outcome(ground_truth: str, verdict: str) -> str:

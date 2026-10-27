@@ -1,0 +1,35 @@
+{
+  "experiment": "independent_benchmark_evaluation",
+  "table_id": "table25",
+  "generated_at": "2026-10-27T15:21:58Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "benchmark_target": "https://github.com/billybillymc/masquerade-cobol",
+  "status": "not_done",
+  "reason_for_not_done": "Investigation of the masquerade-cobol repository (commit 685c484124ffeb1f6a06447c54ed55ea152ec13b) confirmed that while it provides legacy CICS COBOL sources and BMS map definitions (including COACTUPC, COACTVWC, COMEN01C), it does not provide an independently verified, runnable modern Python reimplementation for programs other than COACTUPC. In strict compliance with Rule 0 (prohibiting synthetic candidate fabrication or unverified reimplementations), evaluating an artificial candidate would compromise ground-truth validity. Therefore, cross-system evaluation beyond CardDemo COACTUPC is marked not_done with this precise rationale.",
+  "audited_codebases": [
+    {
+      "repository": "masquerade-cobol",
+      "commit": "685c484124ffeb1f6a06447c54ed55ea152ec13b",
+      "programs_examined": [
+        "COACTUPC.cbl",
+        "COACTVWC.cbl",
+        "COMEN01C.cbl"
+      ],
+      "legacy_runtime_compatibility": "Compatible with GnuCOBOL 3.1.2.0 under WSL",
+      "modern_reimplementation_available": false,
+      "adaptations_required": "Would require developing and independently verifying full CICS commarea and record adapters for COACTVWC"
+    }
+  ],
+  "carddemo_baseline_comparison": {
+    "program": "AWS CardDemo COACTUPC",
+    "recall": 0.9667,
+    "precision": 1.0,
+    "f1_score": 0.9831,
+    "false_certification_rate": 0.0333,
+    "insufficient_coverage_rate": 0.0
+  },
+  "limitations": [
+    "CardDemo COACTUPC represents an online CICS transaction processing screen with VSAM and master records. Generalization to batch COBOL or complex multi-step orchestration remains an empirical limitation.",
+    "Cross-benchmark validation on independent repositories requires open benchmarks with paired, validated reference-candidate implementations."
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "experiment": "runtime_breakdown_by_processing_stage",
+  "table_id": "table24",
+  "generated_at": "2026-10-27T15:21:57Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "definitions": {
+    "ai_discovery": "Rule hypothesis mining and extraction",
+    "rule_validation": "Deterministic syntax, anchor, and domain bounds validation",
+    "alignment": "Dual-source candidate alignment",
+    "paired_execution": "Differential execution across reference and target",
+    "scoring": "Evidence factor computation and adjusted scoring",
+    "integrity_verification": "Cryptographic SHA-256 digest calculation and verification"
+  },
+  "status": "complete",
+  "data": [
+    {
+      "workload_id": "W1_small",
+      "total_runtime_seconds": 0.0282,
+      "stage_breakdown_seconds": {
+        "ai_discovery": 0.02532,
+        "rule_validation": 4e-05,
+        "alignment": 0.0,
+        "paired_execution": 0.00233,
+        "scoring": 4e-05,
+        "integrity_verification": 0.00023
+      },
+      "stage_breakdown_percent": {
+        "ai_discovery": 90.56,
+        "rule_validation": 0.14,
+        "alignment": 0.0,
+        "paired_execution": 8.33,
+        "scoring": 0.14,
+        "integrity_verification": 0.82
+      }
+    },
+    {
+      "workload_id": "W2_medium",
+      "total_runtime_seconds": 0.0751,
+      "stage_breakdown_seconds": {
+        "ai_discovery": 0.05034,
+        "rule_validation": 3e-05,
+        "alignment": 1e-05,
+        "paired_execution": 0.023,
+        "scoring": 0.00024,
+        "integrity_verification": 0.00165
+      },
+      "stage_breakdown_percent": {
+        "ai_discovery": 66.88,
+        "rule_validation": 0.04,
+        "alignment": 0.01,
+        "paired_execution": 30.56,
+        "scoring": 0.32,
+        "integrity_verification": 2.19
+      }
+    },
+    {
+      "workload_id": "W3_large",
+      "total_runtime_seconds": 0.3522,
+      "stage_breakdown_seconds": {
+        "ai_discovery": 0.1003,
+        "rule_validation": 4e-05,
+        "alignment": 1e-05,
+        "paired_execution": 0.23393,
+        "scoring": 0.00164,
+        "integrity_verification": 0.01674
+      },
+      "stage_breakdown_percent": {
+        "ai_discovery": 28.44,
+        "rule_validation": 0.01,
+        "alignment": 0.0,
+        "paired_execution": 66.33,
+        "scoring": 0.47,
+        "integrity_verification": 4.75
+      }
+    },
+    {
+      "workload_id": "W4_enterprise",
+      "total_runtime_seconds": 2.1437,
+      "stage_breakdown_seconds": {
+        "ai_discovery": 0.10031,
+        "rule_validation": 8e-05,
+        "alignment": 1e-05,
+        "paired_execution": 1.89543,
+        "scoring": 0.01477,
+        "integrity_verification": 0.13067
+      },
+      "stage_breakdown_percent": {
+        "ai_discovery": 4.68,
+        "rule_validation": 0.0,
+        "alignment": 0.0,
+        "paired_execution": 88.52,
+        "scoring": 0.69,
+        "integrity_verification": 6.1
+      }
+    }
+  ]
+}

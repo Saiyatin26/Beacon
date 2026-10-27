@@ -1,0 +1,296 @@
+{
+  "experiment": "coverage_versus_rates_curves",
+  "coverage_levels": [
+    100,
+    90,
+    75,
+    50,
+    25,
+    10,
+    0
+  ],
+  "curves": {
+    "random_input_removal": {
+      "full_beacon_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2632,
+        0.2895,
+        0.0
+      ],
+      "full_beacon_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0667,
+        0.1,
+        0.0
+      ],
+      "full_beacon_insufficient_coverage_rate": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "output_only_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2632,
+        0.2895,
+        1.0
+      ],
+      "output_only_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0667,
+        0.1,
+        1.0
+      ]
+    },
+    "targeted_input_removal": {
+      "full_beacon_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.3158,
+        0.7895
+      ],
+      "full_beacon_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.1333,
+        1.0
+      ],
+      "full_beacon_insufficient_coverage_rate": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.2105
+      ],
+      "output_only_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.3158,
+        1.0
+      ],
+      "output_only_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.1333,
+        1.0
+      ]
+    },
+    "rule_removal": {
+      "full_beacon_certification_rate": [
+        0.2368,
+        0.2368,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "full_beacon_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "full_beacon_insufficient_coverage_rate": [
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "output_only_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368
+      ],
+      "output_only_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333
+      ]
+    },
+    "observation_removal": {
+      "full_beacon_certification_rate": [
+        0.2368,
+        0.2368,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "full_beacon_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "full_beacon_insufficient_coverage_rate": [
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "output_only_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368
+      ],
+      "output_only_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333
+      ]
+    },
+    "conflicting_evidence": {
+      "full_beacon_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368
+      ],
+      "full_beacon_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333
+      ],
+      "full_beacon_insufficient_coverage_rate": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "output_only_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368
+      ],
+      "output_only_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333
+      ]
+    },
+    "invalid_evidence": {
+      "full_beacon_certification_rate": [
+        0.2368,
+        0.2368,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "full_beacon_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "full_beacon_insufficient_coverage_rate": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "output_only_certification_rate": [
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368,
+        0.2368
+      ],
+      "output_only_false_certification_rate": [
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333,
+        0.0333
+      ]
+    }
+  }
+}

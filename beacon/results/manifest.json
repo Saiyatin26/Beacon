@@ -1,0 +1,224 @@
+{
+  "project": "BEACON Research Evaluation",
+  "generated_at": "2026-10-27T15:22:03Z",
+  "total_artifacts": 31,
+  "artifacts": [
+    {
+      "path": "results/00_audit.md",
+      "size_bytes": 7473,
+      "sha256": "aeadb36062f9c853ef68c4c1b328751a3f0310e12f72ec0bbba79aa9015033ee",
+      "generating_command": "Internal Audit of Table XVII (Step Zero)",
+      "status": "verified"
+    },
+    {
+      "path": "results/environment.json",
+      "size_bytes": 1098,
+      "sha256": "1078627de0a621408835bf1efffb77bd7eb155589de89b73b52248f10a9fec89",
+      "generating_command": "python -c '...environment collection...'",
+      "status": "verified"
+    },
+    {
+      "path": "results/deviations.md",
+      "size_bytes": 2278,
+      "sha256": "a80cdf24341e6230fc620b10565c4d5bb2e9e89b2e89fc854d7047bc62764075",
+      "generating_command": "Protocol Specification & Deviations Log",
+      "status": "verified"
+    },
+    {
+      "path": "results/ground_truth.json",
+      "size_bytes": 39872,
+      "sha256": "ead2ad2950495313a14c2f87c09fbe8e4d9732131bd9101d927707906c114706",
+      "generating_command": "python experiments/run_benchmark_prep.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/reference_suite.json",
+      "size_bytes": 7324,
+      "sha256": "6e5c5cecf7f98ef2fe896ba66fdc571d158019dacf608a389d46b7f603920b3a",
+      "generating_command": "python experiments/run_benchmark_prep.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/review_sheet.csv",
+      "size_bytes": 19258,
+      "sha256": "8260adec08e880b5f2d72cbee9b93bbe0d3d5584895098ee5e16d48276070169",
+      "generating_command": "python experiments/run_benchmark_prep.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/01_benchmark/table13_benchmark_profile.json",
+      "size_bytes": 3198,
+      "sha256": "394bcdc9ef4b2b2f7fbe706f26cbf729163565878ea3d920ae2258489f3cf712",
+      "generating_command": "python experiments/run_benchmark_prep.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/01_benchmark/table14_case_results.json",
+      "size_bytes": 178997,
+      "sha256": "a49262903c07d7e9eb952d8139c5a788ea2cac9029427737b911f909fe5023bb",
+      "generating_command": "python experiments/run_experiment_1_benchmark.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/01_benchmark/table15_confusion.json",
+      "size_bytes": 2866,
+      "sha256": "12a3c7115446ec834143c3ac5c5977a07697df253132b8ce598558b6a7bffe20",
+      "generating_command": "python experiments/run_experiment_1_benchmark.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/01_benchmark/table17_by_category.json",
+      "size_bytes": 3423,
+      "sha256": "fc1cbb69f77aba0002875df12d7fd244b36b8f6cb0088ea6741287ddfa2c5aa4",
+      "generating_command": "python experiments/run_experiment_1_benchmark.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/01_benchmark/representative_cases.json",
+      "size_bytes": 17605,
+      "sha256": "79d854cc485eef1d81ff96e74e5a243f99cf80a7ee728bc99f7d40ca1ea002b9",
+      "generating_command": "python experiments/run_experiment_1_benchmark.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/02_baselines/table16_method_comparison.json",
+      "size_bytes": 23829,
+      "sha256": "2b7721b911d6ec8e8f2f2165985025418cc84dc4179f940025ad6a50e6d1895c",
+      "generating_command": "python experiments/run_experiment_2_baselines.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/02_baselines/per_case_by_method.json",
+      "size_bytes": 65459,
+      "sha256": "965bdf95a771b14fa3e887eb21e741ac175b9dcb323df07d5b7e3ae23941ce75",
+      "generating_command": "python experiments/run_experiment_2_baselines.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/02_baselines/02_summary.md",
+      "size_bytes": 2827,
+      "sha256": "e9cbcc9adaddb8b15e1489e959c5d3f3199f28cd28753c12ac907dcca0f804f7",
+      "generating_command": "python experiments/run_experiment_2_baselines.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/03_sufficiency/definition.md",
+      "size_bytes": 3854,
+      "sha256": "4d4d966f33d125ecae27cba6a9981c0335abc8dd52b3b874f62c912b676a729e",
+      "generating_command": "Formal Mathematical Definitions (Section 4)",
+      "status": "verified"
+    },
+    {
+      "path": "results/03_sufficiency/table18_sufficiency_by_coverage.json",
+      "size_bytes": 43569,
+      "sha256": "a22104cfe790e0cb2908b81891cba8dcb821739ef2893572de4d2cc2f74a988f",
+      "generating_command": "python experiments/run_experiment_3_sufficiency.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/03_sufficiency/table19_verdict_transitions.json",
+      "size_bytes": 1510,
+      "sha256": "8d7bf1dffe6c59c9f81fdaf43d0157060fc618c337cc5f6571db4b7b211ba60d",
+      "generating_command": "python experiments/run_experiment_3_sufficiency.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/03_sufficiency/curves.json",
+      "size_bytes": 5391,
+      "sha256": "6640060f5076b8534bce1c1c1846722c6dda5251408f09dc7c3d3830e6d60c4c",
+      "generating_command": "python experiments/run_experiment_3_sufficiency.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/03_sufficiency/examples.json",
+      "size_bytes": 7471,
+      "sha256": "767887e7ba3bd6e038ebd1557e18226375dae5194ad6751e8e875158022a258f",
+      "generating_command": "python experiments/run_experiment_3_sufficiency.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/04_ablation/table20_ablation.json",
+      "size_bytes": 3886,
+      "sha256": "b555784fbf019e6941cf9b62f0feb628441237aaef0192d73a6a769a317e56c4",
+      "generating_command": "python experiments/run_experiment_4_ablation.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/04_ablation/table21_weight_sensitivity.json",
+      "size_bytes": 43593,
+      "sha256": "f04e01634b7ae7ab65f97b2b123963e95d3756ee605aecd05a801ddafbf2da41",
+      "generating_command": "python experiments/run_experiment_4_ablation.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/04_ablation/table22_integrity_tampering.json",
+      "size_bytes": 4000,
+      "sha256": "c9c75852567df64239f139ac90265e0ed590ffb7bd8eeb5ba41fa2cf431541c3",
+      "generating_command": "python experiments/run_experiment_4_ablation.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/04_ablation/weight_vs_error.json",
+      "size_bytes": 43274,
+      "sha256": "fcf07ec2866135daf1dab7a6e48cec46a0c06f40b41df66e35d5563fc86b2f13",
+      "generating_command": "python experiments/run_experiment_4_ablation.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/04_ablation/weight_flip_cases.json",
+      "size_bytes": 48,
+      "sha256": "25c6d87afc93e9ad66ed2333b69f6d7ec528f974afddc462e5b33bf9a7bf1064",
+      "generating_command": "python experiments/run_experiment_4_ablation.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/04_ablation/ablation_transitions.json",
+      "size_bytes": 52,
+      "sha256": "3cb93ba4a154b816cf873cfdeb4da4c5191d7cccbe4cd2bf05612b6bea284cce",
+      "generating_command": "python experiments/run_experiment_4_ablation.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/04_ablation/ablation_examples.json",
+      "size_bytes": 42,
+      "sha256": "103524ef6432794f1a1fbcba7d21d1c18e9e602ffaa72c86f9dfee3e83239393",
+      "generating_command": "python experiments/run_experiment_4_ablation.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/table23_scaling.json",
+      "size_bytes": 1899,
+      "sha256": "a3c38ef86a48ba23c0b1376df8b075f56f7bcd873a1e8ba570e896996793a1bc",
+      "generating_command": "python experiments/run_experiment_5_scaling.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/table24_stage_breakdown.json",
+      "size_bytes": 3027,
+      "sha256": "b35719b74a14e0c9f4c52d34a962f7b7230c66a23105903e6f7d015a04df1308",
+      "generating_command": "python experiments/run_experiment_5_scaling.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/table25_independent_benchmark.json",
+      "size_bytes": 2110,
+      "sha256": "ba608b85704226362d93891c3da28c9e338064e5b502f93d112ab835a5c8d884",
+      "generating_command": "python experiments/run_experiment_5_scaling.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/scaling_curves.json",
+      "size_bytes": 1534,
+      "sha256": "c706103143189a4a7d6b4abc58fd3d3b8f236e7ff2c5be520ed6767973281f93",
+      "generating_command": "python experiments/run_experiment_5_scaling.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/05_summary.md",
+      "size_bytes": 2259,
+      "sha256": "3d8f580b103eb08492f7b9f714e407e4922032be778424aafca4bbc89ac6e72a",
+      "generating_command": "python experiments/run_experiment_5_scaling.py",
+      "status": "verified"
+    }
+  ]
+}

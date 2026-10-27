@@ -1,0 +1,150 @@
+{
+  "experiment": "component_ablation_study",
+  "table_id": "table20",
+  "generated_at": "2026-10-27T15:21:35Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "seeds": [
+    12345
+  ],
+  "n_cases": 76,
+  "definitions": {
+    "A0": "Full BEACON",
+    "A1": "Without evidence quality discounting (S = R)",
+    "A2": "Without sufficiency gates (G1, G2, G5 off)",
+    "A3": "Without deterministic validation of AI candidate rules",
+    "A4": "Without cryptographic integrity verification"
+  },
+  "status": "complete",
+  "data": [
+    {
+      "variant": "A0_full_beacon",
+      "description": "Full BEACON (all components enabled)",
+      "TP": 58,
+      "FC": 2,
+      "IC": 0,
+      "RI": 0,
+      "FP": 0,
+      "TN": 16,
+      "recall": 0.9667,
+      "recall_ci_95": [
+        0.8864,
+        0.9908
+      ],
+      "false_certification_rate": 0.0333,
+      "false_certification_rate_ci_95": [
+        0.0092,
+        0.1136
+      ],
+      "certified_count": 18,
+      "not_certified_count": 58,
+      "insufficient_coverage_count": 0,
+      "delta_recall_vs_a0": 0.0,
+      "delta_fcr_vs_a0": 0.0,
+      "mcnemar_vs_a0_p_value": 1.0
+    },
+    {
+      "variant": "A1_no_quality_adj",
+      "description": "Ablation A1: No evidence-quality adjustment (S = R)",
+      "TP": 58,
+      "FC": 2,
+      "IC": 0,
+      "RI": 0,
+      "FP": 0,
+      "TN": 16,
+      "recall": 0.9667,
+      "recall_ci_95": [
+        0.8864,
+        0.9908
+      ],
+      "false_certification_rate": 0.0333,
+      "false_certification_rate_ci_95": [
+        0.0092,
+        0.1136
+      ],
+      "certified_count": 18,
+      "not_certified_count": 58,
+      "insufficient_coverage_count": 0,
+      "delta_recall_vs_a0": 0.0,
+      "delta_fcr_vs_a0": 0.0,
+      "mcnemar_vs_a0_p_value": 1.0
+    },
+    {
+      "variant": "A2_no_sufficiency_gates",
+      "description": "Ablation A2: No sufficiency gates (G1, G2, G5 off)",
+      "TP": 58,
+      "FC": 2,
+      "IC": 0,
+      "RI": 0,
+      "FP": 0,
+      "TN": 16,
+      "recall": 0.9667,
+      "recall_ci_95": [
+        0.8864,
+        0.9908
+      ],
+      "false_certification_rate": 0.0333,
+      "false_certification_rate_ci_95": [
+        0.0092,
+        0.1136
+      ],
+      "certified_count": 18,
+      "not_certified_count": 58,
+      "insufficient_coverage_count": 0,
+      "delta_recall_vs_a0": 0.0,
+      "delta_fcr_vs_a0": 0.0,
+      "mcnemar_vs_a0_p_value": 1.0
+    },
+    {
+      "variant": "A3_no_deterministic_validation",
+      "description": "Ablation A3: No deterministic validation of AI rules (raw candidates admitted)",
+      "TP": 58,
+      "FC": 2,
+      "IC": 0,
+      "RI": 0,
+      "FP": 0,
+      "TN": 16,
+      "recall": 0.9667,
+      "recall_ci_95": [
+        0.8864,
+        0.9908
+      ],
+      "false_certification_rate": 0.0333,
+      "false_certification_rate_ci_95": [
+        0.0092,
+        0.1136
+      ],
+      "certified_count": 18,
+      "not_certified_count": 58,
+      "insufficient_coverage_count": 0,
+      "delta_recall_vs_a0": 0.0,
+      "delta_fcr_vs_a0": 0.0,
+      "mcnemar_vs_a0_p_value": 1.0
+    },
+    {
+      "variant": "A4_no_integrity_checks",
+      "description": "Ablation A4: No cryptographic integrity checks (G3 off)",
+      "TP": 58,
+      "FC": 2,
+      "IC": 0,
+      "RI": 0,
+      "FP": 0,
+      "TN": 16,
+      "recall": 0.9667,
+      "recall_ci_95": [
+        0.8864,
+        0.9908
+      ],
+      "false_certification_rate": 0.0333,
+      "false_certification_rate_ci_95": [
+        0.0092,
+        0.1136
+      ],
+      "certified_count": 18,
+      "not_certified_count": 58,
+      "insufficient_coverage_count": 0,
+      "delta_recall_vs_a0": 0.0,
+      "delta_fcr_vs_a0": 0.0,
+      "mcnemar_vs_a0_p_value": 1.0
+    }
+  ]
+}

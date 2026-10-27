@@ -1,0 +1,91 @@
+{
+  "experiment": "integrity_tampering_detection",
+  "table_id": "table22",
+  "generated_at": "2026-10-27T15:21:36Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "verifier_function": "certification.models.verify_artifact_integrity",
+  "status": "complete",
+  "data": [
+    {
+      "tampering_condition": "edit_equivalence_score",
+      "artifact_type_altered": "CertificationArtifact.score",
+      "description": "Attacker modifies equivalence score from 0.985 to 1.000",
+      "detected": true,
+      "verification_result": "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH",
+      "expected_detection": true,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "edit_certification_status",
+      "artifact_type_altered": "CertificationArtifact.status",
+      "description": "Attacker modifies status from NOT_CERTIFIED to CERTIFIED",
+      "detected": true,
+      "verification_result": "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH",
+      "expected_detection": true,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "edit_policy_hash",
+      "artifact_type_altered": "CertificationArtifact.certification_policy_hash",
+      "description": "Attacker swaps policy hash with altered lax policy hash",
+      "detected": true,
+      "verification_result": "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH",
+      "expected_detection": true,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "swap_oracle_set_hash",
+      "artifact_type_altered": "CertificationArtifact.oracle_set_hash",
+      "description": "Attacker swaps certified oracle set digest with unverified set",
+      "detected": true,
+      "verification_result": "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH",
+      "expected_detection": true,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "edit_threshold_fingerprint",
+      "artifact_type_altered": "CertificationArtifact.threshold_resolution_fingerprint",
+      "description": "Attacker edits dynamic threshold resolution authority fingerprint",
+      "detected": true,
+      "verification_result": "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH",
+      "expected_detection": true,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "edit_timestamp",
+      "artifact_type_altered": "CertificationArtifact.timestamp",
+      "description": "Attacker edits certificate issuance timestamp",
+      "detected": true,
+      "verification_result": "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH",
+      "expected_detection": true,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "edit_application_id",
+      "artifact_type_altered": "CertificationArtifact.project_id",
+      "description": "Attacker retargets certificate to different application",
+      "detected": true,
+      "verification_result": "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH",
+      "expected_detection": true,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "rewrite_payload_and_recompute_content_hash",
+      "artifact_type_altered": "CertificationArtifact (Full Forge)",
+      "description": "Attacker alters score AND recomputes content_hash to match forged payload",
+      "detected": false,
+      "verification_result": "PASSED_VERIFICATION",
+      "expected_detection": false,
+      "consistent_with_threat_model": true
+    },
+    {
+      "tampering_condition": "replace_whole_artifact_store",
+      "artifact_type_altered": "Durable File Store / SQLite Repository",
+      "description": "Attacker replaces entire store file with synthetic replacement database",
+      "detected": false,
+      "verification_result": "Store replaced: Internal hashes inside replacement store remain syntactically self-consistent",
+      "expected_detection": false,
+      "consistent_with_threat_model": true
+    }
+  ]
+}

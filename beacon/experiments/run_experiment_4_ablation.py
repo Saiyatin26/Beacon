@@ -22,6 +22,7 @@ from typing import Any, Optional
 import numpy as np
 
 sys.path.insert(0, ".")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "backend"))
 from experiments.benchmark_cases import (
     get_all_benchmark_cases,
     reference_runner,
@@ -416,6 +417,7 @@ print("Written results/04_ablation/table21_weight_sensitivity.json & weight_vs_e
 from certification.models import (
     CertificationArtifact,
     CertificationStatus,
+    CertificationMetrics,
     compute_artifact_content_hash,
     verify_artifact_integrity,
 )
@@ -423,74 +425,75 @@ from certification.models import (
 # Build a genuine artifact
 genuine_art = CertificationArtifact(
     certification_id="CERT-GENUINE-COACTUPC-001",
-    policy_hash="pol_sha256_e7a097a02870a13529ab846a2ddd3cf398a243263517ded399bd55a25fb9578f",
-    application_id="COACTUPC",
+    project_id="COACTUPC",
+    certification_policy_hash="pol_sha256_e7a097a02870a13529ab846a2ddd3cf398a243263517ded399bd55a25fb9578f",
     oracle_set_hash="orc_sha256_7a925ffd5d7277e32bfff57acafd52278ccdc7515cef5f0ba4f5b02149e84c76",
-    equivalence_score=0.9850,
+    score=0.9850,
     status=CertificationStatus.CERTIFIED,
     timestamp=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     threshold_resolution_id="RES-001",
     threshold_resolution_fingerprint="fp_sha256_0123456789abcdef",
+    metrics=CertificationMetrics(overall_equivalence_score=0.9850),
     content_hash="",
 )
-genuine_art.content_hash = compute_artifact_content_hash(genuine_art)
+genuine_art = genuine_art.model_copy(update={"content_hash": compute_artifact_content_hash(genuine_art)})
 assert verify_artifact_integrity(genuine_art) is True, "Genuine artifact failed self-verification!"
 
 tamper_conditions = [
     {
         "tampering_condition": "edit_equivalence_score",
-        "artifact_type_altered": "CertificationArtifact.equivalence_score",
+        "artifact_type_altered": "CertificationArtifact.score",
         "description": "Attacker modifies equivalence score from 0.985 to 1.000",
-        "apply_tamper": lambda a: setattr(a, "equivalence_score", 1.000),
+        "apply_tamper": lambda a: a.model_copy(update={"score": 1.000}),
         "expected_detection": True,
     },
     {
         "tampering_condition": "edit_certification_status",
         "artifact_type_altered": "CertificationArtifact.status",
         "description": "Attacker modifies status from NOT_CERTIFIED to CERTIFIED",
-        "apply_tamper": lambda a: setattr(a, "status", CertificationStatus.CERTIFIED_WITH_WARNINGS),
+        "apply_tamper": lambda a: a.model_copy(update={"status": CertificationStatus.CERTIFIED_WITH_WARNINGS}),
         "expected_detection": True,
     },
     {
         "tampering_condition": "edit_policy_hash",
-        "artifact_type_altered": "CertificationArtifact.policy_hash",
+        "artifact_type_altered": "CertificationArtifact.certification_policy_hash",
         "description": "Attacker swaps policy hash with altered lax policy hash",
-        "apply_tamper": lambda a: setattr(a, "policy_hash", "tampered_policy_hash_000000"),
+        "apply_tamper": lambda a: a.model_copy(update={"certification_policy_hash": "tampered_policy_hash_000000"}),
         "expected_detection": True,
     },
     {
         "tampering_condition": "swap_oracle_set_hash",
         "artifact_type_altered": "CertificationArtifact.oracle_set_hash",
         "description": "Attacker swaps certified oracle set digest with unverified set",
-        "apply_tamper": lambda a: setattr(a, "oracle_set_hash", "tampered_oracle_set_digest_111111"),
+        "apply_tamper": lambda a: a.model_copy(update={"oracle_set_hash": "tampered_oracle_set_digest_111111"}),
         "expected_detection": True,
     },
     {
         "tampering_condition": "edit_threshold_fingerprint",
         "artifact_type_altered": "CertificationArtifact.threshold_resolution_fingerprint",
         "description": "Attacker edits dynamic threshold resolution authority fingerprint",
-        "apply_tamper": lambda a: setattr(a, "threshold_resolution_fingerprint", "fp_tampered_222222"),
+        "apply_tamper": lambda a: a.model_copy(update={"threshold_resolution_fingerprint": "fp_tampered_222222"}),
         "expected_detection": True,
     },
     {
         "tampering_condition": "edit_timestamp",
         "artifact_type_altered": "CertificationArtifact.timestamp",
         "description": "Attacker edits certificate issuance timestamp",
-        "apply_tamper": lambda a: setattr(a, "timestamp", "2030-01-01T00:00:00Z"),
+        "apply_tamper": lambda a: a.model_copy(update={"timestamp": "2030-01-01T00:00:00Z"}),
         "expected_detection": True,
     },
     {
         "tampering_condition": "edit_application_id",
-        "artifact_type_altered": "CertificationArtifact.application_id",
+        "artifact_type_altered": "CertificationArtifact.project_id",
         "description": "Attacker retargets certificate to different application",
-        "apply_tamper": lambda a: setattr(a, "application_id", "MALICIOUS_APP"),
+        "apply_tamper": lambda a: a.model_copy(update={"project_id": "MALICIOUS_APP"}),
         "expected_detection": True,
     },
     {
         "tampering_condition": "rewrite_payload_and_recompute_content_hash",
         "artifact_type_altered": "CertificationArtifact (Full Forge)",
         "description": "Attacker alters score AND recomputes content_hash to match forged payload",
-        "apply_tamper": lambda a: [setattr(a, "equivalence_score", 0.999), setattr(a, "content_hash", compute_artifact_content_hash(a))],
+        "apply_tamper": lambda a: (lambda forged: forged.model_copy(update={"content_hash": compute_artifact_content_hash(forged)}))(a.model_copy(update={"score": 0.999})),
         "expected_detection": False,  # As stated in protocol: local single-artifact verifier cannot detect valid recomputed hash without ledger/root authority
     },
     {
@@ -504,15 +507,14 @@ tamper_conditions = [
 
 table22_rows = []
 for t_spec in tamper_conditions:
-    art_copy = deepcopy(genuine_art)
-    t_spec["apply_tamper"](art_copy)
+    art_tampered = t_spec["apply_tamper"](genuine_art)
 
-    if art_copy == "STORE_REPLACED":
+    if art_tampered == "STORE_REPLACED":
         is_valid = True
         raw_result = "Store replaced: Internal hashes inside replacement store remain syntactically self-consistent"
         detected = False
     else:
-        is_valid = verify_artifact_integrity(art_copy)
+        is_valid = verify_artifact_integrity(art_tampered)
         detected = not is_valid
         raw_result = "PASSED_VERIFICATION" if is_valid else "FAILED_CONTENT_HASH_INTEGRITY_MISMATCH"
 

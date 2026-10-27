@@ -1,0 +1,57 @@
+{
+  "experiment": "verdict_transitions_under_evidence_degradation",
+  "table_id": "table19",
+  "generated_at": "2026-10-27T15:16:50Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "seeds": [
+    12345
+  ],
+  "n_cases": 76,
+  "definitions": {
+    "missing_evidence": "Verdicts when inputs or rules are omitted (patterns a, b, c)",
+    "weak_evidence": "Verdicts when execution reliability is degraded (pattern d)",
+    "conflicting_evidence": "Verdicts when contradictory evidence is injected (pattern e)",
+    "invalid_evidence": "Verdicts when cryptographic integrity fails (pattern f)"
+  },
+  "status": "complete",
+  "data": {
+    "missing_evidence": {
+      "CERTIFIED": {
+        "CERTIFIED": 254,
+        "INSUFFICIENT_COVERAGE": 124
+      },
+      "NOT_CERTIFIED": {
+        "NOT_CERTIFIED": 800,
+        "CERTIFIED": 70,
+        "INSUFFICIENT_COVERAGE": 348
+      }
+    },
+    "weak_evidence": {
+      "CERTIFIED": {
+        "CERTIFIED": 36,
+        "INSUFFICIENT_COVERAGE": 90
+      },
+      "NOT_CERTIFIED": {
+        "NOT_CERTIFIED": 116,
+        "INSUFFICIENT_COVERAGE": 290
+      }
+    },
+    "conflicting_evidence": {
+      "CERTIFIED": {
+        "CERTIFIED": 126
+      },
+      "NOT_CERTIFIED": {
+        "NOT_CERTIFIED": 406
+      }
+    },
+    "invalid_evidence": {
+      "CERTIFIED": {
+        "CERTIFIED": 36,
+        "NOT_CERTIFIED": 90
+      },
+      "NOT_CERTIFIED": {
+        "NOT_CERTIFIED": 406
+      }
+    }
+  }
+}
