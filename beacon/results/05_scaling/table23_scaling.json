@@ -1,7 +1,10 @@
 {
   "experiment": "runtime_and_memory_scaling",
   "table_id": "table23",
-  "generated_at": "2026-10-27T15:21:57Z",
+  "evaluation_type": "component_processing_microbenchmark",
+  "classification": "Component Processing Microbenchmark (Measured Execution of CardDemo Companion Pipeline Stages)",
+  "scope_notice": "Evaluates local single-node execution throughput of CardDemo companion pipeline stages; does not claim distributed multi-node enterprise throughput.",
+  "generated_at": "2026-10-27T16:41:54Z",
   "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
   "seeds": [
     12345
@@ -20,10 +23,10 @@
       "evidence_records_count": 200,
       "rules_count": 5,
       "components_count": 1,
-      "median_runtime_seconds": 0.0282,
-      "runtime_iqr_seconds": 0.0003,
-      "peak_memory_mb": 35.47,
-      "throughput_cases_per_sec": 3545.2
+      "median_runtime_seconds": 0.0054,
+      "runtime_iqr_seconds": 0.002,
+      "peak_memory_mb": 72.53,
+      "throughput_cases_per_sec": 18556.0
     },
     {
       "workload_id": "W2_medium",
@@ -31,10 +34,10 @@
       "evidence_records_count": 2000,
       "rules_count": 10,
       "components_count": 1,
-      "median_runtime_seconds": 0.0751,
-      "runtime_iqr_seconds": 0.0003,
-      "peak_memory_mb": 38.81,
-      "throughput_cases_per_sec": 13314.1
+      "median_runtime_seconds": 0.0414,
+      "runtime_iqr_seconds": 0.0094,
+      "peak_memory_mb": 76.29,
+      "throughput_cases_per_sec": 24159.4
     },
     {
       "workload_id": "W3_large",
@@ -42,10 +45,10 @@
       "evidence_records_count": 20000,
       "rules_count": 25,
       "components_count": 2,
-      "median_runtime_seconds": 0.3522,
-      "runtime_iqr_seconds": 0.0122,
-      "peak_memory_mb": 56.55,
-      "throughput_cases_per_sec": 28393.9
+      "median_runtime_seconds": 1.5056,
+      "runtime_iqr_seconds": 0.1059,
+      "peak_memory_mb": 94.32,
+      "throughput_cases_per_sec": 6642.0
     },
     {
       "workload_id": "W4_enterprise",
@@ -53,10 +56,10 @@
       "evidence_records_count": 100000,
       "rules_count": 50,
       "components_count": 3,
-      "median_runtime_seconds": 2.1437,
-      "runtime_iqr_seconds": 0.2964,
-      "peak_memory_mb": 128.3,
-      "throughput_cases_per_sec": 23324.3
+      "median_runtime_seconds": 7.988,
+      "runtime_iqr_seconds": 3.2008,
+      "peak_memory_mb": 166.24,
+      "throughput_cases_per_sec": 6259.4
     }
   ]
 }

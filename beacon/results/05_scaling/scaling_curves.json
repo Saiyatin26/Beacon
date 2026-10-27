@@ -1,4 +1,5 @@
 {
+  "evaluation_type": "component_processing_microbenchmark",
   "scaling_data": {
     "workload_sizes": [
       100,
@@ -7,61 +8,61 @@
       50000
     ],
     "median_total_runtime_s": [
-      0.0282,
-      0.0751,
-      0.3522,
-      2.1437
+      0.0054,
+      0.0414,
+      1.5056,
+      7.988
     ],
     "median_peak_memory_mb": [
-      35.47,
-      38.81,
-      56.55,
-      128.3
+      72.53,
+      76.29,
+      94.32,
+      166.24
     ],
     "throughput_inputs_per_s": [
-      3545.2,
-      13314.1,
-      28393.9,
-      23324.3
+      18556.0,
+      24159.4,
+      6642.0,
+      6259.4
     ],
     "stage_breakdowns": {
       "W1_small": {
-        "ai_discovery": 90.56,
-        "rule_validation": 0.14,
-        "alignment": 0.0,
-        "paired_execution": 8.33,
-        "scoring": 0.14,
-        "integrity_verification": 0.82
+        "ai_discovery": 2.36,
+        "rule_validation": 0.54,
+        "alignment": 0.18,
+        "paired_execution": 87.3,
+        "scoring": 1.45,
+        "integrity_verification": 8.17
       },
       "W2_medium": {
-        "ai_discovery": 66.88,
-        "rule_validation": 0.04,
-        "alignment": 0.01,
-        "paired_execution": 30.56,
-        "scoring": 0.32,
-        "integrity_verification": 2.19
+        "ai_discovery": 0.42,
+        "rule_validation": 0.07,
+        "alignment": 0.02,
+        "paired_execution": 93.37,
+        "scoring": 0.86,
+        "integrity_verification": 5.25
       },
       "W3_large": {
-        "ai_discovery": 28.44,
-        "rule_validation": 0.01,
-        "alignment": 0.0,
-        "paired_execution": 66.33,
-        "scoring": 0.47,
-        "integrity_verification": 4.75
+        "ai_discovery": 0.1,
+        "rule_validation": 0.02,
+        "alignment": 0.01,
+        "paired_execution": 93.6,
+        "scoring": 0.62,
+        "integrity_verification": 5.66
       },
       "W4_enterprise": {
-        "ai_discovery": 4.68,
-        "rule_validation": 0.0,
+        "ai_discovery": 0.04,
+        "rule_validation": 0.01,
         "alignment": 0.0,
-        "paired_execution": 88.52,
-        "scoring": 0.69,
-        "integrity_verification": 6.1
+        "paired_execution": 94.15,
+        "scoring": 0.56,
+        "integrity_verification": 5.24
       }
     }
   },
   "log_log_regression": {
-    "slope_beta": 0.6835,
-    "r_squared": 0.9603,
-    "interpretation": "Runtime scales with O(N^0.68) empirical power law (near linear O(N))"
+    "slope_beta": 1.2174,
+    "r_squared": 0.9878,
+    "interpretation": "Runtime scales with O(N^1.22) empirical power law (near linear O(N))"
   }
 }

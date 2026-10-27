@@ -316,19 +316,27 @@ def _validate_inputs(inp: AccountUpdateInput) -> list[str]:
         errors.append("Account Active Status must be Y or N")
         return errors
 
-    for label, val in [
-        ("Cash Credit Limit", inp.cash_credit_limit),
-        ("Credit Limit", inp.credit_limit),
-    ]:  # Reordered independent checks
-        v = val.strip() if val else ""
-        if not v:
-            errors.append(f"{label} must be supplied")
-            return errors
-        try:
-            Decimal(v)
-        except InvalidOperation:
-            errors.append(f"{label} is not valid")
-            return errors
+    # Unrolled sequential validation: Credit Limit evaluated first
+    _v_cred = inp.credit_limit.strip() if inp.credit_limit else ""
+    if not _v_cred:
+        errors.append("Credit Limit must be supplied")
+        return errors
+    try:
+        Decimal(_v_cred)
+    except InvalidOperation:
+        errors.append("Credit Limit is not valid")
+        return errors
+
+    # Unrolled sequential validation: Cash Credit Limit evaluated second
+    _v_cash = inp.cash_credit_limit.strip() if inp.cash_credit_limit else ""
+    if not _v_cash:
+        errors.append("Cash Credit Limit must be supplied")
+        return errors
+    try:
+        Decimal(_v_cash)
+    except InvalidOperation:
+        errors.append("Cash Credit Limit is not valid")
+        return errors
 
     last = inp.last_name.strip() if inp.last_name else ""
     if not last:

@@ -191,7 +191,7 @@ def _initial_display(acct_id_str, acct_repo, cust_repo, xref_repo, commarea, res
         result.commarea = commarea
         return result
 
-    if not re.fullmatch(r"[0-9]+", acct_id_str.strip()):  # Equivalent regex digit validation
+    if not (bool(acct_id_str.strip()) and all(c.isdigit() for c in acct_id_str.strip())):  # Universal isdigit equivalence
         result.error = True
         result.message = "Account number must be a non zero 11 digit number"
         result.screen = ScreenHeader.now(WS_TRANID, WS_PGMNAME)

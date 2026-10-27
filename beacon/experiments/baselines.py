@@ -132,12 +132,17 @@ def evaluate_m1_output_only(
     first_diff = None
 
     for inp in test_inputs:
-        r_out = reference_runner(inp)
-        c_out = candidate_runner(inp)
-        if r_out != c_out:
+        try:
+            r_out = reference_runner(inp)
+            c_out = candidate_runner(inp)
+            if r_out != c_out:
+                mismatches += 1
+                if first_diff is None:
+                    first_diff = f"Divergence on {list(k for k in r_out if r_out.get(k) != c_out.get(k))}"
+        except Exception as e:
             mismatches += 1
             if first_diff is None:
-                first_diff = f"Divergence on {list(k for k in r_out if r_out.get(k) != c_out.get(k))}"
+                first_diff = f"Execution error/timeout: {type(e).__name__}"
 
     elapsed = time.perf_counter() - t0
     n = len(test_inputs)
@@ -300,18 +305,15 @@ def evaluate_m4_full_beacon(
     weights: dict[str, float] = DEFAULT_WEIGHTS,
     corrupt_integrity: bool = False,
     override_factors: Optional[dict[str, float]] = None,
+    disable_quality_adjustment: bool = False,
+    disable_gates: Optional[list[str]] = None,
+    active_rule_set: Optional[set[str]] = None,
 ) -> BaselineVerdict:
     """M4 Full BEACON: Complete fail-closed evidence-adjusted certification pipeline.
 
-    Evaluates S_adj = R * Q with dynamic threshold Theta and all safety gates active:
-    G1: Non-empty evaluated inputs (total_inputs > 0)
-    G2: Execution reliability floor (reliability >= 0.90)
-    G3: Cryptographic input and source hash integrity (== 1.0)
-    G4: Provenance tracking recorded
-    G5: Targeted rule coverage floor (oracle_coverage >= min_coverage = 0.80)
-    G6: Behavioral mismatch gate (zero regressions: any divergence -> NOT_CERTIFIED)
-
-    Returns INSUFFICIENT_COVERAGE when coverage or input evidence is inadequate.
+    Evaluates S_adj = R * Q with dynamic threshold Theta and safety gates.
+    Individual components (quality adjustment, specific gates, active rules) can be isolated
+    via parameters for controlled ablation and evidence degradation studies.
     """
     t0 = time.perf_counter()
     mismatches = 0
@@ -319,7 +321,10 @@ def evaluate_m4_full_beacon(
     covered_rules = set()
 
     for inp in test_inputs:
-        covered_rules.update(classify_input_rules(inp))
+        rules = classify_input_rules(inp)
+        if active_rule_set is not None:
+            rules = [r for r in rules if r in active_rule_set]
+        covered_rules.update(rules)
         try:
             r_out = reference_runner(inp)
             c_out = candidate_runner(inp)
@@ -344,28 +349,36 @@ def evaluate_m4_full_beacon(
     if override_factors:
         factors.update(override_factors)
 
-    q_score = compute_quality_score(factors, weights)
-    s_adj = round(r_score * q_score, 6)
+    if disable_quality_adjustment:
+        q_score = 1.0
+        s_adj = round(r_score, 6)
+    else:
+        q_score = compute_quality_score(factors, weights)
+        s_adj = round(r_score * q_score, 6)
+
+    dis_gates = set(disable_gates or [])
+    active_gates = [g for g in ["G1_input_floor", "G2_reliability_floor", "G3_integrity", "G4_provenance", "G5_coverage_floor", "G6_mismatch"]
+                    if not any(dg in g for dg in dis_gates)]
 
     # Fail-closed Gate Evaluation
-    if n == 0:
+    if "G1" not in dis_gates and n == 0:
         verdict = "INSUFFICIENT_COVERAGE"
         reason = "G1 Gate Failure: Zero evaluated inputs provided"
-    elif factors["execution_reliability"] < min_reliability:
+    elif "G2" not in dis_gates and factors["execution_reliability"] < min_reliability:
         verdict = "INSUFFICIENT_COVERAGE"
         reason = f"G2 Gate Failure: Execution reliability ({factors['execution_reliability']*100:.1f}%) below floor ({min_reliability*100:.1f}%)"
-    elif factors["input_set_integrity"] < 1.0 or factors["source_hash_integrity"] < 1.0:
+    elif "G3" not in dis_gates and (factors["input_set_integrity"] < 1.0 or factors["source_hash_integrity"] < 1.0):
         verdict = "NOT_CERTIFIED"
         reason = "G3 Gate Failure: Input or source integrity verification failed"
-    elif factors["oracle_coverage"] < min_coverage:
+    elif "G5" not in dis_gates and factors["oracle_coverage"] < min_coverage:
         verdict = "INSUFFICIENT_COVERAGE"
         reason = f"G5 Gate Failure: Rule coverage ({factors['oracle_coverage']*100:.1f}%) below required floor ({min_coverage*100:.1f}%)"
-    elif mismatches > 0:
+    elif "G6" not in dis_gates and mismatches > 0:
         verdict = "NOT_CERTIFIED"
         reason = f"G6 Gate Failure: {mismatches} behavioral mismatches detected on contract"
     elif s_adj >= theta:
         verdict = "CERTIFIED"
-        reason = f"Adjusted score {s_adj:.4f} meets policy threshold {theta:.2f} with all gates satisfied"
+        reason = f"Adjusted score {s_adj:.4f} meets policy threshold {theta:.2f} with all active gates satisfied"
     else:
         verdict = "NOT_CERTIFIED"
         reason = f"Adjusted score {s_adj:.4f} below threshold {theta:.2f}"
@@ -381,5 +394,5 @@ def evaluate_m4_full_beacon(
         evaluated_count=n,
         elapsed_seconds=elapsed,
         factors=factors,
-        active_gates=["G1_input_floor", "G2_reliability_floor", "G3_integrity", "G4_provenance", "G5_coverage_floor", "G6_mismatch"],
+        active_gates=active_gates,
     )

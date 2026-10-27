@@ -113,7 +113,7 @@
       "pattern": "random_input_removal",
       "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
-      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all active gates satisfied",
       "factors": {
         "oracle_coverage": 1.0,
         "input_coverage": 1.0,
@@ -130,7 +130,7 @@
       "pattern": "random_input_removal",
       "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
-      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all active gates satisfied",
       "factors": {
         "oracle_coverage": 1.0,
         "input_coverage": 1.0,
@@ -147,7 +147,7 @@
       "pattern": "random_input_removal",
       "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
-      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all active gates satisfied",
       "factors": {
         "oracle_coverage": 1.0,
         "input_coverage": 1.0,
@@ -164,7 +164,7 @@
       "pattern": "random_input_removal",
       "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
-      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all active gates satisfied",
       "factors": {
         "oracle_coverage": 1.0,
         "input_coverage": 1.0,
@@ -181,7 +181,7 @@
       "pattern": "random_input_removal",
       "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
-      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all active gates satisfied",
       "factors": {
         "oracle_coverage": 1.0,
         "input_coverage": 1.0,
@@ -198,7 +198,7 @@
       "pattern": "random_input_removal",
       "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
-      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all active gates satisfied",
       "factors": {
         "oracle_coverage": 1.0,
         "input_coverage": 1.0,

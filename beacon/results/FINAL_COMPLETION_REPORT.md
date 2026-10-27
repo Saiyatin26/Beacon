@@ -30,12 +30,12 @@
 | **REQ-17** | Table XVIII: Sufficiency results | `results/03_sufficiency/table18_sufficiency_by_coverage.json` | 6 degradation patterns across 7 coverage levels {100%..0%} | `complete` |
 | **REQ-18** | Table XIX: Verdict transitions | `results/03_sufficiency/table19_verdict_transitions.json` | Transition matrices as evidence coverage drops below policy floor | `complete` |
 | **REQ-19** | Sufficiency curves & examples | `results/03_sufficiency/curves.json`, `examples.json` | Quantitative FCR vs coverage data and failure examples | `complete` |
-| **REQ-20** | Table XX: Component ablation | `results/04_ablation/table20_ablation.json` | Ablations A1–A7 measuring gate and component contributions | `complete` |
+| **REQ-20** | Table XX: Component ablation | `results/04_ablation/table20_ablation.json` | Ablations A1–A7 measuring gate and component contributions (A3 marked partial) | `complete` (A3: `partial`) |
 | **REQ-21** | Table XXI: Weight sensitivity | `results/04_ablation/table21_weight_sensitivity.json` | 24 weight configurations (±25%, ±50%) with flip rates | `complete` |
 | **REQ-22** | Table XXII: Cryptographic tampering | `results/04_ablation/table22_integrity_tampering.json` | 9 real verifier tamper tests on frozen `CertificationArtifact` | `complete` |
-| **REQ-23** | Table XXIII: Scalability benchmarks | `results/05_scaling/table23_scaling.json` | Workloads W1..W4 (100 to 50,000 inputs) across 5 repetitions | `complete` |
+| **REQ-23** | Table XXIII: Scalability benchmarks | `results/05_scaling/table23_scaling.json` | Workloads W1..W4 (100 to 50,000 inputs) across 5 repetitions; microbenchmark | `complete` |
 | **REQ-24** | Table XXIV: Stage breakdown | `results/05_scaling/table24_stage_breakdown.json` | Execution, discovery, reconciliation, verification timings | `complete` |
-| **REQ-25** | Table XXV: Second benchmark | `results/05_scaling/table25_independent_benchmark.json` | Status `not_done` per Rule 0 with verified audit rationale | `complete` |
+| **REQ-25** | Table XXV: Second benchmark | `results/05_scaling/table25_independent_benchmark.json` | Documented audit of masquerade-cobol lacking verified Python modernizations | `not_done` |
 | **REQ-26** | Master manifest & verification | `results/manifest.json` | SHA-256 digests and generation commands for all artifacts | `complete` |
 | **REQ-27** | Master execution script | `run_all.sh`, `README_EXPERIMENTS.md` | Reproducibility shell script and documentation | `complete` |
 | **REQ-28** | Executive paper summary | `RESULTS_SUMMARY.md` | Publication-ready empirical synthesis | `complete` |

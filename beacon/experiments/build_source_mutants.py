@@ -1137,18 +1137,54 @@ def generate_all_mutants() -> list[dict]:
         "ground_truth": "EQUIVALENT", "source_code": code,
     })
 
-    # EQUIV_03: Reordered independent loop elements for credit limit checking
+    # EQUIV_03: Unrolled sequential validation preserving strict error precedence
+    target_unroll = '''    for label, val in [
+        ("Credit Limit", inp.credit_limit),
+        ("Cash Credit Limit", inp.cash_credit_limit),
+    ]:
+        v = val.strip() if val else ""
+        if not v:
+            errors.append(f"{label} must be supplied")
+            return errors
+        try:
+            Decimal(v)
+        except InvalidOperation:
+            errors.append(f"{label} is not valid")
+            return errors'''
+
+    replacement_unroll = '''    # Unrolled sequential validation: Credit Limit evaluated first
+    _v_cred = inp.credit_limit.strip() if inp.credit_limit else ""
+    if not _v_cred:
+        errors.append("Credit Limit must be supplied")
+        return errors
+    try:
+        Decimal(_v_cred)
+    except InvalidOperation:
+        errors.append("Credit Limit is not valid")
+        return errors
+
+    # Unrolled sequential validation: Cash Credit Limit evaluated second
+    _v_cash = inp.cash_credit_limit.strip() if inp.cash_credit_limit else ""
+    if not _v_cash:
+        errors.append("Cash Credit Limit must be supplied")
+        return errors
+    try:
+        Decimal(_v_cash)
+    except InvalidOperation:
+        errors.append("Cash Credit Limit is not valid")
+        return errors'''
+
     code = apply_replacement(
         canonical_source,
-        'for label, val in [\n        ("Credit Limit", inp.credit_limit),\n        ("Cash Credit Limit", inp.cash_credit_limit),\n    ]:',
-        'for label, val in [\n        ("Cash Credit Limit", inp.cash_credit_limit),\n        ("Credit Limit", inp.credit_limit),\n    ]:  # Reordered independent checks',
+        target_unroll,
+        replacement_unroll,
         "EQUIV_03",
     )
     mutant_records.append({
-        "case_id": "EQUIV_03", "category": "equivalent_control", "operator": "independent_validation_reordering",
+        "case_id": "EQUIV_03", "category": "equivalent_control", "operator": "unrolled_sequential_validation",
         "source_file": "experiments/mutants/candidate_EQUIV_03.py",
         "changed_function": "_validate_inputs", "changed_line": "319",
-        "description": "Reordered independent credit limit and cash credit limit validation checks",
+        "description": "Unrolled loop into explicit sequential checks preserving identical error precedence and semantics",
         "trigger_condition": "Semantics-preserving across all inputs",
         "expected_observable_difference": "Zero observable divergence",
         "ground_truth": "EQUIVALENT", "source_code": code,
@@ -1199,19 +1235,22 @@ def generate_all_mutants() -> list[dict]:
         "ground_truth": "EQUIVALENT", "source_code": code,
     })
 
-    # EQUIV_06: Regex digit matching equivalent to isdigit()
+    # EQUIV_06: Universal all-digits generator expression equivalent to isdigit()
+    # Note: str.isdigit() matches all Unicode digits; regex r"[0-9]+" matches only ASCII digits.
+    # To guarantee universal equivalence across both ASCII and arbitrary Unicode strings,
+    # we use bool(s) and all(c.isdigit() for c in s), matching Python's str.isdigit() specification exactly.
     code = apply_replacement(
         canonical_source,
         'if not acct_id_str.strip().isdigit():',
-        'if not re.fullmatch(r"[0-9]+", acct_id_str.strip()):  # Equivalent regex digit validation',
+        'if not (bool(acct_id_str.strip()) and all(c.isdigit() for c in acct_id_str.strip())):  # Universal isdigit equivalence',
         "EQUIV_06",
     )
     mutant_records.append({
-        "case_id": "EQUIV_06", "category": "equivalent_control", "operator": "regex_digit_equivalence",
+        "case_id": "EQUIV_06", "category": "equivalent_control", "operator": "all_digits_generator_equivalence",
         "source_file": "experiments/mutants/candidate_EQUIV_06.py",
         "changed_function": "_initial_display", "changed_line": "194",
-        "description": "Substituted isdigit() with compiled fullmatch regex equivalent",
-        "trigger_condition": "Semantics-preserving across all inputs",
+        "description": "Substituted isdigit() with universal generator expression: bool(s) and all(c.isdigit() for c in s)",
+        "trigger_condition": "Semantics-preserving across all Unicode and ASCII inputs",
         "expected_observable_difference": "Zero observable divergence",
         "ground_truth": "EQUIVALENT", "source_code": code,
     })

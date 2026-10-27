@@ -101,14 +101,16 @@ for pat in PATTERNS:
         for seed in SEEDS:
             rng = random.Random(seed + lvl)
             base_inputs, _ = generate_canonical_input_suite(PRIMARY_BUDGET, seed)
+            ref_outs = [reference_runner(inp) for inp in base_inputs]
 
             m4_outcomes = []
             m1_outcomes = []
 
             for case in cases:
                 degraded_inputs = list(base_inputs)
-                override_factors = None
+                active_rule_set = None
                 corrupt_integrity = False
+                eval_runner = case.runner
 
                 if pat == "random_input_removal":
                     # Subsample inputs proportionally
@@ -119,8 +121,8 @@ for pat in PATTERNS:
                     # Remove inputs that trigger the defect (worst case)
                     if case.ground_truth == "DEFECTIVE":
                         clean_inputs = []
-                        for inp in base_inputs:
-                            if reference_runner(inp) == case.runner(inp):
+                        for idx, inp in enumerate(base_inputs):
+                            if ref_outs[idx] == case.runner(inp):
                                 clean_inputs.append(inp)
                             else:
                                 if rng.random() < target_cov:
@@ -131,21 +133,28 @@ for pat in PATTERNS:
                         degraded_inputs = base_inputs[:k]
 
                 elif pat == "rule_removal":
-                    # Mask oracle coverage factor directly
-                    override_factors = {"oracle_coverage": round(target_cov, 4)}
+                    # Genuinely omit rules from the verified oracle set
+                    k = max(0, int(len(SPEC_RULES) * target_cov))
+                    active_rule_set = set(SPEC_RULES[:k])
 
                 elif pat == "observation_removal":
-                    # Lower reliability f3
-                    rel = max(0.0, target_cov)
-                    override_factors = {"execution_reliability": round(rel, 4)}
+                    # Weaken evidence by simulating real execution timeouts / dropped observations
+                    def make_flaky_runner(base_run, drop_rate):
+                        def flaky_run(inp):
+                            if rng.random() < drop_rate:
+                                raise TimeoutError("Simulated dropped transaction observation / timeout")
+                            return base_run(inp)
+                        return flaky_run
+                    eval_runner = make_flaky_runner(case.runner, 1.0 - target_cov)
 
                 elif pat == "conflicting_evidence":
-                    # Inject contradictory behavioral observations
+                    # Inject contradictory behavioral observations into the transaction stream
                     if target_cov < 0.80:
-                        override_factors = {"oracle_confidence": max(0.40, target_cov)}
-                    if target_cov <= 0.50:
-                        # Add a fake conflicting observation
-                        degraded_inputs.append({"EIBCALEN": 0, "EIBAID": "ENTER", "ACTION": "", "ACCT_ID": "CONFLICTING"})
+                        conflicting_inputs = [
+                            {"EIBCALEN": 100, "EIBAID": "ENTER", "ACTION": "S", "ACCT_ID": "100000001", "CREDIT_LIMIT": "-99999.00"},
+                            {"EIBCALEN": 100, "EIBAID": "ENTER", "ACTION": "S", "ACCT_ID": "100000001", "CREDIT_LIMIT": "99999.00"},
+                        ]
+                        degraded_inputs = degraded_inputs + conflicting_inputs
 
                 elif pat == "invalid_evidence":
                     # Corrupt digests when level < 100
@@ -155,15 +164,15 @@ for pat in PATTERNS:
                 # Evaluate M4
                 v_m4 = evaluate_m4_full_beacon(
                     degraded_inputs,
-                    case.runner,
+                    eval_runner,
                     reference_runner,
-                    override_factors=override_factors,
+                    active_rule_set=active_rule_set,
                     corrupt_integrity=corrupt_integrity,
                 )
                 m4_outcomes.append(classify_outcome(case.ground_truth, v_m4.verdict))
 
                 # Evaluate M1 (reference)
-                v_m1 = evaluate_m1_output_only(degraded_inputs, case.runner, reference_runner)
+                v_m1 = evaluate_m1_output_only(degraded_inputs, eval_runner, reference_runner)
                 m1_outcomes.append(classify_outcome(case.ground_truth, v_m1.verdict))
 
                 # Record transitions on seed 12345

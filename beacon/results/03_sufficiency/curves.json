@@ -154,7 +154,7 @@
     "observation_removal": {
       "full_beacon_certification_rate": [
         0.4079,
-        0.4079,
+        0.0,
         0.0,
         0.0,
         0.0,
@@ -163,7 +163,7 @@
       ],
       "full_beacon_false_certification_rate": [
         0.25,
-        0.25,
+        0.0,
         0.0,
         0.0,
         0.0,
@@ -172,7 +172,7 @@
       ],
       "full_beacon_insufficient_coverage_rate": [
         0.0,
-        0.0,
+        0.75,
         1.0,
         1.0,
         1.0,
@@ -181,21 +181,21 @@
       ],
       "output_only_certification_rate": [
         0.4079,
-        0.4079,
-        0.4079,
-        0.4079,
-        0.4079,
-        0.4079,
-        0.4079
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
       ],
       "output_only_false_certification_rate": [
         0.25,
-        0.25,
-        0.25,
-        0.25,
-        0.25,
-        0.25,
-        0.25
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
       ]
     },
     "conflicting_evidence": {

@@ -32,6 +32,7 @@ from experiments.baselines import (
     DEFAULT_WEIGHTS,
     compute_evidence_factors,
     compute_quality_score,
+    evaluate_m4_full_beacon,
     SPEC_RULES,
 )
 from experiments.metrics import (
@@ -81,11 +82,11 @@ for case in cases:
     }
 
 # ─── 1. Component Ablation Study (Table XX) ──────────────────────────────────
-# A0: Full BEACON
-# A1: No evidence-quality adjustment (S = R)
-# A2: No sufficiency gates (G1, G2, G5 disabled)
-# A3: No deterministic validation of AI rules (raw LLM candidate rules admitted)
-# A4: No integrity checks (G3 off, digests not verified)
+# A0: Full BEACON (Production evaluation path with all gates active)
+# A1: No evidence-quality adjustment (disable_quality_adjustment=True, S = R)
+# A2: No sufficiency gates (disable_gates=["G1", "G2", "G5"])
+# A3: No deterministic validation of AI rules (Cannot be isolated dynamically in offline benchmark; marked partial)
+# A4: No cryptographic integrity verification (disable_gates=["G3"])
 
 ablation_variants = ["A0_full_beacon", "A1_no_quality_adj", "A2_no_sufficiency_gates", "A3_no_deterministic_validation", "A4_no_integrity_checks"]
 ablation_results = {}
@@ -93,69 +94,26 @@ ablation_outcomes = {v: [] for v in ablation_variants}
 ablation_verdicts = {v: {} for v in ablation_variants}
 
 for case in cases:
-    st = case_stats[case.case_id]
-    r = st["r_score"]
-    f = dict(st["factors"])
-    mismatches = st["mismatches"]
+    # A0: Full production BEACON evaluation
+    res_a0 = evaluate_m4_full_beacon(test_inputs, case.runner, reference_runner, theta=THETA_PRIMARY)
+    v_a0 = res_a0.verdict
 
-    # A0: Full BEACON
-    q_a0 = compute_quality_score(f, DEFAULT_WEIGHTS)
-    s_a0 = r * q_a0
-    if f["oracle_coverage"] < 0.80:
-        v_a0 = "INSUFFICIENT_COVERAGE"
-    elif mismatches > 0:
-        v_a0 = "NOT_CERTIFIED"
-    elif s_a0 >= THETA_PRIMARY:
-        v_a0 = "CERTIFIED"
-    else:
-        v_a0 = "NOT_CERTIFIED"
+    # A1: Production evaluation with evidence quality discounting disabled (S = R)
+    res_a1 = evaluate_m4_full_beacon(test_inputs, case.runner, reference_runner, theta=THETA_PRIMARY, disable_quality_adjustment=True)
+    v_a1 = res_a1.verdict
 
-    # A1: No quality adjustment (S = R)
-    if f["oracle_coverage"] < 0.80:
-        v_a1 = "INSUFFICIENT_COVERAGE"
-    elif mismatches > 0:
-        v_a1 = "NOT_CERTIFIED"
-    elif r >= THETA_PRIMARY:
-        v_a1 = "CERTIFIED"
-    else:
-        v_a1 = "NOT_CERTIFIED"
+    # A2: Production evaluation without sufficiency gates (G1, G2, G5 disabled)
+    res_a2 = evaluate_m4_full_beacon(test_inputs, case.runner, reference_runner, theta=THETA_PRIMARY, disable_gates=["G1", "G2", "G5"])
+    v_a2 = res_a2.verdict
 
-    # A2: No sufficiency gates (G1, G2, G5 off)
-    q_a2 = compute_quality_score(f, DEFAULT_WEIGHTS)
-    s_a2 = r * q_a2
-    if mismatches > 0:
-        v_a2 = "NOT_CERTIFIED"
-    elif s_a2 >= THETA_PRIMARY:
-        v_a2 = "CERTIFIED"
-    else:
-        v_a2 = "NOT_CERTIFIED"
+    # A3: Unvalidated AI candidate rules. In the offline benchmark, candidate rules are static CardDemo specification rules.
+    # Without a live LLM miner in the test loop, disabling validation cannot be independently isolated without artificial factor overrides.
+    # Therefore, A3 reflects A0's execution while being classified as partial.
+    v_a3 = v_a0
 
-    # A3: No deterministic validation of AI rules (admit noisy candidate rules)
-    # 2 ungrounded hallucinated rules lower effective oracle confidence to 0.70
-    f_a3 = dict(f)
-    f_a3["oracle_confidence"] = 0.70
-    q_a3 = compute_quality_score(f_a3, DEFAULT_WEIGHTS)
-    s_a3 = r * q_a3
-    if f_a3["oracle_coverage"] < 0.80:
-        v_a3 = "INSUFFICIENT_COVERAGE"
-    elif mismatches > 0:
-        v_a3 = "NOT_CERTIFIED"
-    elif s_a3 >= THETA_PRIMARY:
-        v_a3 = "CERTIFIED"
-    else:
-        v_a3 = "NOT_CERTIFIED"
-
-    # A4: No integrity checks (G3 off, even if digests tampered)
-    q_a4 = compute_quality_score(f, DEFAULT_WEIGHTS)
-    s_a4 = r * q_a4
-    if f["oracle_coverage"] < 0.80:
-        v_a4 = "INSUFFICIENT_COVERAGE"
-    elif mismatches > 0:
-        v_a4 = "NOT_CERTIFIED"
-    elif s_a4 >= THETA_PRIMARY:
-        v_a4 = "CERTIFIED"
-    else:
-        v_a4 = "NOT_CERTIFIED"
+    # A4: Production evaluation without cryptographic integrity verification (G3 disabled)
+    res_a4 = evaluate_m4_full_beacon(test_inputs, case.runner, reference_runner, theta=THETA_PRIMARY, disable_gates=["G3"])
+    v_a4 = res_a4.verdict
 
     var_dict = {
         "A0_full_beacon": v_a0,
@@ -187,9 +145,16 @@ for v_name in ablation_variants:
             "A0_full_beacon": "Full BEACON (all components enabled)",
             "A1_no_quality_adj": "Ablation A1: No evidence-quality adjustment (S = R)",
             "A2_no_sufficiency_gates": "Ablation A2: No sufficiency gates (G1, G2, G5 off)",
-            "A3_no_deterministic_validation": "Ablation A3: No deterministic validation of AI rules (raw candidates admitted)",
+            "A3_no_deterministic_validation": "Ablation A3: No deterministic validation of AI rules",
             "A4_no_integrity_checks": "Ablation A4: No cryptographic integrity checks (G3 off)",
         }[v_name],
+        "status": "partial" if v_name == "A3_no_deterministic_validation" else "complete",
+        "isolation_feasible": False if v_name == "A3_no_deterministic_validation" else True,
+        "isolation_notes": (
+            "Dynamic component isolation not feasible in offline benchmark without synthetic factor overrides; deterministic rule validation verified in backend/rules/validator.py unit tests"
+            if v_name == "A3_no_deterministic_validation"
+            else "Independently isolated and executed via production evaluation path"
+        ),
         "TP": mets["counts"]["TP"],
         "FC": mets["counts"]["FC"],
         "IC": mets["counts"]["IC_total"],

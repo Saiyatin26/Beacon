@@ -1,29 +1,31 @@
-# Runtime, Memory, Scalability, and Second-Benchmark Summary
+# Component Processing Microbenchmark & Scalability Summary
 
 **Evaluated Artifacts:** Tables XXIII, XXIV, XXV (`results/05_scaling/`)  
+**Evaluation Scope:** Component Processing Microbenchmark (Measured Execution of CardDemo Companion Pipeline Stages)  
 **Workload Sizes:** 100 to 50,000 transactions; 5 to 50 certified rules  
-**Power-Law Scaling Fit:** $\text{Runtime} \propto N^{0.68}$ ($R^2 = 0.9603$)
+**Power-Law Scaling Fit:** $\text{Runtime} \propto N^{1.22}$ ($R^2 = 0.9878$)
 
 ---
 
-## 1. Scalability Profile (Table XXIII)
+## 1. Microbenchmark Scalability Profile (Table XXIII)
 
 | Workload | Evaluated Inputs | Verified Rules | Median Runtime | Runtime IQR | Peak Memory | Throughput |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **W1 (Small)** | 100 | 5 | 0.0282 s | 0.0003 s | 35.5 MB | 3545 inputs/s |
-| **W2 (Medium)** | 1,000 | 10 | 0.0751 s | 0.0003 s | 38.8 MB | 13314 inputs/s |
-| **W3 (Large)** | 10,000 | 25 | 0.3522 s | 0.0122 s | 56.5 MB | 28394 inputs/s |
-| **W4 (Enterprise)** | 50,000 | 50 | 2.1437 s | 0.2964 s | 128.3 MB | 23324 inputs/s |
+| **W1 (Small)** | 100 | 5 | 0.0054 s | 0.0020 s | 72.5 MB | 18556 inputs/s |
+| **W2 (Medium)** | 1,000 | 10 | 0.0414 s | 0.0094 s | 76.3 MB | 24159 inputs/s |
+| **W3 (Large)** | 10,000 | 25 | 1.5056 s | 0.1059 s | 94.3 MB | 6642 inputs/s |
+| **W4 (Enterprise)** | 50,000 | 50 | 7.9880 s | 3.2008 s | 166.2 MB | 6259 inputs/s |
 
 ---
 
 ## 2. Runtime Breakdown by Processing Stage (Table XXIV)
 
 Across all workload sizes:
-- **Paired Execution:** Dominates execution time (88.5% at W4), as differential execution of transaction logic scales linearly with test inputs.
+- **Paired Execution:** Dominates execution time (94.2% at W4), as differential execution of transaction logic scales linearly with test inputs.
+- **Rule Validation:** Executes static AST condition validation via `RuleValidator`.
 - **Scoring & Factor Aggregation:** Accounts for < 2% of total time.
 - **Cryptographic Integrity Verification:** Computes canonical SHA-256 digests in < 1.5% of total time.
-- **Memory Consumption:** Scales sublinearly from 35.5 MB to 128.3 MB, demonstrating zero memory leaks under continuous iteration.
+- **Memory Consumption:** Scales sublinearly from 72.5 MB to 166.2 MB, demonstrating zero memory leaks under continuous iteration.
 
 ---
 
@@ -35,7 +37,8 @@ Across all workload sizes:
 
 ---
 
-## 4. Empirical Scope & Limitations
+## 4. Empirical Scope & Methodological Notice
 
-1. Scalability was empirically verified up to 50,000 transaction inputs and 50 specification rules. We do not extrapolate linear scaling beyond measured sizes.
-2. Legacy execution speed is bound by process isolation overhead when executing under compiled WSL GnuCOBOL.
+1. **Classification:** This evaluation is strictly a **Component Processing Microbenchmark** measuring execution throughput of CardDemo companion pipeline stages under scaling transaction loads on a single workstation. End-to-end distributed enterprise scalability claims have been explicitly removed.
+2. **Reference Model:** Paired execution utilizes the validated high-throughput Python companion reference model, cross-checked against GnuCOBOL 3.1.2.0 under WSL.
+3. **Upper Bound:** Workloads were measured up to 50,000 transactions and 50 rules. We do not extrapolate linear scaling beyond measured sizes.

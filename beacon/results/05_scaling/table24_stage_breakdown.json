@@ -1,13 +1,15 @@
 {
   "experiment": "runtime_breakdown_by_processing_stage",
   "table_id": "table24",
-  "generated_at": "2026-10-27T15:21:57Z",
+  "evaluation_type": "component_processing_microbenchmark",
+  "classification": "Component Processing Microbenchmark Stage Breakdown",
+  "generated_at": "2026-10-27T16:41:54Z",
   "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
   "definitions": {
-    "ai_discovery": "Rule hypothesis mining and extraction",
-    "rule_validation": "Deterministic syntax, anchor, and domain bounds validation",
-    "alignment": "Dual-source candidate alignment",
-    "paired_execution": "Differential execution across reference and target",
+    "ai_discovery": "Rule hypothesis mining and AST construction",
+    "rule_validation": "Static AST syntax, operator, and schema validation via RuleValidator",
+    "alignment": "Dual-source candidate rule registration and alignment",
+    "paired_execution": "Differential execution across reference and genuine candidate (candidate_CTRL_00.py)",
     "scoring": "Evidence factor computation and adjusted scoring",
     "integrity_verification": "Cryptographic SHA-256 digest calculation and verification"
   },
@@ -15,82 +17,82 @@
   "data": [
     {
       "workload_id": "W1_small",
-      "total_runtime_seconds": 0.0282,
+      "total_runtime_seconds": 0.0054,
       "stage_breakdown_seconds": {
-        "ai_discovery": 0.02532,
-        "rule_validation": 4e-05,
-        "alignment": 0.0,
-        "paired_execution": 0.00233,
-        "scoring": 4e-05,
-        "integrity_verification": 0.00023
+        "ai_discovery": 0.00013,
+        "rule_validation": 3e-05,
+        "alignment": 1e-05,
+        "paired_execution": 0.00481,
+        "scoring": 8e-05,
+        "integrity_verification": 0.00045
       },
       "stage_breakdown_percent": {
-        "ai_discovery": 90.56,
-        "rule_validation": 0.14,
-        "alignment": 0.0,
-        "paired_execution": 8.33,
-        "scoring": 0.14,
-        "integrity_verification": 0.82
+        "ai_discovery": 2.36,
+        "rule_validation": 0.54,
+        "alignment": 0.18,
+        "paired_execution": 87.3,
+        "scoring": 1.45,
+        "integrity_verification": 8.17
       }
     },
     {
       "workload_id": "W2_medium",
-      "total_runtime_seconds": 0.0751,
+      "total_runtime_seconds": 0.0414,
       "stage_breakdown_seconds": {
-        "ai_discovery": 0.05034,
+        "ai_discovery": 0.00017,
         "rule_validation": 3e-05,
         "alignment": 1e-05,
-        "paired_execution": 0.023,
-        "scoring": 0.00024,
-        "integrity_verification": 0.00165
+        "paired_execution": 0.03789,
+        "scoring": 0.00035,
+        "integrity_verification": 0.00213
       },
       "stage_breakdown_percent": {
-        "ai_discovery": 66.88,
-        "rule_validation": 0.04,
-        "alignment": 0.01,
-        "paired_execution": 30.56,
-        "scoring": 0.32,
-        "integrity_verification": 2.19
+        "ai_discovery": 0.42,
+        "rule_validation": 0.07,
+        "alignment": 0.02,
+        "paired_execution": 93.37,
+        "scoring": 0.86,
+        "integrity_verification": 5.25
       }
     },
     {
       "workload_id": "W3_large",
-      "total_runtime_seconds": 0.3522,
+      "total_runtime_seconds": 1.5056,
       "stage_breakdown_seconds": {
-        "ai_discovery": 0.1003,
-        "rule_validation": 4e-05,
-        "alignment": 1e-05,
-        "paired_execution": 0.23393,
-        "scoring": 0.00164,
-        "integrity_verification": 0.01674
+        "ai_discovery": 0.0015,
+        "rule_validation": 0.00024,
+        "alignment": 9e-05,
+        "paired_execution": 1.40943,
+        "scoring": 0.00928,
+        "integrity_verification": 0.08523
       },
       "stage_breakdown_percent": {
-        "ai_discovery": 28.44,
-        "rule_validation": 0.01,
-        "alignment": 0.0,
-        "paired_execution": 66.33,
-        "scoring": 0.47,
-        "integrity_verification": 4.75
+        "ai_discovery": 0.1,
+        "rule_validation": 0.02,
+        "alignment": 0.01,
+        "paired_execution": 93.6,
+        "scoring": 0.62,
+        "integrity_verification": 5.66
       }
     },
     {
       "workload_id": "W4_enterprise",
-      "total_runtime_seconds": 2.1437,
+      "total_runtime_seconds": 7.988,
       "stage_breakdown_seconds": {
-        "ai_discovery": 0.10031,
-        "rule_validation": 8e-05,
-        "alignment": 1e-05,
-        "paired_execution": 1.89543,
-        "scoring": 0.01477,
-        "integrity_verification": 0.13067
+        "ai_discovery": 0.00293,
+        "rule_validation": 0.00043,
+        "alignment": 0.00017,
+        "paired_execution": 7.52045,
+        "scoring": 0.0451,
+        "integrity_verification": 0.41862
       },
       "stage_breakdown_percent": {
-        "ai_discovery": 4.68,
-        "rule_validation": 0.0,
+        "ai_discovery": 0.04,
+        "rule_validation": 0.01,
         "alignment": 0.0,
-        "paired_execution": 88.52,
-        "scoring": 0.69,
-        "integrity_verification": 6.1
+        "paired_execution": 94.15,
+        "scoring": 0.56,
+        "integrity_verification": 5.24
       }
     }
   ]

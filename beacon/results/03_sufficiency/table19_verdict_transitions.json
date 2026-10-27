@@ -1,7 +1,7 @@
 {
   "experiment": "verdict_transitions_under_evidence_degradation",
   "table_id": "table19",
-  "generated_at": "2026-10-27T15:51:01Z",
+  "generated_at": "2026-10-27T17:26:49Z",
   "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
   "seeds": [
     12345
@@ -28,12 +28,13 @@
     },
     "weak_evidence": {
       "CERTIFIED": {
-        "CERTIFIED": 62,
-        "INSUFFICIENT_COVERAGE": 155
+        "CERTIFIED": 31,
+        "INSUFFICIENT_COVERAGE": 179,
+        "NOT_CERTIFIED": 7
       },
       "NOT_CERTIFIED": {
-        "NOT_CERTIFIED": 90,
-        "INSUFFICIENT_COVERAGE": 225
+        "NOT_CERTIFIED": 57,
+        "INSUFFICIENT_COVERAGE": 258
       }
     },
     "conflicting_evidence": {

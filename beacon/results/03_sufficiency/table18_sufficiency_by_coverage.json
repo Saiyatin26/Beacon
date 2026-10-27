@@ -1,7 +1,7 @@
 {
   "experiment": "benchmark_linked_evidence_sufficiency",
   "table_id": "table18",
-  "generated_at": "2026-10-27T15:51:01Z",
+  "generated_at": "2026-10-27T17:26:49Z",
   "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
   "seeds": [
     12345,
@@ -845,36 +845,36 @@
         "target_coverage_ratio": 0.9,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.4079,
+          "certification_rate": 0.0,
           "certification_rate_ci_95": [
-            0.3044,
-            0.5202
-          ],
-          "false_certification_rate": 0.25,
-          "false_certification_rate_ci_95": [
-            0.1578,
-            0.3723
-          ],
-          "insufficient_coverage_rate": 0.0,
-          "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.75
+          "false_certification_rate": 0.0,
+          "false_certification_rate_ci_95": [
+            0.0,
+            0.0602
+          ],
+          "insufficient_coverage_rate": 0.75,
+          "insufficient_coverage_rate_ci_95": [
+            0.6422,
+            0.8337
+          ],
+          "recall": 0.2333
         },
         "output_only_baseline": {
-          "certification_rate": 0.4079,
+          "certification_rate": 0.0,
           "certification_rate_ci_95": [
-            0.3044,
-            0.5202
+            0.0,
+            0.0481
           ],
-          "false_certification_rate": 0.25,
+          "false_certification_rate": 0.0,
           "false_certification_rate_ci_95": [
-            0.1578,
-            0.3723
+            0.0,
+            0.0602
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.75
+          "recall": 1.0
         }
       },
       {
@@ -900,18 +900,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.4079,
+          "certification_rate": 0.0,
           "certification_rate_ci_95": [
-            0.3044,
-            0.5202
+            0.0,
+            0.0481
           ],
-          "false_certification_rate": 0.25,
+          "false_certification_rate": 0.0,
           "false_certification_rate_ci_95": [
-            0.1578,
-            0.3723
+            0.0,
+            0.0602
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.75
+          "recall": 1.0
         }
       },
       {
@@ -937,18 +937,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.4079,
+          "certification_rate": 0.0,
           "certification_rate_ci_95": [
-            0.3044,
-            0.5202
+            0.0,
+            0.0481
           ],
-          "false_certification_rate": 0.25,
+          "false_certification_rate": 0.0,
           "false_certification_rate_ci_95": [
-            0.1578,
-            0.3723
+            0.0,
+            0.0602
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.75
+          "recall": 1.0
         }
       },
       {
@@ -974,18 +974,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.4079,
+          "certification_rate": 0.0,
           "certification_rate_ci_95": [
-            0.3044,
-            0.5202
+            0.0,
+            0.0481
           ],
-          "false_certification_rate": 0.25,
+          "false_certification_rate": 0.0,
           "false_certification_rate_ci_95": [
-            0.1578,
-            0.3723
+            0.0,
+            0.0602
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.75
+          "recall": 1.0
         }
       },
       {
@@ -1011,18 +1011,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.4079,
+          "certification_rate": 0.0,
           "certification_rate_ci_95": [
-            0.3044,
-            0.5202
+            0.0,
+            0.0481
           ],
-          "false_certification_rate": 0.25,
+          "false_certification_rate": 0.0,
           "false_certification_rate_ci_95": [
-            0.1578,
-            0.3723
+            0.0,
+            0.0602
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.75
+          "recall": 1.0
         }
       },
       {
@@ -1048,18 +1048,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.4079,
+          "certification_rate": 0.0,
           "certification_rate_ci_95": [
-            0.3044,
-            0.5202
+            0.0,
+            0.0481
           ],
-          "false_certification_rate": 0.25,
+          "false_certification_rate": 0.0,
           "false_certification_rate_ci_95": [
-            0.1578,
-            0.3723
+            0.0,
+            0.0602
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.75
+          "recall": 1.0
         }
       }
     ],
