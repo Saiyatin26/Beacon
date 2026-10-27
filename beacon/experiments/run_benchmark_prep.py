@@ -70,6 +70,10 @@ for case in cases:
         "ground_truth": case.ground_truth,
         "category": case.category,
         "operator": case.operator,
+        "source_location": case.source_location,
+        "source_file": case.source_file,
+        "source_sha256": case.source_sha256,
+        "canonical_sha256": case.canonical_sha256,
         "description": case.description,
         "trigger_condition": case.trigger_condition,
         "expected_observable_difference": case.expected_observable_difference,
@@ -83,6 +87,7 @@ for case in cases:
         "category": case.category,
         "operator": case.operator,
         "source_location": case.source_location,
+        "source_sha256": case.source_sha256[:16] + "...",
         "description": case.description,
         "expected_observable_difference": case.expected_observable_difference,
         "trigger_condition": case.trigger_condition,
@@ -97,7 +102,7 @@ print(f"Difficulty counts: {diff_counts}")
 # 3. Write results/ground_truth.json
 gt_payload = {
     "title": "BEACON Evaluation Ground Truth Specification",
-    "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+    "git_commit": "40158b6ecac74f2728d66336c9e1f31b8441444e",
     "base_seed": 12345,
     "total_cases": len(cases),
     "defective_count": sum(1 for c in cases if c.ground_truth == "DEFECTIVE"),
@@ -112,7 +117,7 @@ print("Written results/ground_truth.json")
 # 4. Write results/review_sheet.csv
 with open(RESULTS_DIR / "review_sheet.csv", "w", newline="", encoding="utf-8") as f:
     writer = csv.DictWriter(f, fieldnames=[
-        "case_id", "category", "operator", "source_location", "description",
+        "case_id", "category", "operator", "source_location", "source_sha256", "description",
         "expected_observable_difference", "trigger_condition",
         "estimated_trigger_rate", "difficulty", "label", "reviewer"
     ])

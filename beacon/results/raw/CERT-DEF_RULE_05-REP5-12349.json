@@ -9,15 +9,15 @@
   "category": "altered_business_rule",
   "method": "M4_full_beacon",
   "verdict": "NOT_CERTIFIED",
-  "verdict_reason": "G6 Gate Failure: 30 behavioral mismatches detected on contract",
+  "verdict_reason": "G6 Gate Failure: 69 behavioral mismatches detected on contract",
   "outcome_class": "TP",
   "metrics": {
-    "behavioral_score_R": 0.94,
+    "behavioral_score_R": 0.862,
     "evidence_quality_Q": 0.9925,
-    "adjusted_score_S": 0.93295,
-    "mismatch_count": 30,
+    "adjusted_score_S": 0.855535,
+    "mismatch_count": 69,
     "evaluated_count": 500,
-    "elapsed_seconds": 0.044882
+    "elapsed_seconds": 0.026778
   },
   "evidence_factors": {
     "oracle_coverage": 1.0,
@@ -35,5 +35,5 @@
     "G5_coverage_floor",
     "G6_mismatch"
   ],
-  "timestamp_utc": "2026-10-27T14:59:53Z"
+  "timestamp_utc": "2026-10-27T15:37:12Z"
 }

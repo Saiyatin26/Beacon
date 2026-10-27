@@ -1,7 +1,7 @@
 {
   "experiment": "certification_by_category",
   "table_id": "table17",
-  "generated_at": "2026-10-27T14:59:55Z",
+  "generated_at": "2026-10-27T15:37:13Z",
   "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
   "seeds": [
     12345
@@ -19,6 +19,40 @@
     {
       "category": "incorrect_calculation",
       "n_cases": 12,
+      "detected_TP": 10,
+      "missed_FC": 2,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 0,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Defect Detection Rate (TP / n)",
+      "rate": 0.8333,
+      "rate_wilson_ci_95": [
+        0.552,
+        0.953
+      ],
+      "denominator": "10 / 12"
+    },
+    {
+      "category": "boundary_condition",
+      "n_cases": 12,
+      "detected_TP": 8,
+      "missed_FC": 4,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 0,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Defect Detection Rate (TP / n)",
+      "rate": 0.6667,
+      "rate_wilson_ci_95": [
+        0.3906,
+        0.8619
+      ],
+      "denominator": "8 / 12"
+    },
+    {
+      "category": "altered_business_rule",
+      "n_cases": 12,
       "detected_TP": 11,
       "missed_FC": 1,
       "insufficient_coverage_IC": 0,
@@ -34,55 +68,21 @@
       "denominator": "11 / 12"
     },
     {
-      "category": "boundary_condition",
-      "n_cases": 12,
-      "detected_TP": 12,
-      "missed_FC": 0,
-      "insufficient_coverage_IC": 0,
-      "reference_inconsistent_RI": 0,
-      "true_negatives_TN": 0,
-      "false_positives_FP": 0,
-      "rate_metric_description": "Defect Detection Rate (TP / n)",
-      "rate": 1.0,
-      "rate_wilson_ci_95": [
-        0.7575,
-        1.0
-      ],
-      "denominator": "12 / 12"
-    },
-    {
-      "category": "altered_business_rule",
-      "n_cases": 12,
-      "detected_TP": 12,
-      "missed_FC": 0,
-      "insufficient_coverage_IC": 0,
-      "reference_inconsistent_RI": 0,
-      "true_negatives_TN": 0,
-      "false_positives_FP": 0,
-      "rate_metric_description": "Defect Detection Rate (TP / n)",
-      "rate": 1.0,
-      "rate_wilson_ci_95": [
-        0.7575,
-        1.0
-      ],
-      "denominator": "12 / 12"
-    },
-    {
       "category": "missing_update",
       "n_cases": 12,
-      "detected_TP": 12,
-      "missed_FC": 0,
+      "detected_TP": 5,
+      "missed_FC": 7,
       "insufficient_coverage_IC": 0,
       "reference_inconsistent_RI": 0,
       "true_negatives_TN": 0,
       "false_positives_FP": 0,
       "rate_metric_description": "Defect Detection Rate (TP / n)",
-      "rate": 1.0,
+      "rate": 0.4167,
       "rate_wilson_ci_95": [
-        0.7575,
-        1.0
+        0.1933,
+        0.6805
       ],
-      "denominator": "12 / 12"
+      "denominator": "5 / 12"
     },
     {
       "category": "incorrect_transaction_handling",

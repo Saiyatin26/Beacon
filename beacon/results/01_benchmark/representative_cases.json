@@ -48,20 +48,20 @@
         "source_hash_integrity": 1.0
       },
       "scores": {
-        "R": 0.902,
+        "R": 0.716,
         "Q": 0.9925,
-        "S_adj": 0.895235
+        "S_adj": 0.71063
       },
       "verdict": "NOT_CERTIFIED",
-      "verdict_reason": "G6 Gate Failure: 49 behavioral mismatches detected on contract",
+      "verdict_reason": "G6 Gate Failure: 142 behavioral mismatches detected on contract",
       "outcome_class": "TP"
     },
     {
       "case_id": "DEF_CALC_11",
       "category": "incorrect_calculation",
-      "operator": "precision_overflow_rare",
-      "description": "Truncates limit to 0.00 only when credit limit ends in .99",
-      "trigger_condition": "ACTION == 'S' and CREDIT_LIMIT ends in '.99'",
+      "operator": "precision_clamp_overflow",
+      "description": "Clamps credit limit to 99999.00 for extreme high limits (subtle edge defect)",
+      "trigger_condition": "ACTION == 'S' and CREDIT_LIMIT >= 99999.00",
       "ground_truth": "DEFECTIVE",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -101,20 +101,20 @@
         "source_hash_integrity": 1.0
       },
       "scores": {
-        "R": 1.0,
+        "R": 0.986,
         "Q": 0.9925,
-        "S_adj": 0.9925
+        "S_adj": 0.978605
       },
-      "verdict": "CERTIFIED",
-      "verdict_reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
-      "outcome_class": "FC"
+      "verdict": "NOT_CERTIFIED",
+      "verdict_reason": "G6 Gate Failure: 7 behavioral mismatches detected on contract",
+      "outcome_class": "TP"
     },
     {
       "case_id": "DEF_BOUND_01",
       "category": "boundary_condition",
-      "operator": "reject_zero_limit",
-      "description": "Rejects zero credit limit (requires strict positive value)",
-      "trigger_condition": "CREDIT_LIMIT == '0.00'",
+      "operator": "strict_status_boundary",
+      "description": "Rejects inactive account status 'N', allowing only 'Y'",
+      "trigger_condition": "ACTIVE_STATUS == 'N'",
       "ground_truth": "DEFECTIVE",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -154,20 +154,20 @@
         "source_hash_integrity": 1.0
       },
       "scores": {
-        "R": 0.972,
+        "R": 0.91,
         "Q": 0.9925,
-        "S_adj": 0.96471
+        "S_adj": 0.903175
       },
       "verdict": "NOT_CERTIFIED",
-      "verdict_reason": "G6 Gate Failure: 14 behavioral mismatches detected on contract",
+      "verdict_reason": "G6 Gate Failure: 45 behavioral mismatches detected on contract",
       "outcome_class": "TP"
     },
     {
       "case_id": "DEF_RULE_01",
       "category": "altered_business_rule",
-      "operator": "permit_invalid_status_x",
-      "description": "Allows invalid active status 'X' to bypass validation",
-      "trigger_condition": "ACTIVE_STATUS == 'X' and ACTION == 'S'",
+      "operator": "cash_limit_ratio_restriction",
+      "description": "Enforces unapproved business rule: cash limit <= 50% of credit limit",
+      "trigger_condition": "CASH_CREDIT_LIMIT > CREDIT_LIMIT * 0.50",
       "ground_truth": "DEFECTIVE",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -207,20 +207,20 @@
         "source_hash_integrity": 1.0
       },
       "scores": {
-        "R": 0.934,
+        "R": 0.978,
         "Q": 0.9925,
-        "S_adj": 0.926995
+        "S_adj": 0.970665
       },
       "verdict": "NOT_CERTIFIED",
-      "verdict_reason": "G6 Gate Failure: 33 behavioral mismatches detected on contract",
+      "verdict_reason": "G6 Gate Failure: 11 behavioral mismatches detected on contract",
       "outcome_class": "TP"
     },
     {
       "case_id": "DEF_RULE_11",
       "category": "altered_business_rule",
-      "operator": "frozen_corporate_account_rare",
-      "description": "Freezes commits only on account 100000003 with status Y on PF5",
-      "trigger_condition": "ACTIVE_STATUS == 'Y' and ACCT_ID == '100000003' and EIBAID == 'PF5' and ACTION == 'N'",
+      "operator": "minimum_cash_limit_rule",
+      "description": "Requires cash limit to be at least $100",
+      "trigger_condition": "0 <= CASH_CREDIT_LIMIT < 100.00",
       "ground_truth": "DEFECTIVE",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -260,20 +260,20 @@
         "source_hash_integrity": 1.0
       },
       "scores": {
-        "R": 0.966,
+        "R": 0.982,
         "Q": 0.9925,
-        "S_adj": 0.958755
+        "S_adj": 0.974635
       },
       "verdict": "NOT_CERTIFIED",
-      "verdict_reason": "G6 Gate Failure: 17 behavioral mismatches detected on contract",
+      "verdict_reason": "G6 Gate Failure: 9 behavioral mismatches detected on contract",
       "outcome_class": "TP"
     },
     {
       "case_id": "DEF_UPDATE_01",
       "category": "missing_update",
-      "operator": "omit_lastname_update",
-      "description": "Omits updating customer last name in master record on commit",
-      "trigger_condition": "ACTION == 'N' and EIBAID == 'PF5'",
+      "operator": "omit_status_update",
+      "description": "Omits writing updated active status into account record",
+      "trigger_condition": "ACTIVE_STATUS changed from current state",
       "ground_truth": "DEFECTIVE",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -313,20 +313,20 @@
         "source_hash_integrity": 1.0
       },
       "scores": {
-        "R": 0.886,
+        "R": 0.88,
         "Q": 0.9925,
-        "S_adj": 0.879355
+        "S_adj": 0.8734
       },
       "verdict": "NOT_CERTIFIED",
-      "verdict_reason": "G6 Gate Failure: 57 behavioral mismatches detected on contract",
+      "verdict_reason": "G6 Gate Failure: 60 behavioral mismatches detected on contract",
       "outcome_class": "TP"
     },
     {
       "case_id": "DEF_TX_01",
       "category": "incorrect_transaction_handling",
-      "operator": "wrong_pf3_target",
-      "description": "Redirects PF3 navigation to signon COSGN00C instead of caller menu",
-      "trigger_condition": "EIBAID == 'PF3'",
+      "operator": "corrupt_pf3_navigation",
+      "description": "Routes PF3 exit to COSGN00C instead of caller program",
+      "trigger_condition": "EIBAID == 'PF3' and from_program != 'COSGN00C'",
       "ground_truth": "DEFECTIVE",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -377,9 +377,9 @@
     {
       "case_id": "DEF_TX_12",
       "category": "incorrect_transaction_handling",
-      "operator": "rare_calen_1_pf3_redirect",
-      "description": "Redirects to COSGN00C only when calen is exactly 1 on PF3",
-      "trigger_condition": "EIBCALEN == 1 and EIBAID == 'PF3'",
+      "operator": "calen_boundary_corruption",
+      "description": "Treats EIBCALEN == 1 as unauthenticated first entry (subtle edge defect)",
+      "trigger_condition": "EIBCALEN == 1",
       "ground_truth": "DEFECTIVE",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -419,20 +419,20 @@
         "source_hash_integrity": 1.0
       },
       "scores": {
-        "R": 1.0,
+        "R": 0.976,
         "Q": 0.9925,
-        "S_adj": 0.9925
+        "S_adj": 0.96868
       },
-      "verdict": "CERTIFIED",
-      "verdict_reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
-      "outcome_class": "FC"
+      "verdict": "NOT_CERTIFIED",
+      "verdict_reason": "G6 Gate Failure: 12 behavioral mismatches detected on contract",
+      "outcome_class": "TP"
     },
     {
       "case_id": "EQUIV_01",
       "category": "equivalent_control",
-      "operator": "set_membership_refactoring",
-      "description": "Refactored active status validation from tuple to set membership",
-      "trigger_condition": "Semantics-preserving rewrite across all inputs",
+      "operator": "de_morgan_condition_rewrite",
+      "description": "Refactored status check to explicit conjunction: status != 'Y' and status != 'N'",
+      "trigger_condition": "Semantics-preserving across all inputs",
       "ground_truth": "EQUIVALENT",
       "difficulty": "easy",
       "reference_output_sample": {
@@ -484,8 +484,8 @@
       "case_id": "CTRL_00",
       "category": "clean_control",
       "operator": "identity",
-      "description": "Clean, unmodified modern Python candidate implementation",
-      "trigger_condition": "None (unmodified reference behavior)",
+      "description": "Clean unmodified candidate modernization",
+      "trigger_condition": "None",
       "ground_truth": "EQUIVALENT",
       "difficulty": "easy",
       "reference_output_sample": {
