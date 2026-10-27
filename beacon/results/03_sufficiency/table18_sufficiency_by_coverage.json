@@ -1,7 +1,7 @@
 {
   "experiment": "benchmark_linked_evidence_sufficiency",
   "table_id": "table18",
-  "generated_at": "2026-10-27T15:16:50Z",
+  "generated_at": "2026-10-27T15:51:01Z",
   "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
   "seeds": [
     12345,
@@ -25,36 +25,36 @@
         "target_coverage_ratio": 1.0,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -62,36 +62,36 @@
         "target_coverage_ratio": 0.9,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -99,36 +99,36 @@
         "target_coverage_ratio": 0.75,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -136,36 +136,36 @@
         "target_coverage_ratio": 0.5,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -173,36 +173,36 @@
         "target_coverage_ratio": 0.25,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2632,
+          "certification_rate": 0.4211,
           "certification_rate_ci_95": [
-            0.1773,
-            0.3718
+            0.3165,
+            0.5332
           ],
-          "false_certification_rate": 0.0667,
+          "false_certification_rate": 0.2667,
           "false_certification_rate_ci_95": [
-            0.0262,
-            0.1593
+            0.1713,
+            0.3901
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9333
+          "recall": 0.7333
         },
         "output_only_baseline": {
-          "certification_rate": 0.2632,
+          "certification_rate": 0.4211,
           "certification_rate_ci_95": [
-            0.1773,
-            0.3718
+            0.3165,
+            0.5332
           ],
-          "false_certification_rate": 0.0667,
+          "false_certification_rate": 0.2667,
           "false_certification_rate_ci_95": [
-            0.0262,
-            0.1593
+            0.1713,
+            0.3901
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9333
+          "recall": 0.7333
         }
       },
       {
@@ -210,36 +210,36 @@
         "target_coverage_ratio": 0.1,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2895,
+          "certification_rate": 0.4605,
           "certification_rate_ci_95": [
-            0.1996,
-            0.3996
+            0.3531,
+            0.5718
           ],
-          "false_certification_rate": 0.1,
+          "false_certification_rate": 0.3167,
           "false_certification_rate_ci_95": [
-            0.0466,
-            0.2015
+            0.2131,
+            0.4423
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9
+          "recall": 0.6833
         },
         "output_only_baseline": {
-          "certification_rate": 0.2895,
+          "certification_rate": 0.4605,
           "certification_rate_ci_95": [
-            0.1996,
-            0.3996
+            0.3531,
+            0.5718
           ],
-          "false_certification_rate": 0.1,
+          "false_certification_rate": 0.3167,
           "false_certification_rate_ci_95": [
-            0.0466,
-            0.2015
+            0.2131,
+            0.4423
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9
+          "recall": 0.6833
         }
       },
       {
@@ -286,36 +286,36 @@
         "target_coverage_ratio": 1.0,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -323,36 +323,36 @@
         "target_coverage_ratio": 0.9,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -360,36 +360,36 @@
         "target_coverage_ratio": 0.75,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -397,36 +397,36 @@
         "target_coverage_ratio": 0.5,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -434,36 +434,36 @@
         "target_coverage_ratio": 0.25,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -471,36 +471,36 @@
         "target_coverage_ratio": 0.1,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.3158,
+          "certification_rate": 0.5,
           "certification_rate_ci_95": [
-            0.2223,
-            0.427
+            0.3903,
+            0.6097
           ],
-          "false_certification_rate": 0.1333,
+          "false_certification_rate": 0.3667,
           "false_certification_rate_ci_95": [
-            0.0691,
-            0.2417
+            0.2562,
+            0.4932
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.8667
+          "recall": 0.6333
         },
         "output_only_baseline": {
-          "certification_rate": 0.3158,
+          "certification_rate": 0.5,
           "certification_rate_ci_95": [
-            0.2223,
-            0.427
+            0.3903,
+            0.6097
           ],
-          "false_certification_rate": 0.1333,
+          "false_certification_rate": 0.3667,
           "false_certification_rate_ci_95": [
-            0.0691,
-            0.2417
+            0.2562,
+            0.4932
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.8667
+          "recall": 0.6333
         }
       },
       {
@@ -547,36 +547,36 @@
         "target_coverage_ratio": 1.0,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -584,36 +584,36 @@
         "target_coverage_ratio": 0.9,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -639,18 +639,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -676,18 +676,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -713,18 +713,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -750,18 +750,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -787,18 +787,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       }
     ],
@@ -808,36 +808,36 @@
         "target_coverage_ratio": 1.0,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -845,36 +845,36 @@
         "target_coverage_ratio": 0.9,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -900,18 +900,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -937,18 +937,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -974,18 +974,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1011,18 +1011,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1048,18 +1048,18 @@
           "recall": 0.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       }
     ],
@@ -1069,36 +1069,36 @@
         "target_coverage_ratio": 1.0,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1106,36 +1106,36 @@
         "target_coverage_ratio": 0.9,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1143,36 +1143,36 @@
         "target_coverage_ratio": 0.75,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1180,36 +1180,36 @@
         "target_coverage_ratio": 0.5,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1217,36 +1217,36 @@
         "target_coverage_ratio": 0.25,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1254,36 +1254,36 @@
         "target_coverage_ratio": 0.1,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1291,36 +1291,36 @@
         "target_coverage_ratio": 0.0,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       }
     ],
@@ -1330,36 +1330,36 @@
         "target_coverage_ratio": 1.0,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1367,36 +1367,36 @@
         "target_coverage_ratio": 0.9,
         "n_cases": 76,
         "full_beacon": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
           "insufficient_coverage_rate_ci_95": [
             0.0,
             0.0481
           ],
-          "recall": 0.9667
+          "recall": 0.75
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1422,18 +1422,18 @@
           "recall": 1.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1459,18 +1459,18 @@
           "recall": 1.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1496,18 +1496,18 @@
           "recall": 1.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1533,18 +1533,18 @@
           "recall": 1.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       },
       {
@@ -1570,18 +1570,18 @@
           "recall": 1.0
         },
         "output_only_baseline": {
-          "certification_rate": 0.2368,
+          "certification_rate": 0.4079,
           "certification_rate_ci_95": [
-            0.1554,
-            0.3436
+            0.3044,
+            0.5202
           ],
-          "false_certification_rate": 0.0333,
+          "false_certification_rate": 0.25,
           "false_certification_rate_ci_95": [
-            0.0092,
-            0.1136
+            0.1578,
+            0.3723
           ],
           "insufficient_coverage_rate": 0.0,
-          "recall": 0.9667
+          "recall": 0.75
         }
       }
     ]

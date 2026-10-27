@@ -107,7 +107,7 @@
   ],
   "inadequate_evidence_false_certifications": [
     {
-      "case_id": "DEF_CALC_11",
+      "case_id": "DEF_CALC_06",
       "category": "incorrect_calculation",
       "ground_truth": "DEFECTIVE",
       "pattern": "random_input_removal",
@@ -124,8 +124,8 @@
       }
     },
     {
-      "case_id": "DEF_TX_12",
-      "category": "incorrect_transaction_handling",
+      "case_id": "DEF_CALC_10",
+      "category": "incorrect_calculation",
       "ground_truth": "DEFECTIVE",
       "pattern": "random_input_removal",
       "coverage_level_pct": 100,
@@ -141,11 +141,11 @@
       }
     },
     {
-      "case_id": "DEF_CALC_11",
-      "category": "incorrect_calculation",
+      "case_id": "DEF_BOUND_06",
+      "category": "boundary_condition",
       "ground_truth": "DEFECTIVE",
       "pattern": "random_input_removal",
-      "coverage_level_pct": 90,
+      "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
       "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
       "factors": {
@@ -158,11 +158,11 @@
       }
     },
     {
-      "case_id": "DEF_TX_12",
-      "category": "incorrect_transaction_handling",
+      "case_id": "DEF_BOUND_07",
+      "category": "boundary_condition",
       "ground_truth": "DEFECTIVE",
       "pattern": "random_input_removal",
-      "coverage_level_pct": 90,
+      "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
       "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
       "factors": {
@@ -175,11 +175,11 @@
       }
     },
     {
-      "case_id": "DEF_CALC_11",
-      "category": "incorrect_calculation",
+      "case_id": "DEF_BOUND_09",
+      "category": "boundary_condition",
       "ground_truth": "DEFECTIVE",
       "pattern": "random_input_removal",
-      "coverage_level_pct": 75,
+      "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
       "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
       "factors": {
@@ -192,11 +192,11 @@
       }
     },
     {
-      "case_id": "DEF_TX_12",
-      "category": "incorrect_transaction_handling",
+      "case_id": "DEF_BOUND_12",
+      "category": "boundary_condition",
       "ground_truth": "DEFECTIVE",
       "pattern": "random_input_removal",
-      "coverage_level_pct": 75,
+      "coverage_level_pct": 100,
       "verdict": "CERTIFIED",
       "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
       "factors": {

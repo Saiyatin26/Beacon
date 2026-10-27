@@ -1,6 +1,6 @@
 {
   "project": "BEACON Research Evaluation",
-  "generated_at": "2026-10-27T15:22:03Z",
+  "generated_at": "2026-10-27T15:51:40Z",
   "total_artifacts": 31,
   "artifacts": [
     {
@@ -26,8 +26,8 @@
     },
     {
       "path": "results/ground_truth.json",
-      "size_bytes": 39872,
-      "sha256": "ead2ad2950495313a14c2f87c09fbe8e4d9732131bd9101d927707906c114706",
+      "size_bytes": 64976,
+      "sha256": "cb40550923c4575be449cff82ef20fe07dd7337300ba9af2b03c9f623d908410",
       "generating_command": "python experiments/run_benchmark_prep.py",
       "status": "verified"
     },
@@ -40,64 +40,64 @@
     },
     {
       "path": "results/review_sheet.csv",
-      "size_bytes": 19258,
-      "sha256": "8260adec08e880b5f2d72cbee9b93bbe0d3d5584895098ee5e16d48276070169",
+      "size_bytes": 23010,
+      "sha256": "aaba18361a70e4a0c25b2f4e7af75d2339cd4134b075f1264e6212b442225c90",
       "generating_command": "python experiments/run_benchmark_prep.py",
       "status": "verified"
     },
     {
       "path": "results/01_benchmark/table13_benchmark_profile.json",
-      "size_bytes": 3198,
-      "sha256": "394bcdc9ef4b2b2f7fbe706f26cbf729163565878ea3d920ae2258489f3cf712",
+      "size_bytes": 3199,
+      "sha256": "abda6e905aa6535c7395f426eac8afc857294b64742cdd8197d8b117dea31d1c",
       "generating_command": "python experiments/run_benchmark_prep.py",
       "status": "verified"
     },
     {
       "path": "results/01_benchmark/table14_case_results.json",
-      "size_bytes": 178997,
-      "sha256": "a49262903c07d7e9eb952d8139c5a788ea2cac9029427737b911f909fe5023bb",
+      "size_bytes": 179322,
+      "sha256": "ac4cf369f05ef8a032ba9c8cd950c4397b346283e94c0470855e7c50a0705589",
       "generating_command": "python experiments/run_experiment_1_benchmark.py",
       "status": "verified"
     },
     {
       "path": "results/01_benchmark/table15_confusion.json",
-      "size_bytes": 2866,
-      "sha256": "12a3c7115446ec834143c3ac5c5977a07697df253132b8ce598558b6a7bffe20",
+      "size_bytes": 2840,
+      "sha256": "ab3353eb9e21f026c39c77975ec80ee0b0e8040f8e1dffa351bfda6ce0a3ac90",
       "generating_command": "python experiments/run_experiment_1_benchmark.py",
       "status": "verified"
     },
     {
       "path": "results/01_benchmark/table17_by_category.json",
-      "size_bytes": 3423,
-      "sha256": "fc1cbb69f77aba0002875df12d7fd244b36b8f6cb0088ea6741287ddfa2c5aa4",
+      "size_bytes": 3435,
+      "sha256": "b9cba324599f8c6be7387484287d4268ca710482e176ee98cf4ef47fe8b6e65f",
       "generating_command": "python experiments/run_experiment_1_benchmark.py",
       "status": "verified"
     },
     {
       "path": "results/01_benchmark/representative_cases.json",
-      "size_bytes": 17605,
-      "sha256": "79d854cc485eef1d81ff96e74e5a243f99cf80a7ee728bc99f7d40ca1ea002b9",
+      "size_bytes": 17525,
+      "sha256": "9639245024cffb9418750b501e9e4409011f6bd96af936eaab8d52713e02c90a",
       "generating_command": "python experiments/run_experiment_1_benchmark.py",
       "status": "verified"
     },
     {
       "path": "results/02_baselines/table16_method_comparison.json",
-      "size_bytes": 23829,
-      "sha256": "2b7721b911d6ec8e8f2f2165985025418cc84dc4179f940025ad6a50e6d1895c",
+      "size_bytes": 23811,
+      "sha256": "716a52beaf7ade9b256d0313912b2a8c2e492900156b0e6188a5c581271af054",
       "generating_command": "python experiments/run_experiment_2_baselines.py",
       "status": "verified"
     },
     {
       "path": "results/02_baselines/per_case_by_method.json",
-      "size_bytes": 65459,
-      "sha256": "965bdf95a771b14fa3e887eb21e741ac175b9dcb323df07d5b7e3ae23941ce75",
+      "size_bytes": 65926,
+      "sha256": "9c6c4ed0640658ba30f3d7c83685ccf3a4e13086430fd3fbcfcc4b27fc072e0c",
       "generating_command": "python experiments/run_experiment_2_baselines.py",
       "status": "verified"
     },
     {
       "path": "results/02_baselines/02_summary.md",
-      "size_bytes": 2827,
-      "sha256": "e9cbcc9adaddb8b15e1489e959c5d3f3199f28cd28753c12ac907dcca0f804f7",
+      "size_bytes": 2834,
+      "sha256": "bfb1a70003f5dbb532af5fc93d0eb14fdd52d8be90a3850cbfb613ff9a2646c8",
       "generating_command": "python experiments/run_experiment_2_baselines.py",
       "status": "verified"
     },
@@ -110,57 +110,57 @@
     },
     {
       "path": "results/03_sufficiency/table18_sufficiency_by_coverage.json",
-      "size_bytes": 43569,
-      "sha256": "a22104cfe790e0cb2908b81891cba8dcb821739ef2893572de4d2cc2f74a988f",
+      "size_bytes": 43341,
+      "sha256": "3f035eaccfb6ea0ff05aa0066481e00d53169a8831bf920e2b08dbaabf51a697",
       "generating_command": "python experiments/run_experiment_3_sufficiency.py",
       "status": "verified"
     },
     {
       "path": "results/03_sufficiency/table19_verdict_transitions.json",
-      "size_bytes": 1510,
-      "sha256": "8d7bf1dffe6c59c9f81fdaf43d0157060fc618c337cc5f6571db4b7b211ba60d",
+      "size_bytes": 1511,
+      "sha256": "2a2d6a6008632f349cd56e98c4a55a97364e86664deafaa739643e79ffd87737",
       "generating_command": "python experiments/run_experiment_3_sufficiency.py",
       "status": "verified"
     },
     {
       "path": "results/03_sufficiency/curves.json",
-      "size_bytes": 5391,
-      "sha256": "6640060f5076b8534bce1c1c1846722c6dda5251408f09dc7c3d3830e6d60c4c",
+      "size_bytes": 5273,
+      "sha256": "3b3ae0eaba1997f0fb87a74666cf4d05f587e1458aec78ab813760bc318279d0",
       "generating_command": "python experiments/run_experiment_3_sufficiency.py",
       "status": "verified"
     },
     {
       "path": "results/03_sufficiency/examples.json",
-      "size_bytes": 7471,
-      "sha256": "767887e7ba3bd6e038ebd1557e18226375dae5194ad6751e8e875158022a258f",
+      "size_bytes": 7446,
+      "sha256": "08fe7e9dd1359271049c94d60ccf116e19882f5e7b3fc4bd60cf27e56617c6dd",
       "generating_command": "python experiments/run_experiment_3_sufficiency.py",
       "status": "verified"
     },
     {
       "path": "results/04_ablation/table20_ablation.json",
-      "size_bytes": 3886,
-      "sha256": "b555784fbf019e6941cf9b62f0feb628441237aaef0192d73a6a769a317e56c4",
+      "size_bytes": 3871,
+      "sha256": "dd90b204bec58a769150aefc4c9a57792ea0996f153e02f10d6ee28cf48a1fd3",
       "generating_command": "python experiments/run_experiment_4_ablation.py",
       "status": "verified"
     },
     {
       "path": "results/04_ablation/table21_weight_sensitivity.json",
-      "size_bytes": 43593,
-      "sha256": "f04e01634b7ae7ab65f97b2b123963e95d3756ee605aecd05a801ddafbf2da41",
+      "size_bytes": 43597,
+      "sha256": "f101254654e1d26adff1226b54d1307a52b3c1cd83faf50fe4879d6b1492e682",
       "generating_command": "python experiments/run_experiment_4_ablation.py",
       "status": "verified"
     },
     {
       "path": "results/04_ablation/table22_integrity_tampering.json",
       "size_bytes": 4000,
-      "sha256": "c9c75852567df64239f139ac90265e0ed590ffb7bd8eeb5ba41fa2cf431541c3",
+      "sha256": "449b6410ee6717718ef8e9ceb66fd9dd0a6f68951c1ad74513bd3d5c07e04fb2",
       "generating_command": "python experiments/run_experiment_4_ablation.py",
       "status": "verified"
     },
     {
       "path": "results/04_ablation/weight_vs_error.json",
-      "size_bytes": 43274,
-      "sha256": "fcf07ec2866135daf1dab7a6e48cec46a0c06f40b41df66e35d5563fc86b2f13",
+      "size_bytes": 43278,
+      "sha256": "6e81c8eca14fa4e6a02026c96579f7efb17c26b6623852fe66682a6090867040",
       "generating_command": "python experiments/run_experiment_4_ablation.py",
       "status": "verified"
     },
