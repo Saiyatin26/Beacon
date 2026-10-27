@@ -1,0 +1,94 @@
+{
+  "experiment": "benchmark_construction",
+  "table_id": "table13",
+  "generated_at": "2026-10-27T14:52:31Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "seeds": [
+    12345
+  ],
+  "n_cases": 76,
+  "definitions": {
+    "created": "Total mutations synthesized",
+    "executed": "Total effective mutations executed against test harness",
+    "excluded": "Mutations excluded due to uncompilable syntax or lack of observable divergence",
+    "control": "Semantics-preserving rewrites and clean control candidate"
+  },
+  "status": "complete",
+  "data": {
+    "program": "AWS CardDemo COACTUPC",
+    "program_type": "CICS Online Transaction (Account Update)",
+    "reference_implementation": "COACTUPC.cbl (GnuCOBOL 3.1.2.0 / WSL Ubuntu)",
+    "candidate_implementation": "coactupc.py (567 lines Python 3.11)",
+    "defect_categories": [
+      {
+        "category": "incorrect_calculation",
+        "description": "Arithmetic calculations, fees, decimal truncation, rounding, sign inversions",
+        "mutants_created": 12,
+        "mutants_executed": 12,
+        "mutants_excluded": 0,
+        "controls": 0
+      },
+      {
+        "category": "boundary_condition",
+        "description": "Boundary checks (< vs <=), zero values, ceiling clamps, off-by-one errors",
+        "mutants_created": 12,
+        "mutants_executed": 12,
+        "mutants_excluded": 0,
+        "controls": 0
+      },
+      {
+        "category": "altered_business_rule",
+        "description": "Changed validation logic, inverted conditionals, bypassed lookups, unapproved statuses",
+        "mutants_created": 12,
+        "mutants_executed": 12,
+        "mutants_excluded": 0,
+        "controls": 0
+      },
+      {
+        "category": "missing_update",
+        "description": "Omission of master record field updates, omitted action flags, uncommitted state",
+        "mutants_created": 12,
+        "mutants_executed": 12,
+        "mutants_excluded": 0,
+        "controls": 0
+      },
+      {
+        "category": "incorrect_transaction_handling",
+        "description": "Wrong XCTL target, invalid error message, missing return flag, premature commit",
+        "mutants_created": 12,
+        "mutants_executed": 12,
+        "mutants_excluded": 0,
+        "controls": 0
+      },
+      {
+        "category": "equivalent_control",
+        "description": "Semantics-preserving rewrites, refactored loops, equivalent boolean algebra",
+        "mutants_created": 15,
+        "mutants_executed": 15,
+        "mutants_excluded": 0,
+        "controls": 15
+      },
+      {
+        "category": "clean_control",
+        "description": "Unmodified modern candidate implementation (CTRL_00)",
+        "mutants_created": 1,
+        "mutants_executed": 1,
+        "mutants_excluded": 0,
+        "controls": 1
+      }
+    ],
+    "summary": {
+      "total_created": 76,
+      "total_executed": 76,
+      "total_excluded": 0,
+      "total_defective": 60,
+      "total_equivalent_and_controls": 16,
+      "difficulty_breakdown": {
+        "easy": 55,
+        "medium": 3,
+        "hard": 2,
+        "control": 16
+      }
+    }
+  }
+}

@@ -185,8 +185,8 @@ class OpenRouterProvider(LLMProvider):
                     },
                 )
 
-            logger.info("OpenRouter resp_json: %s", json.dumps(resp_json))
-            raw_text = (choices[0].get("message", {}).get("content") or "").strip()
+            msg = choices[0].get("message", {})
+            raw_text = (msg.get("content") or msg.get("reasoning") or "").strip()
             parsed_json = extract_json_payload(raw_text) if json_mode else None
             response_model = resp_json.get("model", actual_model)
 

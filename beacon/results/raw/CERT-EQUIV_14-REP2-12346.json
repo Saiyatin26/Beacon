@@ -1,0 +1,39 @@
+{
+  "certificate_id": "CERT-EQUIV_14-REP2-12346",
+  "case_id": "EQUIV_14",
+  "repetition": 2,
+  "seed": 12346,
+  "budget": 500,
+  "input_set_digest": "23831a6cebc4389e78fb4f81312dd2bda7ccba3728514d5dac419a106f2b32d6",
+  "ground_truth": "EQUIVALENT",
+  "category": "equivalent_control",
+  "method": "M4_full_beacon",
+  "verdict": "CERTIFIED",
+  "verdict_reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied",
+  "outcome_class": "TN",
+  "metrics": {
+    "behavioral_score_R": 1.0,
+    "evidence_quality_Q": 0.9925,
+    "adjusted_score_S": 0.9925,
+    "mismatch_count": 0,
+    "evaluated_count": 500,
+    "elapsed_seconds": 0.051517
+  },
+  "evidence_factors": {
+    "oracle_coverage": 1.0,
+    "input_coverage": 1.0,
+    "execution_reliability": 1.0,
+    "oracle_confidence": 0.95,
+    "input_set_integrity": 1.0,
+    "source_hash_integrity": 1.0
+  },
+  "active_gates": [
+    "G1_input_floor",
+    "G2_reliability_floor",
+    "G3_integrity",
+    "G4_provenance",
+    "G5_coverage_floor",
+    "G6_mismatch"
+  ],
+  "timestamp_utc": "2026-10-27T14:59:47Z"
+}

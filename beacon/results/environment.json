@@ -1,0 +1,37 @@
+{
+  "execution_timestamp_utc": "2026-10-27T14:42:04.533733+00:00",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "base_random_seed": 12345,
+  "derived_seeds": [
+    12345,
+    12346,
+    12347,
+    12348,
+    12349
+  ],
+  "hardware": {
+    "os": "Windows-10-10.0.26200-SP0",
+    "os_release": "10",
+    "os_version": "10.0.26200",
+    "architecture": "AMD64",
+    "processor": "Intel64 Family 6 Model 186 Stepping 3, GenuineIntel",
+    "physical_cores": 10,
+    "logical_cores": 12,
+    "total_ram_gb": 15.69
+  },
+  "runtime": {
+    "python_version": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+    "python_executable": "C:\\Users\\Navaneeth Motamarry\\AppData\\Local\\Programs\\Python\\Python311\\python.exe",
+    "gnucobol": "cobc (GnuCOBOL) 3.1.2.0 (Ubuntu WSL)"
+  },
+  "dependencies": {
+    "scipy": "1.14.1",
+    "psutil": "7.2.2"
+  },
+  "llm_configuration": {
+    "provider": "gemini",
+    "model": "gemini-flash-lite-latest",
+    "temperature": 0.0,
+    "offline_deterministic_fallback": false
+  }
+}

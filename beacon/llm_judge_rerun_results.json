@@ -1,0 +1,854 @@
+{
+  "run_id": "LLM_RERUN_20261025_175438",
+  "timestamp_utc": "2026-10-25T17:54:38.424267+00:00",
+  "completion_status": "COMPLETE",
+  "provider": "gemini",
+  "model_id": "gemini-flash-lite-latest",
+  "prompt_hash": "5375139bf1c363979b25e54e40102aeffb741531090fa38ce4a809e7167902a1",
+  "evaluation_scope": "LLM-as-judge Seeded-Defect Evaluation (Isolated Rerun)",
+  "dataset_summary": {
+    "total_cases": 30,
+    "verified_seeded_defects_K": 20,
+    "correct_control_cases": 10
+  },
+  "confusion_matrix": {
+    "true_positives": 20,
+    "false_negatives": 0,
+    "true_negatives": 10,
+    "false_positives": 0,
+    "unresolved_cases": 0
+  },
+  "metrics": {
+    "detected_over_K": "20/20",
+    "detection_rate": "100.0%",
+    "false_certifications": 0,
+    "false_certification_rate": "0.0%",
+    "false_alarms": 0,
+    "false_alarm_rate": "0.0%",
+    "precision": 1.0,
+    "recall": 1.0,
+    "specificity": 1.0,
+    "f1_score": 1.0,
+    "coverage_percentage": "100.0%"
+  },
+  "timing": {
+    "total_wall_clock_seconds": 169.3508,
+    "mean_seconds_per_case": 1.4439,
+    "median_seconds_per_case": 1.2495,
+    "p95_seconds_per_case": 2.1475,
+    "total_api_attempts": 30,
+    "total_retries": 0
+  },
+  "per_case_results": [
+    {
+      "case_id": "CASE_DEF_CALC_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_CALC_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.8313,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Multiple test cases (TC_04, TC_05, TC_06, TC_10, TC_11, TC_12) exhibit semantic discrepancies where the target implementation returns incorrect messages (e.g., 'Changes validated. Fee deducted' instead of expected validation messages or success states), and incorrect flags/program flows.",
+      "token_usage": {
+        "promptTokenCount": 1951,
+        "candidatesTokenCount": 102,
+        "totalTokenCount": 2053,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1951
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_CALC_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_CALC_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.3542,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Multiple test cases (TC_04, TC_05, TC_06, TC_10, TC_11, TC_12) exhibit semantic discrepancies where the target implementation returns incorrect error messages, incorrect status flags, and unintended message text instead of adhering to the reference specification contract.",
+      "token_usage": {
+        "promptTokenCount": 1963,
+        "candidatesTokenCount": 93,
+        "totalTokenCount": 2056,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1963
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_BRANCH_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_BRANCH_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 0.7558,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_07_PF3_RETURN shows a discrepancy where the reference implementation sets XCTL_PROGRAM to COMEN01C, while the target implementation sets XCTL_PROGRAM to COSGN00C.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 74,
+        "totalTokenCount": 2030,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_BRANCH_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_BRANCH_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.2948,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_08_ZERO_ACCT shows a discrepancy between the reference output and target output. The reference system returned ACTION='', ERROR='N', SUCCESS='N', MESSAGE='', XCTL_PROGRAM='COSGN00C', RETURN_TO_PREV='Y', ACCT_ID='', ACCT_STATUS='', ACCT_BAL='', whereas the target implementation incorrectly returned ACTION='S', MESSAGE='Details of selected account shown above', and XCTL_PROGRAM='COSGN00C'.",
+      "token_usage": {
+        "promptTokenCount": 1965,
+        "candidatesTokenCount": 132,
+        "totalTokenCount": 2097,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1965
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_BRANCH_03",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_BRANCH_03",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.5113,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Discrepancy found in test TC_04_VALIDATE_OK. The reference implementation successfully validates changes returning ACTION='N', ERROR='N', and message 'Changes validated.Press F5 to save', whereas the target implementation returns ACTION='E', ERROR='Y', and message 'Preview step disabled'.",
+      "token_usage": {
+        "promptTokenCount": 1951,
+        "candidatesTokenCount": 94,
+        "totalTokenCount": 2045,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1951
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_VAL_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_VAL_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.4334,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "The target implementation exhibits semantic discrepancies in multiple test cases (TC_05, TC_11, TC_12), where the reference implementation correctly identifies validation errors (ERROR='Y', ACTION='E', and appropriate error messages), but the target incorrectly processes them as valid (ERROR='N', ACTION='N', SUCCESS='N', and success/validation messages).",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 105,
+        "totalTokenCount": 2061,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_VAL_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_VAL_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.1765,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Observed output discrepancy in test TC_11_EMPTY_LAST_NAME: reference implementation produced an error (ACTION='E', ERROR='Y', MESSAGE='Account Active Status must be Y or N'), whereas the target implementation improperly validated the input and succeeded (ACTION='N', ERROR='N', MESSAGE='Changes validated.Press F5 to save'). Behavioral equivalence fails.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 106,
+        "totalTokenCount": 2062,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_VAL_03",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_VAL_03",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.1237,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_12_NEGATIVE_LIMIT shows a semantic discrepancy where the reference output expects ACTION='E', ERROR='Y', SUCCESS='N', and message 'Account Active Status must be Y or N', but the target output incorrectly returns ACTION='N', ERROR='N', SUCCESS='N', and 'Changes validated.Press F5 to save'.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 101,
+        "totalTokenCount": 2057,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_BOUND_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_BOUND_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.2461,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Multiple test cases (e.g., TC_03, TC_04, TC_05, TC_06, TC_08-TC_13) show significant discrepancies between the reference and target outputs, including incorrect error handling, wrong messages, incorrect actions, and improper program flow transitions (XCTL_PROGRAM).",
+      "token_usage": {
+        "promptTokenCount": 1985,
+        "candidatesTokenCount": 100,
+        "totalTokenCount": 2085,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1985
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_BOUND_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_BOUND_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.3046,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Multiple test cases (e.g., TC_02, TC_03, TC_04, TC_05, TC_06, TC_07, TC_11, TC_12) show behavioral discrepancies between the reference and target outputs. Specifically, the target incorrectly returns program XCTL_PROGRAM 'COSGN00C' and RETURN_TO_PREV 'Y' where the reference expects different program transitions or no return.",
+      "token_usage": {
+        "promptTokenCount": 1998,
+        "candidatesTokenCount": 127,
+        "totalTokenCount": 2125,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1998
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_BOUND_03",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_BOUND_03",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.3345,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Discrepancy found in test TC_10_ZERO_LIMIT where the reference system output differs from the target implementation output (Reference: ACTION='', ERROR='N', SUCCESS='N', MESSAGE='', XCTL_PROGRAM='COSGN00C', RETURN_TO_PREV='Y'; Target: ACTION='E', ERROR='Y', SUCCESS='N', MESSAGE='Credit Limit cannot be zero', XCTL_PROGRAM='COSGN00C', RETURN_TO_PREV='Y').",
+      "token_usage": {
+        "promptTokenCount": 1964,
+        "candidatesTokenCount": 134,
+        "totalTokenCount": 2098,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1964
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_ERR_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_ERR_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.2529,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_03_LOOKUP_NOT_FOUND shows a semantic discrepancy where the reference implementation sets ERROR to 'Y' and MESSAGE to 'Did not find this account in account master file', whereas the target implementation incorrectly sets ERROR to 'N' and MESSAGE to 'Account lookup successful'.",
+      "token_usage": {
+        "promptTokenCount": 1950,
+        "candidatesTokenCount": 89,
+        "totalTokenCount": 2039,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1950
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_ERR_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_ERR_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 7.2763,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_13_MISSING_CUST shows a discrepancy between the reference and target outputs. The reference implementation produced an empty message, whereas the target implementation incorrectly produced the message 'Customer loaded'.",
+      "token_usage": {
+        "promptTokenCount": 1959,
+        "candidatesTokenCount": 71,
+        "totalTokenCount": 2030,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1959
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_ERR_03",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_ERR_03",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.3404,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "The target implementation exhibits multiple message discrepancies compared to the reference specification, specifically failing to return appropriate error messages for 'TC_03_LOOKUP_NOT_FOUND', 'TC_05_VALIDATION_ERROR_STATUS', 'TC_11_EMPTY_LAST_NAME', and 'TC_12_NEGATIVE_LIMIT', incorrectly returning 'System OK' instead of expected error messages.",
+      "token_usage": {
+        "promptTokenCount": 1931,
+        "candidatesTokenCount": 112,
+        "totalTokenCount": 2043,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1931
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_TX_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_TX_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 0.9129,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_06_COMMIT_CHANGES shows a semantic discrepancy where the reference implementation successfully commits changes (SUCCESS='Y', MESSAGE='Changes committed to database'), whereas the target implementation fails with a lock error (ACTION='L', ERROR='Y', MESSAGE='Could not lock account record for update').",
+      "token_usage": {
+        "promptTokenCount": 1959,
+        "candidatesTokenCount": 92,
+        "totalTokenCount": 2051,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1959
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_TX_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_TX_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.1336,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_06_COMMIT_CHANGES shows a discrepancy between the reference system and the target implementation. The reference system successfully commits changes with action 'C', returning ERROR='N', SUCCESS='Y', and message 'Changes committed to database', whereas the target implementation fails with action 'F', ERROR='Y', and message 'Update of record failed'.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 102,
+        "totalTokenCount": 2058,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_STATE_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_STATE_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.1568,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_04_VALIDATE_OK shows a semantic discrepancy where the reference implementation returns ACTION 'N', ERROR 'N', and a success message, while the target implementation incorrectly triggers an error with ACTION 'E', ERROR 'Y', and message 'Unexpected validation state transition'.",
+      "token_usage": {
+        "promptTokenCount": 1952,
+        "candidatesTokenCount": 87,
+        "totalTokenCount": 2039,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1952
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_STATE_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_STATE_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 0.9291,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_06_COMMIT_CHANGES shows a behavioral discrepancy. The reference system successfully commits changes (SUCCESS='Y', MESSAGE='Changes committed to database', ACTION='C'), whereas the target system incorrectly treats it as a lookup action (SUCCESS='N', MESSAGE='Details of selected account shown above', ACTION='S').",
+      "token_usage": {
+        "promptTokenCount": 1958,
+        "candidatesTokenCount": 97,
+        "totalTokenCount": 2055,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1958
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_SIDE_01",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_SIDE_01",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 0.8216,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "Test TC_07_PF3_RETURN shows a behavioral discrepancy where the target implementation output 'RETURN_TO_PREV' as 'N', whereas the reference implementation expects 'Y'.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 69,
+        "totalTokenCount": 2025,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_DEF_SIDE_02",
+      "ground_truth": "DEFECTIVE",
+      "defect_id": "DEF_SIDE_02",
+      "method_decision": "REJECTED",
+      "detected": true,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.6731,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "The target implementation exhibits multiple discrepancies in the ACCT_STATUS field compared to the reference system across several test cases (e.g., TC_02, TC_04, TC_05, TC_06, TC_11, TC_12), where the reference correctly returns 'Y' but the target returns an empty string.",
+      "token_usage": {
+        "promptTokenCount": 1944,
+        "candidatesTokenCount": 103,
+        "totalTokenCount": 2047,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1944
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_01",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.1534,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All observed outputs from the target implementation match the reference specification across all test cases, demonstrating complete behavioral equivalence.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 2006,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_02",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 0.898,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All target outputs across all test cases strictly match the reference outputs.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 42,
+        "totalTokenCount": 1998,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_03",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.0935,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All target outputs perfectly match the reference outputs across every test case in the observed execution evidence.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 47,
+        "totalTokenCount": 2003,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_04",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 2.1475,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All target outputs perfectly match the reference outputs across all 13 test executions, indicating full behavioral equivalence.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 2006,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_05",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 0.7617,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All target outputs perfectly match the reference outputs across all 13 test cases, confirming complete behavioral equivalence.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 2006,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_06",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.1589,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All observed test execution outputs for the target implementation precisely match the reference implementation across all evaluated test cases.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 49,
+        "totalTokenCount": 2005,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_07",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 0.8653,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All observed test execution outputs for the target implementation precisely match the reference outputs across every test case (TC_01 through TC_13).",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 58,
+        "totalTokenCount": 2014,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_08",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.3442,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All observed test execution outputs for the target implementation precisely match the reference outputs across every test case (TC_01 through TC_13).",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 58,
+        "totalTokenCount": 2014,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_09",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.4661,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All observed test execution outputs for the target implementation precisely match the reference outputs across every test case (TC_01 through TC_13), confirming strict behavioral equivalence.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 63,
+        "totalTokenCount": 2019,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    },
+    {
+      "case_id": "CASE_CTRL_10",
+      "ground_truth": "CORRECT",
+      "defect_id": null,
+      "method_decision": "CERTIFIED",
+      "detected": false,
+      "false_certification": false,
+      "false_alarm": false,
+      "elapsed_seconds": 1.5647,
+      "attempts": 1,
+      "retries": 0,
+      "confidence": 1.0,
+      "reasoning": "All target outputs perfectly match the reference outputs across all 13 test executions, confirming complete behavioral equivalence.",
+      "token_usage": {
+        "promptTokenCount": 1956,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 2006,
+        "promptTokensDetails": [
+          {
+            "modality": "TEXT",
+            "tokenCount": 1956
+          }
+        ],
+        "serviceTier": "standard"
+      },
+      "failure_reason": null
+    }
+  ]
+}

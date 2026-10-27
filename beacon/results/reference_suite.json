@@ -1,0 +1,265 @@
+{
+  "program": "AWS CardDemo COACTUPC",
+  "reference_version": "CardDemo CICS COBOL / GnuCOBOL 3.1.2.0 & Reference Python",
+  "clean_candidate": "CTRL_00",
+  "verified_correct": true,
+  "total_contract_tests": 10,
+  "tests": [
+    {
+      "test_id": "REF_01_FIRST_ENTRY",
+      "scenario": "calen=0 first entry",
+      "inputs": {
+        "EIBCALEN": 0,
+        "EIBAID": "ENTER",
+        "ACTION": "",
+        "ACCT_ID": "100000001"
+      },
+      "expected_outputs": {
+        "ACTION": "",
+        "ERROR": "N",
+        "SUCCESS": "N",
+        "MESSAGE": "",
+        "XCTL_PROGRAM": "COSGN00C",
+        "RETURN_TO_PREV": "Y",
+        "ACCT_ID": "",
+        "ACCT_STATUS": "",
+        "ACCT_BAL": "",
+        "CREDIT_LIMIT": "",
+        "CASH_CREDIT_LIMIT": "",
+        "LAST_NAME": ""
+      }
+    },
+    {
+      "test_id": "REF_02_PF3_MENU_RETURN",
+      "scenario": "PF3 menu return",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "PF3",
+        "ACTION": "S",
+        "FROM_PROGRAM": "COMEN01C"
+      },
+      "expected_outputs": {
+        "ACTION": "",
+        "ERROR": "N",
+        "SUCCESS": "N",
+        "MESSAGE": "",
+        "XCTL_PROGRAM": "COMEN01C",
+        "RETURN_TO_PREV": "Y",
+        "ACCT_ID": "",
+        "ACCT_STATUS": "",
+        "ACCT_BAL": "",
+        "CREDIT_LIMIT": "",
+        "CASH_CREDIT_LIMIT": "",
+        "LAST_NAME": ""
+      }
+    },
+    {
+      "test_id": "REF_03_LOOKUP_VALID_ACCT",
+      "scenario": "Lookup account 100000001",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "ENTER",
+        "ACTION": "",
+        "ACCT_ID": "100000001"
+      },
+      "expected_outputs": {
+        "ACTION": "S",
+        "ERROR": "N",
+        "SUCCESS": "N",
+        "MESSAGE": "Details of selected account shown above",
+        "XCTL_PROGRAM": "",
+        "RETURN_TO_PREV": "N",
+        "ACCT_ID": "100000001",
+        "ACCT_STATUS": "Y",
+        "ACCT_BAL": "5000.00",
+        "CREDIT_LIMIT": "10000.00",
+        "CASH_CREDIT_LIMIT": "5000.00",
+        "LAST_NAME": "Doe"
+      }
+    },
+    {
+      "test_id": "REF_04_LOOKUP_NOT_FOUND",
+      "scenario": "Lookup non-existent account 999999999",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "ENTER",
+        "ACTION": "",
+        "ACCT_ID": "999999999"
+      },
+      "expected_outputs": {
+        "ACTION": "",
+        "ERROR": "Y",
+        "SUCCESS": "N",
+        "MESSAGE": "Did not find this account in account master file",
+        "XCTL_PROGRAM": "",
+        "RETURN_TO_PREV": "N",
+        "ACCT_ID": "",
+        "ACCT_STATUS": "",
+        "ACCT_BAL": "",
+        "CREDIT_LIMIT": "",
+        "CASH_CREDIT_LIMIT": "",
+        "LAST_NAME": ""
+      }
+    },
+    {
+      "test_id": "REF_05_LOOKUP_ZERO_ACCT",
+      "scenario": "Lookup zero account ID",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "ENTER",
+        "ACTION": "",
+        "ACCT_ID": "0"
+      },
+      "expected_outputs": {
+        "ACTION": "",
+        "ERROR": "Y",
+        "SUCCESS": "N",
+        "MESSAGE": "Account number must be a non zero 11 digit number",
+        "XCTL_PROGRAM": "",
+        "RETURN_TO_PREV": "N",
+        "ACCT_ID": "",
+        "ACCT_STATUS": "",
+        "ACCT_BAL": "",
+        "CREDIT_LIMIT": "",
+        "CASH_CREDIT_LIMIT": "",
+        "LAST_NAME": ""
+      }
+    },
+    {
+      "test_id": "REF_06_PREVIEW_VALID_EDIT",
+      "scenario": "Preview valid edits to credit limit and status",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "ENTER",
+        "ACTION": "S",
+        "ACCT_ID": "100000001",
+        "ACTIVE_STATUS": "Y",
+        "CREDIT_LIMIT": "15000.00",
+        "CASH_CREDIT_LIMIT": "7500.00",
+        "LAST_NAME": "Doe"
+      },
+      "expected_outputs": {
+        "ACTION": "N",
+        "ERROR": "N",
+        "SUCCESS": "N",
+        "MESSAGE": "Changes validated.Press F5 to save",
+        "XCTL_PROGRAM": "",
+        "RETURN_TO_PREV": "N",
+        "ACCT_ID": "100000001",
+        "ACCT_STATUS": "Y",
+        "ACCT_BAL": "5000.00",
+        "CREDIT_LIMIT": "15000.00",
+        "CASH_CREDIT_LIMIT": "7500.00",
+        "LAST_NAME": "Doe"
+      }
+    },
+    {
+      "test_id": "REF_07_PREVIEW_BAD_STATUS",
+      "scenario": "Preview invalid active status X",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "ENTER",
+        "ACTION": "S",
+        "ACCT_ID": "100000001",
+        "ACTIVE_STATUS": "X",
+        "CREDIT_LIMIT": "15000.00",
+        "CASH_CREDIT_LIMIT": "7500.00",
+        "LAST_NAME": "Doe"
+      },
+      "expected_outputs": {
+        "ACTION": "E",
+        "ERROR": "Y",
+        "SUCCESS": "N",
+        "MESSAGE": "Account Active Status must be Y or N",
+        "XCTL_PROGRAM": "",
+        "RETURN_TO_PREV": "N",
+        "ACCT_ID": "100000001",
+        "ACCT_STATUS": "Y",
+        "ACCT_BAL": "5000.00",
+        "CREDIT_LIMIT": "10000.00",
+        "CASH_CREDIT_LIMIT": "5000.00",
+        "LAST_NAME": "Doe"
+      }
+    },
+    {
+      "test_id": "REF_08_PREVIEW_EMPTY_LAST_NAME",
+      "scenario": "Preview empty mandatory last name",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "ENTER",
+        "ACTION": "S",
+        "ACCT_ID": "100000001",
+        "ACTIVE_STATUS": "Y",
+        "CREDIT_LIMIT": "15000.00",
+        "CASH_CREDIT_LIMIT": "7500.00",
+        "LAST_NAME": ""
+      },
+      "expected_outputs": {
+        "ACTION": "E",
+        "ERROR": "Y",
+        "SUCCESS": "N",
+        "MESSAGE": "Last name not provided",
+        "XCTL_PROGRAM": "",
+        "RETURN_TO_PREV": "N",
+        "ACCT_ID": "100000001",
+        "ACCT_STATUS": "Y",
+        "ACCT_BAL": "5000.00",
+        "CREDIT_LIMIT": "10000.00",
+        "CASH_CREDIT_LIMIT": "5000.00",
+        "LAST_NAME": "Doe"
+      }
+    },
+    {
+      "test_id": "REF_09_COMMIT_CHANGES_PF5",
+      "scenario": "Confirm commit on PF5",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "PF5",
+        "ACTION": "N",
+        "ACCT_ID": "100000001",
+        "ACTIVE_STATUS": "Y",
+        "CREDIT_LIMIT": "15000.00",
+        "CASH_CREDIT_LIMIT": "7500.00",
+        "LAST_NAME": "Doe"
+      },
+      "expected_outputs": {
+        "ACTION": "C",
+        "ERROR": "N",
+        "SUCCESS": "Y",
+        "MESSAGE": "Changes committed to database",
+        "XCTL_PROGRAM": "",
+        "RETURN_TO_PREV": "N",
+        "ACCT_ID": "100000001",
+        "ACCT_STATUS": "Y",
+        "ACCT_BAL": "5000.00",
+        "CREDIT_LIMIT": "15000.00",
+        "CASH_CREDIT_LIMIT": "7500.00",
+        "LAST_NAME": "Doe"
+      }
+    },
+    {
+      "test_id": "REF_10_PF12_CARD_LIST",
+      "scenario": "PF12 navigate to card list",
+      "inputs": {
+        "EIBCALEN": 100,
+        "EIBAID": "PF12",
+        "ACTION": "N",
+        "ACCT_ID": "100000001"
+      },
+      "expected_outputs": {
+        "ACTION": "",
+        "ERROR": "N",
+        "SUCCESS": "N",
+        "MESSAGE": "",
+        "XCTL_PROGRAM": "COCRDLIC",
+        "RETURN_TO_PREV": "Y",
+        "ACCT_ID": "",
+        "ACCT_STATUS": "",
+        "ACCT_BAL": "",
+        "CREDIT_LIMIT": "",
+        "CASH_CREDIT_LIMIT": "",
+        "LAST_NAME": ""
+      }
+    }
+  ]
+}

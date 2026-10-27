@@ -1,0 +1,122 @@
+{
+  "experiment": "certification_by_category",
+  "table_id": "table17",
+  "generated_at": "2026-10-27T14:59:55Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "seeds": [
+    12345
+  ],
+  "n_cases": 76,
+  "definitions": {
+    "n_cases": "Total cases in category",
+    "detected_TP": "Defective cases correctly identified as NOT_CERTIFIED",
+    "missed_FC": "Defective cases incorrectly assigned CERTIFIED (false certification)",
+    "insufficient_coverage_IC": "Cases assigned INSUFFICIENT_COVERAGE",
+    "rate": "TP / n for defective; TN / n for equivalent controls"
+  },
+  "status": "complete",
+  "data": [
+    {
+      "category": "incorrect_calculation",
+      "n_cases": 12,
+      "detected_TP": 11,
+      "missed_FC": 1,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 0,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Defect Detection Rate (TP / n)",
+      "rate": 0.9167,
+      "rate_wilson_ci_95": [
+        0.6461,
+        0.9851
+      ],
+      "denominator": "11 / 12"
+    },
+    {
+      "category": "boundary_condition",
+      "n_cases": 12,
+      "detected_TP": 12,
+      "missed_FC": 0,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 0,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Defect Detection Rate (TP / n)",
+      "rate": 1.0,
+      "rate_wilson_ci_95": [
+        0.7575,
+        1.0
+      ],
+      "denominator": "12 / 12"
+    },
+    {
+      "category": "altered_business_rule",
+      "n_cases": 12,
+      "detected_TP": 12,
+      "missed_FC": 0,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 0,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Defect Detection Rate (TP / n)",
+      "rate": 1.0,
+      "rate_wilson_ci_95": [
+        0.7575,
+        1.0
+      ],
+      "denominator": "12 / 12"
+    },
+    {
+      "category": "missing_update",
+      "n_cases": 12,
+      "detected_TP": 12,
+      "missed_FC": 0,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 0,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Defect Detection Rate (TP / n)",
+      "rate": 1.0,
+      "rate_wilson_ci_95": [
+        0.7575,
+        1.0
+      ],
+      "denominator": "12 / 12"
+    },
+    {
+      "category": "incorrect_transaction_handling",
+      "n_cases": 12,
+      "detected_TP": 11,
+      "missed_FC": 1,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 0,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Defect Detection Rate (TP / n)",
+      "rate": 0.9167,
+      "rate_wilson_ci_95": [
+        0.6461,
+        0.9851
+      ],
+      "denominator": "11 / 12"
+    },
+    {
+      "category": "equivalent_control",
+      "n_cases": 15,
+      "detected_TP": 0,
+      "missed_FC": 0,
+      "insufficient_coverage_IC": 0,
+      "reference_inconsistent_RI": 0,
+      "true_negatives_TN": 15,
+      "false_positives_FP": 0,
+      "rate_metric_description": "Certified Proportion (True Negatives)",
+      "rate": 1.0,
+      "rate_wilson_ci_95": [
+        0.7961,
+        1.0
+      ],
+      "denominator": "15 / 15"
+    }
+  ]
+}

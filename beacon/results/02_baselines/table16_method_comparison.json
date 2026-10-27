@@ -1,0 +1,777 @@
+{
+  "experiment": "comparative_evaluation_of_certification_methods",
+  "table_id": "table16",
+  "generated_at": "2026-10-27T15:02:48Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "seeds": [
+    12345,
+    12346,
+    12347,
+    12348,
+    12349
+  ],
+  "n_cases": 76,
+  "primary_threshold_theta": 0.9,
+  "definitions": {
+    "recall": "TP / N_defective",
+    "precision": "TP / (TP + FP)",
+    "f1_score": "2 * Precision * Recall / (Precision + Recall)",
+    "false_certification_rate": "FC / N_defective",
+    "error_rate_among_certified": "FC / (FC + TN)",
+    "insufficient_coverage_proportion": "IC_total / N_all",
+    "certified_proportion": "(FC + TN) / N_all"
+  },
+  "status": "complete",
+  "data": {
+    "methods_comparison": [
+      {
+        "method_id": "M1_output_only",
+        "description": "Output-only testing (certifies iff R == 1.0; no gates, no Q)",
+        "disabled_gates": [
+          "ALL_GATES",
+          "Q_ADJUSTMENT",
+          "ORACLES"
+        ],
+        "recall": 0.9667,
+        "recall_ci_95": [
+          0.8864,
+          0.9908
+        ],
+        "recall_denominator": "TP / N_defective (58 / 60)",
+        "precision": 1.0,
+        "precision_ci_95": [
+          0.9379,
+          1.0
+        ],
+        "precision_denominator": "TP / (TP + FP) (58 / 58)",
+        "f1_score": 0.9831,
+        "false_certification_rate": 0.0333,
+        "false_certification_rate_ci_95": [
+          0.0092,
+          0.1136
+        ],
+        "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+        "error_rate_among_certified": 0.1111,
+        "error_rate_among_certified_ci_95": [
+          0.031,
+          0.328
+        ],
+        "certified_proportion": 0.2368,
+        "certified_proportion_ci_95": [
+          0.1554,
+          0.3436
+        ],
+        "insufficient_coverage_proportion": 0.0,
+        "insufficient_coverage_proportion_ci_95": [
+          0.0,
+          0.0481
+        ],
+        "mean_runtime_ms_per_case": 20.224,
+        "repetition_stats": {
+          "recall_median": 0.9667,
+          "recall_min_max": [
+            0.9667,
+            0.9833
+          ],
+          "fcr_median": 0.0333,
+          "f1_median": 0.9831
+        }
+      },
+      {
+        "method_id": "M2_unweighted_score",
+        "description": "Unweighted evidence scoring (S = R >= 0.90; no Q adjustment, no gates)",
+        "disabled_gates": [
+          "ALL_GATES",
+          "Q_ADJUSTMENT"
+        ],
+        "recall": 0.2167,
+        "recall_ci_95": [
+          0.1312,
+          0.3362
+        ],
+        "recall_denominator": "TP / N_defective (13 / 60)",
+        "precision": 1.0,
+        "precision_ci_95": [
+          0.7719,
+          1.0
+        ],
+        "precision_denominator": "TP / (TP + FP) (13 / 13)",
+        "f1_score": 0.3562,
+        "false_certification_rate": 0.7833,
+        "false_certification_rate_ci_95": [
+          0.6638,
+          0.8688
+        ],
+        "false_certification_rate_denominator": "FC / N_defective (47 / 60)",
+        "error_rate_among_certified": 0.746,
+        "error_rate_among_certified_ci_95": [
+          0.6266,
+          0.8372
+        ],
+        "certified_proportion": 0.8289,
+        "certified_proportion_ci_95": [
+          0.729,
+          0.8972
+        ],
+        "insufficient_coverage_proportion": 0.0,
+        "insufficient_coverage_proportion_ci_95": [
+          0.0,
+          0.0481
+        ],
+        "mean_runtime_ms_per_case": 21.333,
+        "repetition_stats": {
+          "recall_median": 0.3167,
+          "recall_min_max": [
+            0.2167,
+            0.35
+          ],
+          "fcr_median": 0.6833,
+          "f1_median": 0.4811
+        }
+      },
+      {
+        "method_id": "M3_no_sufficiency_gates",
+        "description": "BEACON without sufficiency gates (S_adj = R * Q >= 0.90; gates G1, G2, G5 off)",
+        "disabled_gates": [
+          "G1_input_floor",
+          "G2_reliability_floor",
+          "G5_coverage_floor"
+        ],
+        "recall": 0.9667,
+        "recall_ci_95": [
+          0.8864,
+          0.9908
+        ],
+        "recall_denominator": "TP / N_defective (58 / 60)",
+        "precision": 1.0,
+        "precision_ci_95": [
+          0.9379,
+          1.0
+        ],
+        "precision_denominator": "TP / (TP + FP) (58 / 58)",
+        "f1_score": 0.9831,
+        "false_certification_rate": 0.0333,
+        "false_certification_rate_ci_95": [
+          0.0092,
+          0.1136
+        ],
+        "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+        "error_rate_among_certified": 0.1111,
+        "error_rate_among_certified_ci_95": [
+          0.031,
+          0.328
+        ],
+        "certified_proportion": 0.2368,
+        "certified_proportion_ci_95": [
+          0.1554,
+          0.3436
+        ],
+        "insufficient_coverage_proportion": 0.0,
+        "insufficient_coverage_proportion_ci_95": [
+          0.0,
+          0.0481
+        ],
+        "mean_runtime_ms_per_case": 21.021,
+        "repetition_stats": {
+          "recall_median": 0.9667,
+          "recall_min_max": [
+            0.9667,
+            0.9833
+          ],
+          "fcr_median": 0.0333,
+          "f1_median": 0.9831
+        }
+      },
+      {
+        "method_id": "M4_full_beacon",
+        "description": "Full BEACON (S_adj = R * Q >= 0.90; all fail-closed gates G1-G6 active)",
+        "disabled_gates": [],
+        "recall": 0.9667,
+        "recall_ci_95": [
+          0.8864,
+          0.9908
+        ],
+        "recall_denominator": "TP / N_defective (58 / 60)",
+        "precision": 1.0,
+        "precision_ci_95": [
+          0.9379,
+          1.0
+        ],
+        "precision_denominator": "TP / (TP + FP) (58 / 58)",
+        "f1_score": 0.9831,
+        "false_certification_rate": 0.0333,
+        "false_certification_rate_ci_95": [
+          0.0092,
+          0.1136
+        ],
+        "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+        "error_rate_among_certified": 0.1111,
+        "error_rate_among_certified_ci_95": [
+          0.031,
+          0.328
+        ],
+        "certified_proportion": 0.2368,
+        "certified_proportion_ci_95": [
+          0.1554,
+          0.3436
+        ],
+        "insufficient_coverage_proportion": 0.0,
+        "insufficient_coverage_proportion_ci_95": [
+          0.0,
+          0.0481
+        ],
+        "mean_runtime_ms_per_case": 21.192,
+        "repetition_stats": {
+          "recall_median": 0.9667,
+          "recall_min_max": [
+            0.9667,
+            0.9833
+          ],
+          "fcr_median": 0.0333,
+          "f1_median": 0.9831
+        }
+      }
+    ],
+    "mcnemar_paired_tests": {
+      "M4_vs_M1_output_only": {
+        "detection_discordant_pairs": {
+          "M4_pos_base_neg": 0,
+          "M4_neg_base_pos": 0
+        },
+        "detection_p_value": 1.0,
+        "false_cert_discordant_pairs": {
+          "M4_fc_base_no_fc": 0,
+          "M4_no_fc_base_fc": 0
+        },
+        "false_cert_p_value": 1.0
+      },
+      "M4_vs_M2_unweighted_score": {
+        "detection_discordant_pairs": {
+          "M4_pos_base_neg": 45,
+          "M4_neg_base_pos": 0
+        },
+        "detection_p_value": 0.0,
+        "false_cert_discordant_pairs": {
+          "M4_fc_base_no_fc": 0,
+          "M4_no_fc_base_fc": 45
+        },
+        "false_cert_p_value": 0.0
+      },
+      "M4_vs_M3_no_sufficiency_gates": {
+        "detection_discordant_pairs": {
+          "M4_pos_base_neg": 0,
+          "M4_neg_base_pos": 0
+        },
+        "detection_p_value": 1.0,
+        "false_cert_discordant_pairs": {
+          "M4_fc_base_no_fc": 0,
+          "M4_no_fc_base_fc": 0
+        },
+        "false_cert_p_value": 1.0
+      }
+    },
+    "theta_sensitivity_sweep": {
+      "theta_0.80": {
+        "M2_unweighted_score": {
+          "counts": {
+            "TP": 2,
+            "FP": 0,
+            "TN": 16,
+            "FC": 58,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 58
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.0333,
+          "recall_ci": [
+            0.0092,
+            0.1136
+          ],
+          "recall_denominator": "TP / N_defective (2 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.3424,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (2 / 2)",
+          "f1_score": 0.0645,
+          "false_certification_rate": 0.9667,
+          "false_certification_rate_ci": [
+            0.8864,
+            0.9908
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (58 / 60)",
+          "error_rate_among_certified": 0.7838,
+          "error_rate_among_certified_ci": [
+            0.6773,
+            0.8623
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (58 / 74)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.9737,
+          "certified_proportion_ci": [
+            0.909,
+            0.9928
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (74 / 76)"
+        },
+        "M3_no_sufficiency_gates": {
+          "counts": {
+            "TP": 58,
+            "FP": 0,
+            "TN": 16,
+            "FC": 2,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 2
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.9667,
+          "recall_ci": [
+            0.8864,
+            0.9908
+          ],
+          "recall_denominator": "TP / N_defective (58 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.9379,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (58 / 58)",
+          "f1_score": 0.9831,
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci": [
+            0.0092,
+            0.1136
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+          "error_rate_among_certified": 0.1111,
+          "error_rate_among_certified_ci": [
+            0.031,
+            0.328
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (2 / 18)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.2368,
+          "certified_proportion_ci": [
+            0.1554,
+            0.3436
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (18 / 76)"
+        },
+        "M4_full_beacon": {
+          "counts": {
+            "TP": 58,
+            "FP": 0,
+            "TN": 16,
+            "FC": 2,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 2
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.9667,
+          "recall_ci": [
+            0.8864,
+            0.9908
+          ],
+          "recall_denominator": "TP / N_defective (58 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.9379,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (58 / 58)",
+          "f1_score": 0.9831,
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci": [
+            0.0092,
+            0.1136
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+          "error_rate_among_certified": 0.1111,
+          "error_rate_among_certified_ci": [
+            0.031,
+            0.328
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (2 / 18)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.2368,
+          "certified_proportion_ci": [
+            0.1554,
+            0.3436
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (18 / 76)"
+        }
+      },
+      "theta_0.90": {
+        "M2_unweighted_score": {
+          "counts": {
+            "TP": 13,
+            "FP": 0,
+            "TN": 16,
+            "FC": 47,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 47
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.2167,
+          "recall_ci": [
+            0.1312,
+            0.3362
+          ],
+          "recall_denominator": "TP / N_defective (13 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.7719,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (13 / 13)",
+          "f1_score": 0.3562,
+          "false_certification_rate": 0.7833,
+          "false_certification_rate_ci": [
+            0.6638,
+            0.8688
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (47 / 60)",
+          "error_rate_among_certified": 0.746,
+          "error_rate_among_certified_ci": [
+            0.6266,
+            0.8372
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (47 / 63)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.8289,
+          "certified_proportion_ci": [
+            0.729,
+            0.8972
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (63 / 76)"
+        },
+        "M3_no_sufficiency_gates": {
+          "counts": {
+            "TP": 58,
+            "FP": 0,
+            "TN": 16,
+            "FC": 2,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 2
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.9667,
+          "recall_ci": [
+            0.8864,
+            0.9908
+          ],
+          "recall_denominator": "TP / N_defective (58 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.9379,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (58 / 58)",
+          "f1_score": 0.9831,
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci": [
+            0.0092,
+            0.1136
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+          "error_rate_among_certified": 0.1111,
+          "error_rate_among_certified_ci": [
+            0.031,
+            0.328
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (2 / 18)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.2368,
+          "certified_proportion_ci": [
+            0.1554,
+            0.3436
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (18 / 76)"
+        },
+        "M4_full_beacon": {
+          "counts": {
+            "TP": 58,
+            "FP": 0,
+            "TN": 16,
+            "FC": 2,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 2
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.9667,
+          "recall_ci": [
+            0.8864,
+            0.9908
+          ],
+          "recall_denominator": "TP / N_defective (58 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.9379,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (58 / 58)",
+          "f1_score": 0.9831,
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci": [
+            0.0092,
+            0.1136
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+          "error_rate_among_certified": 0.1111,
+          "error_rate_among_certified_ci": [
+            0.031,
+            0.328
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (2 / 18)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.2368,
+          "certified_proportion_ci": [
+            0.1554,
+            0.3436
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (18 / 76)"
+        }
+      },
+      "theta_0.95": {
+        "M2_unweighted_score": {
+          "counts": {
+            "TP": 31,
+            "FP": 0,
+            "TN": 16,
+            "FC": 29,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 29
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.5167,
+          "recall_ci": [
+            0.3931,
+            0.6382
+          ],
+          "recall_denominator": "TP / N_defective (31 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.8897,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (31 / 31)",
+          "f1_score": 0.6813,
+          "false_certification_rate": 0.4833,
+          "false_certification_rate_ci": [
+            0.3618,
+            0.6069
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (29 / 60)",
+          "error_rate_among_certified": 0.6444,
+          "error_rate_among_certified_ci": [
+            0.4984,
+            0.7678
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (29 / 45)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.5921,
+          "certified_proportion_ci": [
+            0.4798,
+            0.6956
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (45 / 76)"
+        },
+        "M3_no_sufficiency_gates": {
+          "counts": {
+            "TP": 58,
+            "FP": 0,
+            "TN": 16,
+            "FC": 2,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 2
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.9667,
+          "recall_ci": [
+            0.8864,
+            0.9908
+          ],
+          "recall_denominator": "TP / N_defective (58 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.9379,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (58 / 58)",
+          "f1_score": 0.9831,
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci": [
+            0.0092,
+            0.1136
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+          "error_rate_among_certified": 0.1111,
+          "error_rate_among_certified_ci": [
+            0.031,
+            0.328
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (2 / 18)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.2368,
+          "certified_proportion_ci": [
+            0.1554,
+            0.3436
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (18 / 76)"
+        },
+        "M4_full_beacon": {
+          "counts": {
+            "TP": 58,
+            "FP": 0,
+            "TN": 16,
+            "FC": 2,
+            "IC_defective": 0,
+            "IC_equivalent": 0,
+            "RI_defective": 0,
+            "RI_equivalent": 0,
+            "IC_total": 0,
+            "RI_total": 0,
+            "FN_total": 2
+          },
+          "n_defective": 60,
+          "n_equivalent": 16,
+          "n_all": 76,
+          "recall": 0.9667,
+          "recall_ci": [
+            0.8864,
+            0.9908
+          ],
+          "recall_denominator": "TP / N_defective (58 / 60)",
+          "precision": 1.0,
+          "precision_ci": [
+            0.9379,
+            1.0
+          ],
+          "precision_denominator": "TP / (TP + FP) (58 / 58)",
+          "f1_score": 0.9831,
+          "false_certification_rate": 0.0333,
+          "false_certification_rate_ci": [
+            0.0092,
+            0.1136
+          ],
+          "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+          "error_rate_among_certified": 0.1111,
+          "error_rate_among_certified_ci": [
+            0.031,
+            0.328
+          ],
+          "error_rate_among_certified_denominator": "FC / (FC + TN) (2 / 18)",
+          "insufficient_coverage_rate": 0.0,
+          "insufficient_coverage_rate_ci": [
+            0.0,
+            0.0481
+          ],
+          "insufficient_coverage_rate_denominator": "IC_total / N_all (0 / 76)",
+          "certified_proportion": 0.2368,
+          "certified_proportion_ci": [
+            0.1554,
+            0.3436
+          ],
+          "certified_proportion_denominator": "(FC + TN) / N_all (18 / 76)"
+        }
+      }
+    }
+  }
+}

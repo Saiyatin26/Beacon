@@ -1,0 +1,39 @@
+{
+  "certificate_id": "CERT-DEF_RULE_01-REP1-12345",
+  "case_id": "DEF_RULE_01",
+  "repetition": 1,
+  "seed": 12345,
+  "budget": 500,
+  "input_set_digest": "6fb07c8979bb753278068d483280a202bfaa0f775c74d257e6c7fa9e526446e2",
+  "ground_truth": "DEFECTIVE",
+  "category": "altered_business_rule",
+  "method": "M4_full_beacon",
+  "verdict": "NOT_CERTIFIED",
+  "verdict_reason": "G6 Gate Failure: 33 behavioral mismatches detected on contract",
+  "outcome_class": "TP",
+  "metrics": {
+    "behavioral_score_R": 0.934,
+    "evidence_quality_Q": 0.9925,
+    "adjusted_score_S": 0.926995,
+    "mismatch_count": 33,
+    "evaluated_count": 500,
+    "elapsed_seconds": 0.048685
+  },
+  "evidence_factors": {
+    "oracle_coverage": 1.0,
+    "input_coverage": 1.0,
+    "execution_reliability": 1.0,
+    "oracle_confidence": 0.95,
+    "input_set_integrity": 1.0,
+    "source_hash_integrity": 1.0
+  },
+  "active_gates": [
+    "G1_input_floor",
+    "G2_reliability_floor",
+    "G3_integrity",
+    "G4_provenance",
+    "G5_coverage_floor",
+    "G6_mismatch"
+  ],
+  "timestamp_utc": "2026-10-27T14:55:35Z"
+}

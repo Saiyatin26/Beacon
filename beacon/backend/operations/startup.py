@@ -12,7 +12,6 @@ from typing import Any
 
 from common.config import settings
 from certification.repository import certification_repository
-from benchmarks import benchmark_registry
 from oracle.registry import registry as oracle_registry
 from llm.manager import get_provider_manager
 from .job_lifecycle import certification_job_tracker, JobState

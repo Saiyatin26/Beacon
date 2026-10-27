@@ -1,0 +1,1978 @@
+{
+  "CTRL_00": {
+    "case_id": "CTRL_00",
+    "ground_truth": "EQUIVALENT",
+    "category": "clean_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "DEF_CALC_01": {
+    "case_id": "DEF_CALC_01",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 49 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9020 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_02": {
+    "case_id": "DEF_CALC_02",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 46 behavioral mismatches (Divergence on ['CASH_CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9080 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 46 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 46 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_03": {
+    "case_id": "DEF_CALC_03",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 7 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9860 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 7 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 7 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_04": {
+    "case_id": "DEF_CALC_04",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 228 behavioral mismatches (Divergence on ['ACCT_BAL'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.5440 below policy threshold 0.90 (228 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 228 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 228 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_05": {
+    "case_id": "DEF_CALC_05",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 46 behavioral mismatches (Divergence on ['CASH_CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9080 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 46 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 46 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_06": {
+    "case_id": "DEF_CALC_06",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 15 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9700 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 15 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 15 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_07": {
+    "case_id": "DEF_CALC_07",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 46 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9080 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 46 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 46 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_08": {
+    "case_id": "DEF_CALC_08",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 35 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9300 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 35 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 35 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_09": {
+    "case_id": "DEF_CALC_09",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 14 behavioral mismatches (Divergence on ['CASH_CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9720 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_10": {
+    "case_id": "DEF_CALC_10",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 225 behavioral mismatches (Divergence on ['CASH_CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.5500 below policy threshold 0.90 (225 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 225 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 225 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_CALC_11": {
+    "case_id": "DEF_CALC_11",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "DEF_CALC_12": {
+    "case_id": "DEF_CALC_12",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_calculation",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 9 behavioral mismatches (Divergence on ['MESSAGE', 'CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9820 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 9 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 9 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_01": {
+    "case_id": "DEF_BOUND_01",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 14 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9720 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_02": {
+    "case_id": "DEF_BOUND_02",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 44 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9120 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 44 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 44 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_03": {
+    "case_id": "DEF_BOUND_03",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 26 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9480 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 26 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 26 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_04": {
+    "case_id": "DEF_BOUND_04",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 9 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9820 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 9 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 9 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_05": {
+    "case_id": "DEF_BOUND_05",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 14 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9720 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_06": {
+    "case_id": "DEF_BOUND_06",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 16 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9680 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 16 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 16 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_07": {
+    "case_id": "DEF_BOUND_07",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 16 behavioral mismatches (Divergence on ['ACTION', 'ERROR'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9680 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 16 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 16 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_08": {
+    "case_id": "DEF_BOUND_08",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 14 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9720 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_09": {
+    "case_id": "DEF_BOUND_09",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 33 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9340 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 33 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 33 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_10": {
+    "case_id": "DEF_BOUND_10",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 14 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9720 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 14 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_11": {
+    "case_id": "DEF_BOUND_11",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 6 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9880 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 6 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 6 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_BOUND_12": {
+    "case_id": "DEF_BOUND_12",
+    "ground_truth": "DEFECTIVE",
+    "category": "boundary_condition",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 21 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9580 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_01": {
+    "case_id": "DEF_RULE_01",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 33 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9340 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 33 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 33 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_02": {
+    "case_id": "DEF_RULE_02",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 13 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9740 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 13 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 13 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_03": {
+    "case_id": "DEF_RULE_03",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 42 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9160 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 42 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 42 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_04": {
+    "case_id": "DEF_RULE_04",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 37 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9260 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 37 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 37 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_05": {
+    "case_id": "DEF_RULE_05",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 36 behavioral mismatches (Divergence on ['ACCT_STATUS'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9280 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 36 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 36 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_06": {
+    "case_id": "DEF_RULE_06",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 49 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9020 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_07": {
+    "case_id": "DEF_RULE_07",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 7 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9860 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 7 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 7 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_08": {
+    "case_id": "DEF_RULE_08",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 17 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9660 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 17 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 17 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_09": {
+    "case_id": "DEF_RULE_09",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 49 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9020 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_10": {
+    "case_id": "DEF_RULE_10",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 10 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9800 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 10 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 10 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_11": {
+    "case_id": "DEF_RULE_11",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 17 behavioral mismatches (Divergence on ['ERROR', 'SUCCESS', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9660 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 17 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 17 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_RULE_12": {
+    "case_id": "DEF_RULE_12",
+    "ground_truth": "DEFECTIVE",
+    "category": "altered_business_rule",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 4 behavioral mismatches (Divergence on ['ACTION', 'ERROR', 'MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9920 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 4 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 4 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_01": {
+    "case_id": "DEF_UPDATE_01",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 57 behavioral mismatches (Divergence on ['LAST_NAME'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8860 below policy threshold 0.90 (57 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_02": {
+    "case_id": "DEF_UPDATE_02",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 21 behavioral mismatches (Divergence on ['ACCT_STATUS'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9580 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_03": {
+    "case_id": "DEF_UPDATE_03",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 57 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8860 below policy threshold 0.90 (57 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_04": {
+    "case_id": "DEF_UPDATE_04",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 57 behavioral mismatches (Divergence on ['CASH_CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8860 below policy threshold 0.90 (57 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_05": {
+    "case_id": "DEF_UPDATE_05",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 57 behavioral mismatches (Divergence on ['ACTION'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8860 below policy threshold 0.90 (57 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_06": {
+    "case_id": "DEF_UPDATE_06",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 57 behavioral mismatches (Divergence on ['SUCCESS'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8860 below policy threshold 0.90 (57 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_07": {
+    "case_id": "DEF_UPDATE_07",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 57 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8860 below policy threshold 0.90 (57 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 57 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_08": {
+    "case_id": "DEF_UPDATE_08",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 49 behavioral mismatches (Divergence on ['ACCT_STATUS'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9020 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_09": {
+    "case_id": "DEF_UPDATE_09",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 49 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9020 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_10": {
+    "case_id": "DEF_UPDATE_10",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 49 behavioral mismatches (Divergence on ['CASH_CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9020 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 49 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_11": {
+    "case_id": "DEF_UPDATE_11",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 12 behavioral mismatches (Divergence on ['CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9760 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 12 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 12 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_UPDATE_12": {
+    "case_id": "DEF_UPDATE_12",
+    "ground_truth": "DEFECTIVE",
+    "category": "missing_update",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 21 behavioral mismatches (Divergence on ['CASH_CREDIT_LIMIT'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9580 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_01": {
+    "case_id": "DEF_TX_01",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 76 behavioral mismatches (Divergence on ['XCTL_PROGRAM'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8480 below policy threshold 0.90 (76 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 76 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 76 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_02": {
+    "case_id": "DEF_TX_02",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 90 behavioral mismatches (Divergence on ['XCTL_PROGRAM'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8200 below policy threshold 0.90 (90 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 90 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 90 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_03": {
+    "case_id": "DEF_TX_03",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 91 behavioral mismatches (Divergence on ['RETURN_TO_PREV'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8180 below policy threshold 0.90 (91 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 91 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 91 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_04": {
+    "case_id": "DEF_TX_04",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 21 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9580 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 21 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_05": {
+    "case_id": "DEF_TX_05",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 15 behavioral mismatches (Divergence on ['ERROR'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9700 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 15 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 15 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_06": {
+    "case_id": "DEF_TX_06",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 51 behavioral mismatches (Divergence on ['XCTL_PROGRAM'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8980 below policy threshold 0.90 (51 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 51 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 51 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_07": {
+    "case_id": "DEF_TX_07",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 13 behavioral mismatches (Divergence on ['ACTION', 'SUCCESS'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9740 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 13 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 13 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_08": {
+    "case_id": "DEF_TX_08",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 36 behavioral mismatches (Divergence on ['ACTION'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9280 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 36 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 36 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_09": {
+    "case_id": "DEF_TX_09",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 51 behavioral mismatches (Divergence on ['RETURN_TO_PREV'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Raw agreement score 0.8980 below policy threshold 0.90 (51 mismatches)"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 51 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 51 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_10": {
+    "case_id": "DEF_TX_10",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 7 behavioral mismatches (Divergence on ['MESSAGE'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9860 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 7 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 7 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_11": {
+    "case_id": "DEF_TX_11",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "Observed 11 behavioral mismatches (Divergence on ['XCTL_PROGRAM'])"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 0.9780 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 11 behavioral mismatches detected"
+    },
+    "M4_full_beacon": {
+      "verdict": "NOT_CERTIFIED",
+      "outcome": "TP",
+      "reason": "G6 Gate Failure: 11 behavioral mismatches detected on contract"
+    }
+  },
+  "DEF_TX_12": {
+    "case_id": "DEF_TX_12",
+    "ground_truth": "DEFECTIVE",
+    "category": "incorrect_transaction_handling",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "FC",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_01": {
+    "case_id": "EQUIV_01",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_02": {
+    "case_id": "EQUIV_02",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_03": {
+    "case_id": "EQUIV_03",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_04": {
+    "case_id": "EQUIV_04",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_05": {
+    "case_id": "EQUIV_05",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_06": {
+    "case_id": "EQUIV_06",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_07": {
+    "case_id": "EQUIV_07",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_08": {
+    "case_id": "EQUIV_08",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_09": {
+    "case_id": "EQUIV_09",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_10": {
+    "case_id": "EQUIV_10",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_11": {
+    "case_id": "EQUIV_11",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_12": {
+    "case_id": "EQUIV_12",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_13": {
+    "case_id": "EQUIV_13",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_14": {
+    "case_id": "EQUIV_14",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  },
+  "EQUIV_15": {
+    "case_id": "EQUIV_15",
+    "ground_truth": "EQUIVALENT",
+    "category": "equivalent_control",
+    "difficulty": "easy",
+    "M1_output_only": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "All 500 observed transaction outputs strictly match reference"
+    },
+    "M2_unweighted_score": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Raw agreement score 1.0000 meets unweighted policy threshold 0.90"
+    },
+    "M3_no_sufficiency_gates": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90"
+    },
+    "M4_full_beacon": {
+      "verdict": "CERTIFIED",
+      "outcome": "TN",
+      "reason": "Adjusted score 0.9925 meets policy threshold 0.90 with all gates satisfied"
+    }
+  }
+}

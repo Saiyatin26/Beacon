@@ -1,0 +1,109 @@
+{
+  "experiment": "confusion_matrix_and_defect_detection",
+  "table_id": "table15",
+  "generated_at": "2026-10-27T14:59:55Z",
+  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
+  "seeds": [
+    12345,
+    12346,
+    12347,
+    12348,
+    12349
+  ],
+  "n_cases": 76,
+  "definitions": {
+    "TP": "Defective cases correctly rejected with demonstrated mismatch",
+    "FP": "Equivalent cases incorrectly rejected",
+    "TN": "Equivalent cases correctly certified",
+    "FN_total": "Defective cases not assigned NOT_CERTIFIED (FC + IC_defective + RI_defective)",
+    "FC": "False certification: defective case assigned CERTIFIED",
+    "IC_defective": "Defective case assigned INSUFFICIENT_COVERAGE",
+    "recall": "TP / N_defective",
+    "precision": "TP / (TP + FP)",
+    "f1_score": "2 * Precision * Recall / (Precision + Recall)",
+    "false_certification_rate": "FC / N_defective"
+  },
+  "status": "complete",
+  "data": {
+    "confusion_matrix": {
+      "TP": 58,
+      "FP": 0,
+      "TN": 16,
+      "FC": 2,
+      "IC_defective": 0,
+      "IC_equivalent": 0,
+      "RI_defective": 0,
+      "RI_equivalent": 0,
+      "IC_total": 0,
+      "RI_total": 0,
+      "FN_total": 2
+    },
+    "primary_run_seed_12345": {
+      "recall": 0.9667,
+      "recall_ci_95": [
+        0.8864,
+        0.9908
+      ],
+      "recall_denominator": "TP / N_defective (58 / 60)",
+      "precision": 1.0,
+      "precision_ci_95": [
+        0.9379,
+        1.0
+      ],
+      "precision_denominator": "TP / (TP + FP) (58 / 58)",
+      "f1_score": 0.9831,
+      "false_certification_rate": 0.0333,
+      "false_certification_rate_ci_95": [
+        0.0092,
+        0.1136
+      ],
+      "false_certification_rate_denominator": "FC / N_defective (2 / 60)",
+      "error_rate_among_certified": 0.1111,
+      "error_rate_among_certified_ci_95": [
+        0.031,
+        0.328
+      ],
+      "error_rate_among_certified_denominator": "FC / (FC + TN) (2 / 18)",
+      "insufficient_coverage_rate": 0.0,
+      "insufficient_coverage_rate_ci_95": [
+        0.0,
+        0.0481
+      ],
+      "certified_proportion": 0.2368,
+      "certified_proportion_ci_95": [
+        0.1554,
+        0.3436
+      ]
+    },
+    "five_repetition_distribution": {
+      "recall_values": [
+        0.9667,
+        0.9667,
+        0.9833,
+        0.9667,
+        0.9667
+      ],
+      "recall_median": 0.9667,
+      "recall_min_max": [
+        0.9667,
+        0.9833
+      ],
+      "f1_values": [
+        0.9831,
+        0.9831,
+        0.9916,
+        0.9831,
+        0.9831
+      ],
+      "f1_median": 0.9831,
+      "false_certification_rate_values": [
+        0.0333,
+        0.0333,
+        0.0167,
+        0.0333,
+        0.0333
+      ],
+      "false_certification_rate_median": 0.0333
+    }
+  }
+}

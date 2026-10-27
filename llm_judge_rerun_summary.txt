@@ -1,0 +1,35 @@
+======================================================================
+BEACON — LLM-AS-JUDGE RERUN SUMMARY REPORT
+======================================================================
+Run ID:                  LLM_RERUN_20261025_175438
+Timestamp (UTC):         2026-10-25T17:54:38.424267+00:00
+Provider / Model:        gemini / gemini-flash-lite-latest
+Completion Status:       COMPLETE
+Total Test Cases:        30 (Seeded Defects K=20, Controls=10)
+Coverage:                100.0% (30/30)
+----------------------------------------------------------------------
+CLASSIFICATION PERFORMANCE:
+  Detected Defects (TP): 20/20 (100.0%)
+  False Certifications:  0/20 (0.0%)
+  Certified Controls:    10/10 (100.0%)
+  False Alarms:          0/10 (0.0%)
+  Precision:             1.0000
+  Recall (Sensitivity):  1.0000
+  Specificity:           1.0000
+  F1 Score:              1.0000
+----------------------------------------------------------------------
+EXECUTION & TIMING:
+  Total Elapsed Time:    169.35 s
+  Mean Latency / Case:   1.44 s
+  Median Latency / Case: 1.25 s
+  95th Percentile:       2.15 s
+  Total API Attempts:    30 (Retries: 0)
+  Failed API Requests:   0
+======================================================================
+TABLE XVII ENTRY (LLM-as-judge only):
+Method:        LLM-as-judge (gemini-flash-lite-latest)
+Detected / K:  20/20 (100.0%)
+False cert.:   0 (0.0%)
+False alarm:   0 (0.0%)
+Time (s):      169.35
+======================================================================
