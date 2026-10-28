@@ -1,0 +1,30 @@
+{
+  "certificate_id": "CERT-MASQ-MASQ_FLOW_03-REP2",
+  "benchmark": "Masquerade_CBTRN02C",
+  "case_id": "MASQ_FLOW_03",
+  "category": "FLOW",
+  "repetition": 2,
+  "seed": 12346,
+  "ground_truth": "DEFECTIVE",
+  "candidate_sha256": "ceb08d87f605e2498611dddc409bb37168d6b07ee5c5818f301068693b09abb5",
+  "evaluation": {
+    "verdict": "NOT_CERTIFIED",
+    "verdict_status": "MISMATCH",
+    "reason": "Mismatch Gate G6: 250 behavioral mismatches detected",
+    "behavioral_score_R": 0.0,
+    "evidence_quality_Q": 0.9925,
+    "adjusted_score_S": 0.0,
+    "mismatches": 250,
+    "total_evaluated": 250,
+    "elapsed_seconds": 0.0021,
+    "factors": {
+      "oracle_coverage": 1.0,
+      "input_coverage": 1.0,
+      "execution_reliability": 1.0,
+      "oracle_confidence": 0.95,
+      "input_set_integrity": 1.0,
+      "source_hash_integrity": 1.0
+    }
+  },
+  "timestamp": "2026-10-28T08:10:44Z"
+}

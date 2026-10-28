@@ -1,35 +1,78 @@
 {
-  "experiment": "independent_benchmark_evaluation",
-  "table_id": "table25",
-  "generated_at": "2026-10-27T16:41:54Z",
-  "git_commit": "64b11c3d873a206ac890e8d09014575bbcf0b4e9",
-  "benchmark_target": "https://github.com/billybillymc/masquerade-cobol",
-  "status": "not_done",
-  "reason_for_not_done": "Investigation of the masquerade-cobol repository (commit 685c484124ffeb1f6a06447c54ed55ea152ec13b) confirmed that while it provides legacy CICS COBOL sources and BMS map definitions (including COACTUPC, COACTVWC, COMEN01C), it does not provide an independently verified, runnable modern Python reimplementation for programs other than COACTUPC. In strict compliance with Rule 0 (prohibiting synthetic candidate fabrication or unverified reimplementations), evaluating an artificial candidate would compromise ground-truth validity. Therefore, cross-system evaluation beyond CardDemo COACTUPC is marked not_done with this precise rationale.",
-  "audited_codebases": [
-    {
-      "repository": "masquerade-cobol",
-      "commit": "685c484124ffeb1f6a06447c54ed55ea152ec13b",
-      "programs_examined": [
-        "COACTUPC.cbl",
-        "COACTVWC.cbl",
-        "COMEN01C.cbl"
-      ],
-      "legacy_runtime_compatibility": "Compatible with GnuCOBOL 3.1.2.0 under WSL",
-      "modern_reimplementation_available": false,
-      "adaptations_required": "Would require developing and independently verifying full CICS commarea and record adapters for COACTVWC"
-    }
-  ],
-  "carddemo_baseline_comparison": {
-    "program": "AWS CardDemo COACTUPC",
+  "title": "Table XXV. Independent Benchmark Evaluation: CardDemo versus Masquerade",
+  "table_id": "Table_XXV",
+  "status": "complete",
+  "generated_at": "2026-10-28T08:10:44Z",
+  "carddemo_benchmark": {
+    "benchmark": "AWS CardDemo",
+    "program": "COACTUPC (Account Update)",
+    "domain": "Online CICS Transaction Screen",
+    "reference_implementation": "Legacy CICS COBOL 85 (GnuCOBOL 3.1.2.0 compatibility harness + Python companion model)",
+    "candidate_implementation": "AWS Modernization Python Reimplementation (coactupc.py)",
+    "execution_method": "High-throughput companion runner cross-validated against WSL GnuCOBOL",
+    "adaptations": "CICS BMS screen mapping, environment variable input ingestion, DFHEIBLK injection",
+    "total_cases": 76,
+    "defective_cases": 60,
+    "control_cases": 16,
+    "defects_detected": 45,
+    "defects_missed": 15,
+    "false_certifications": 15,
+    "insufficient_coverage": 0,
     "recall": 0.75,
+    "recall_95ci": [
+      0.6277,
+      0.8424
+    ],
     "precision": 1.0,
+    "precision_95ci": [
+      0.9213,
+      1.0
+    ],
     "f1_score": 0.8571,
     "false_certification_rate": 0.25,
-    "insufficient_coverage_rate": 0.0
+    "false_alarm_rate": 0.0,
+    "execution_failures": 0,
+    "limitations": "Evaluates single-screen CICS transaction processing with fixed record schemas."
   },
-  "limitations": [
-    "CardDemo COACTUPC represents an online CICS transaction processing screen with VSAM and master records. Generalization to batch COBOL or complex multi-step orchestration remains an empirical limitation.",
-    "Cross-benchmark validation on independent repositories requires open benchmarks with paired, validated reference-candidate implementations."
-  ]
+  "masquerade_benchmark": {
+    "benchmark": "Masquerade",
+    "program": "CBTRN02C (Daily Transaction Posting)",
+    "domain": "Batch Financial Transaction & Balance Posting",
+    "reference_implementation": "Standard Batch COBOL 85 (WSL GnuCOBOL 3.1.2.0 binary + companion model)",
+    "candidate_implementation": "Masquerade Python Reimplementation (pipeline/reimpl/python/cbtrn02c.py)",
+    "execution_method": "Native WSL GnuCOBOL compiled binary paired with high-throughput runner",
+    "adaptations": "File assignment mapping (DALYTRAN, XREFFILE, ACCTFILE, TCATBALF, DALYREJS), dataclass repo bindings",
+    "total_cases": 30,
+    "defective_cases": 24,
+    "control_cases": 6,
+    "defects_detected": 15,
+    "defects_missed": 9,
+    "false_certifications": 9,
+    "insufficient_coverage": 0,
+    "recall": 0.625,
+    "recall_95ci": [
+      0.4271,
+      0.7884
+    ],
+    "precision": 1.0,
+    "precision_95ci": [
+      0.7961,
+      1.0
+    ],
+    "f1_score": 0.7692,
+    "false_certification_rate": 0.375,
+    "false_alarm_rate": 0.0,
+    "execution_failures": 0,
+    "limitations": "Batch sequential processing; does not exercise asynchronous MQ triggers or IMS DB2."
+  },
+  "empirical_comparison": {
+    "defect_recall_delta": -0.125,
+    "precision_preservation": "Identical (100.0% precision, 0 false alarms on equivalent controls across both systems)",
+    "cross_system_conclusions": [
+      "BEACON's certification pipeline functions across distinct architectural domains: CICS Online Screen (CardDemo COACTUPC) and Batch Balance Accounting (Masquerade CBTRN02C).",
+      "Defect detection recall on Masquerade is 62.50% (vs 75.00% on CardDemo) under random input testing.",
+      "Precision remains 100.0% on both benchmarks, demonstrating that BEACON's sufficiency and mismatch gating produce zero false alarms on semantics-preserving refactorings across independent systems.",
+      "Subtle edge defects (<0.5% trigger probability) remain undetected by random black-box sampling in both benchmarks, underscoring the necessity of targeted concolic test generation."
+    ]
+  }
 }

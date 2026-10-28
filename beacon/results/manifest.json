@@ -1,7 +1,7 @@
 {
   "project": "BEACON Research Evaluation",
-  "generated_at": "2026-10-27T17:49:41Z",
-  "total_artifacts": 31,
+  "generated_at": "2026-10-28T08:15:11Z",
+  "total_artifacts": 35,
   "artifacts": [
     {
       "path": "results/00_audit.md",
@@ -201,9 +201,37 @@
     },
     {
       "path": "results/05_scaling/table25_independent_benchmark.json",
-      "size_bytes": 2106,
-      "sha256": "4fc0e04793a5ad55c193a2faccc58cb8e472a50784c8b62e943d1e65a6c36e2f",
-      "generating_command": "python experiments/run_experiment_5_scaling.py",
+      "size_bytes": 3490,
+      "sha256": "8aeefe0b19e547bf08da9c79088d9db65e847f282a0f9805e25a36f363c92efe",
+      "generating_command": "python experiments/run_experiment_6_masquerade.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/table25_comparison.md",
+      "size_bytes": 3821,
+      "sha256": "a0e388f59482381ee9a90a9ac8ab853ac60e2528d5cff8f75824a5aed4a85032",
+      "generating_command": "python experiments/run_experiment_6_masquerade.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/table25_case_results.json",
+      "size_bytes": 12675,
+      "sha256": "64af91ab40a5a30a787066c912d129bc3112bac92939b1c532ae19c2ef2294c5",
+      "generating_command": "python experiments/run_experiment_6_masquerade.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/masquerade_ground_truth.json",
+      "size_bytes": 9412,
+      "sha256": "5ce55e7546425c7705ae53af594a9f5987dacd49d5191400184a59fb9cad6155",
+      "generating_command": "python experiments/build_masquerade_mutants.py",
+      "status": "verified"
+    },
+    {
+      "path": "results/05_scaling/masquerade_mutants_manifest.json",
+      "size_bytes": 10133,
+      "sha256": "a6d7b067ad1ef478ed4bfbaf5ed9bc4099e9b52874aed2d47b754c992858638a",
+      "generating_command": "python experiments/build_masquerade_mutants.py",
       "status": "verified"
     },
     {

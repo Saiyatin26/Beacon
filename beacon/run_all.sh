@@ -19,10 +19,13 @@ python experiments/run_experiment_3_sufficiency.py
 echo "=== Step 5: Experiment 4 (Component Ablation & Sensitivity Analysis) ==="
 python experiments/run_experiment_4_ablation.py
 
-echo "=== Step 6: Experiment 5 (Runtime, Memory Scaling & Second Benchmark) ==="
+echo "=== Step 6: Experiment 5 (Runtime & Memory Scaling Microbenchmark) ==="
 python experiments/run_experiment_5_scaling.py
 
-echo "=== Step 7: Manifest Generation & Verification ==="
+echo "=== Step 7: Experiment 6 (Independent Benchmark — Masquerade CBTRN02C) ==="
+python experiments/run_experiment_6_masquerade.py
+
+echo "=== Step 8: Manifest Generation & Verification ==="
 python experiments/generate_manifest_and_summary.py
 
 echo "=== ALL BEACON EXPERIMENTS COMPLETED SUCCESSFULLY ==="

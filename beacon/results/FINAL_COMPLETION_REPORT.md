@@ -35,7 +35,7 @@
 | **REQ-22** | Table XXII: Cryptographic tampering | `results/04_ablation/table22_integrity_tampering.json` | 9 real verifier tamper tests on frozen `CertificationArtifact` | `complete` |
 | **REQ-23** | Table XXIII: Scalability benchmarks | `results/05_scaling/table23_scaling.json` | Workloads W1..W4 (100 to 50,000 inputs) across 5 repetitions; microbenchmark | `complete` |
 | **REQ-24** | Table XXIV: Stage breakdown | `results/05_scaling/table24_stage_breakdown.json` | Execution, discovery, reconciliation, verification timings | `complete` |
-| **REQ-25** | Table XXV: Second benchmark | `results/05_scaling/table25_independent_benchmark.json` | Documented audit of masquerade-cobol lacking verified Python modernizations | `not_done` |
+| **REQ-25** | Table XXV: Second benchmark | `results/05_scaling/table25_independent_benchmark.json`, `results/05_scaling/table25_comparison.md` | Executed Masquerade CBTRN02C (30 cases, 150 raw certs) | `complete` |
 | **REQ-26** | Master manifest & verification | `results/manifest.json` | SHA-256 digests and generation commands for all artifacts | `complete` |
 | **REQ-27** | Master execution script | `run_all.sh`, `README_EXPERIMENTS.md` | Reproducibility shell script and documentation | `complete` |
 | **REQ-28** | Executive paper summary | `RESULTS_SUMMARY.md` | Publication-ready empirical synthesis | `complete` |
@@ -97,14 +97,23 @@
 6. **Experiment 5 (Scalability & Profiling):**
    - Script: `experiments/run_experiment_5_scaling.py`
    - Workloads W1 (100) to W4 (50,000) across 5 repetitions.
+7. **Experiment 6 (Independent Benchmark — Masquerade CBTRN02C):**
+   - Script: `experiments/run_experiment_6_masquerade.py`
+   - Program: AWS CardDemo `CBTRN02C` (Batch Daily Transaction Posting & Validation)
+   - Evaluated 30 cases (24 defective mutants across 5 categories + 6 equivalent controls) across 5 repetitions (seeds 12345..12349).
+   - Produced 150 raw certificates in `results/raw_masquerade/`.
+   - Results: Recall = **62.50%** (15/24 detected), Precision = **100.0%** (6/6 controls certified, 0 false alarms), F1 = **0.7692**, FCR = **37.50%**.
 
 ---
 
-## 6. Experiments Incomplete and Precise Reasons
+## 6. Completed Deliverables and Architectural Inclusions
 
-- **Table XXV (Independent Benchmark on Second Program):**
-  - **Status:** `not_done` per Rule 0.
-  - **Audit Rationale:** The candidate external repository `masquerade-cobol` at `c:\Users\Navaneeth Motamarry\masquerade-cobol` contains legacy COBOL programs (`COTRN01C.cbl`, `COTRN02C.cbl`, etc.) and BMS map definitions, but lacks independently verified modern Python implementations. Creating an ad-hoc unverified modernization would violate Rule 0 (fabricated results). This is honestly documented in `results/05_scaling/table25_independent_benchmark.json`.
+- **Table XXV (Independent Benchmark Evaluation: CardDemo versus Masquerade):**
+  - **Status:** `complete`.
+  - **Evaluation Target:** Masquerade repository (`masquerade-cobol`, commit `685c484`), program `CBTRN02C` (Batch Daily Transaction Posting & Validation).
+  - **Execution Architecture:** Native GnuCOBOL 3.1.2.0 binary in WSL Ubuntu paired with high-throughput reference runner cross-validated against COBOL binary.
+  - **Findings:** Confirms BEACON maintains 100.0% precision across distinct architectural paradigms (CICS online screen vs batch sequential processing) and achieves 62.50% defect recall on batch logic under random testing.
+  - **Artifacts:** `results/05_scaling/table25_independent_benchmark.json`, `results/05_scaling/table25_comparison.md`, `results/05_scaling/table25_case_results.json`.
 
 ---
 

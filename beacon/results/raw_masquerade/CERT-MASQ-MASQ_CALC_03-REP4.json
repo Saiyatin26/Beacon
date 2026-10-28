@@ -1,0 +1,30 @@
+{
+  "certificate_id": "CERT-MASQ-MASQ_CALC_03-REP4",
+  "benchmark": "Masquerade_CBTRN02C",
+  "case_id": "MASQ_CALC_03",
+  "category": "CALC",
+  "repetition": 4,
+  "seed": 12348,
+  "ground_truth": "DEFECTIVE",
+  "candidate_sha256": "7102043d872061ee791abbd7cb01d65fa0c44f00566c3b539dd43d0b2b8d787f",
+  "evaluation": {
+    "verdict": "NOT_CERTIFIED",
+    "verdict_status": "MISMATCH",
+    "reason": "Mismatch Gate G6: 33 behavioral mismatches detected",
+    "behavioral_score_R": 0.868,
+    "evidence_quality_Q": 0.9925,
+    "adjusted_score_S": 0.86149,
+    "mismatches": 33,
+    "total_evaluated": 250,
+    "elapsed_seconds": 0.003,
+    "factors": {
+      "oracle_coverage": 1.0,
+      "input_coverage": 1.0,
+      "execution_reliability": 1.0,
+      "oracle_confidence": 0.95,
+      "input_set_integrity": 1.0,
+      "source_hash_integrity": 1.0
+    }
+  },
+  "timestamp": "2026-10-28T08:10:43Z"
+}

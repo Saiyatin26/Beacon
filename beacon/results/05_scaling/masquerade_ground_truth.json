@@ -1,0 +1,302 @@
+[
+  {
+    "case_id": "MASQ_CALC_01",
+    "category": "CALC",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "dc22131e6fb7f7a70359077658b891233a0e430055ce26fb55a77e15ecf7e7a9"
+  },
+  {
+    "case_id": "MASQ_CALC_02",
+    "category": "CALC",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "76fca6b6a896e8d0b6c1f4de4cd5a3c28e0bc16c11a3b0036be0d4de1cb9dacd"
+  },
+  {
+    "case_id": "MASQ_CALC_03",
+    "category": "CALC",
+    "intended_type": "defective",
+    "empirical_mismatches": 127,
+    "total_samples": 1000,
+    "trigger_rate": 0.127,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "7102043d872061ee791abbd7cb01d65fa0c44f00566c3b539dd43d0b2b8d787f"
+  },
+  {
+    "case_id": "MASQ_CALC_04",
+    "category": "CALC",
+    "intended_type": "defective",
+    "empirical_mismatches": 167,
+    "total_samples": 1000,
+    "trigger_rate": 0.167,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "ae725a31b6aa1ed3c636841b4c60f686bdc20e106ef286e8d9f86b296b568184"
+  },
+  {
+    "case_id": "MASQ_CALC_05",
+    "category": "CALC",
+    "intended_type": "defective",
+    "empirical_mismatches": 2,
+    "total_samples": 1000,
+    "trigger_rate": 0.002,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "aba1a11b7bdb74025ec0b34bee061c477be72fd91e6e6ee31f13f8797c427df9"
+  },
+  {
+    "case_id": "MASQ_VAL_01",
+    "category": "VAL",
+    "intended_type": "defective",
+    "empirical_mismatches": 197,
+    "total_samples": 1000,
+    "trigger_rate": 0.197,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "3c08bd213789a2a1d5e552949209e023b95074050479a900f669b363157b9442"
+  },
+  {
+    "case_id": "MASQ_VAL_02",
+    "category": "VAL",
+    "intended_type": "defective",
+    "empirical_mismatches": 203,
+    "total_samples": 1000,
+    "trigger_rate": 0.203,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "66ba0fad6e988de66502b57a711a3cdae64c3781e77621d5223f40bb77e69980"
+  },
+  {
+    "case_id": "MASQ_VAL_03",
+    "category": "VAL",
+    "intended_type": "defective",
+    "empirical_mismatches": 473,
+    "total_samples": 1000,
+    "trigger_rate": 0.473,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "8b7b8bf0418daac147a31fd37fefe74c9543235fa6ee9943916ee07587e5a345"
+  },
+  {
+    "case_id": "MASQ_VAL_04",
+    "category": "VAL",
+    "intended_type": "defective",
+    "empirical_mismatches": 197,
+    "total_samples": 1000,
+    "trigger_rate": 0.197,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "509f0158d542fcf058e65da45a2a1d825826446bce797952fd84c3e6163d36b3"
+  },
+  {
+    "case_id": "MASQ_VAL_05",
+    "category": "VAL",
+    "intended_type": "defective",
+    "empirical_mismatches": 127,
+    "total_samples": 1000,
+    "trigger_rate": 0.127,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "bc1e542b56d918b97eabadfd10cf8f8df6757e5d94e7f2b9d758c7cd83ebf368"
+  },
+  {
+    "case_id": "MASQ_STATE_01",
+    "category": "STATE",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "d72d45831fd984fe03d71f8feb5cbf2250765f458e51ee7aade0d1bc4b21e73a"
+  },
+  {
+    "case_id": "MASQ_STATE_02",
+    "category": "STATE",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "d351fca5e39a94b88ce5fccec6a8582a89ffcfb8a8d3f26f59f86f60906b6b6c"
+  },
+  {
+    "case_id": "MASQ_STATE_03",
+    "category": "STATE",
+    "intended_type": "defective",
+    "empirical_mismatches": 127,
+    "total_samples": 1000,
+    "trigger_rate": 0.127,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "09e57172460dd9fce7249ec769b362305452eb8f2fe7037612d8e7c945ac9a34"
+  },
+  {
+    "case_id": "MASQ_STATE_04",
+    "category": "STATE",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "ac10a8773021863f7e4f295fe3ffde73c47b8ad3f9b971deed1685fdb17ba064"
+  },
+  {
+    "case_id": "MASQ_STATE_05",
+    "category": "STATE",
+    "intended_type": "defective",
+    "empirical_mismatches": 167,
+    "total_samples": 1000,
+    "trigger_rate": 0.167,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "91c29f73c8df018e96d4272b5c1dca688e12a33caad8c5b8416ca2ca2ef472ac"
+  },
+  {
+    "case_id": "MASQ_TX_01",
+    "category": "TX",
+    "intended_type": "defective",
+    "empirical_mismatches": 833,
+    "total_samples": 1000,
+    "trigger_rate": 0.833,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "9418abf418b33b8f6cbd4da8a86cc9f50555b0b3b67c16141ab61e6d01b6d2e6"
+  },
+  {
+    "case_id": "MASQ_TX_02",
+    "category": "TX",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "9999d58d5bf797324e25e2bd3f7fbf6ad9b2cf998e8a944a9f27d13937642a54"
+  },
+  {
+    "case_id": "MASQ_TX_03",
+    "category": "TX",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "432037dfbef247c5ef342dc02e1ffc657fb311cae037467512e0f7a75db91cd1"
+  },
+  {
+    "case_id": "MASQ_TX_04",
+    "category": "TX",
+    "intended_type": "defective",
+    "empirical_mismatches": 167,
+    "total_samples": 1000,
+    "trigger_rate": 0.167,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "0fc8849f1ee6205d97721afb302656b83ce6f589b6451bc631bdd3c5ec09674c"
+  },
+  {
+    "case_id": "MASQ_TX_05",
+    "category": "TX",
+    "intended_type": "defective",
+    "empirical_mismatches": 833,
+    "total_samples": 1000,
+    "trigger_rate": 0.833,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "b05e5bb977e368d642260be428d4f3649c2d2751ec161aba9ae47d9ce61d6c41"
+  },
+  {
+    "case_id": "MASQ_FLOW_01",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "empirical_mismatches": 833,
+    "total_samples": 1000,
+    "trigger_rate": 0.833,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "ec0c5f849b3db9486df806a648c1e8112d3504364ab2170b648b7915da8edd23"
+  },
+  {
+    "case_id": "MASQ_FLOW_02",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "empirical_mismatches": 833,
+    "total_samples": 1000,
+    "trigger_rate": 0.833,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "70a950143d0181b67e254996069604dc2f3d6810b596cf243bdaf28f13bbb6bd"
+  },
+  {
+    "case_id": "MASQ_FLOW_03",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "empirical_mismatches": 1000,
+    "total_samples": 1000,
+    "trigger_rate": 1.0,
+    "ground_truth_label": "DEFECTIVE",
+    "sha256": "ceb08d87f605e2498611dddc409bb37168d6b07ee5c5818f301068693b09abb5"
+  },
+  {
+    "case_id": "MASQ_FLOW_04",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "SUBTLE_DEFECT",
+    "sha256": "bfe939603e9e3a3637270fd60c7703b34d929bbf1da23039827695ade2198686"
+  },
+  {
+    "case_id": "MASQ_EQ_01",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "EQUIVALENT",
+    "sha256": "077781161452a2f9bdadaf4d3aca75b8577517421ebdd61c164493cf8c87a021"
+  },
+  {
+    "case_id": "MASQ_EQ_02",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "EQUIVALENT",
+    "sha256": "cf52cd097bcdf618be3767eaa1de840a0dca5ce384adab02b0cef139d5aedcab"
+  },
+  {
+    "case_id": "MASQ_EQ_03",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "EQUIVALENT",
+    "sha256": "5e584f6501d9b9f8956e1ea57612abcd8fe51254eda5de1ae606e63364f7a5da"
+  },
+  {
+    "case_id": "MASQ_EQ_04",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "EQUIVALENT",
+    "sha256": "9faacd177d258f048154288a3560ba7555a040c9b100200a1a65b44cd4b240c4"
+  },
+  {
+    "case_id": "MASQ_EQ_05",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "EQUIVALENT",
+    "sha256": "cee47abcce2891b46eaafa183e4b067e4173355b0cb0a95fd732a677e6aca89a"
+  },
+  {
+    "case_id": "MASQ_EQ_06",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "empirical_mismatches": 0,
+    "total_samples": 1000,
+    "trigger_rate": 0.0,
+    "ground_truth_label": "EQUIVALENT",
+    "sha256": "10d71f7eef69e16d6392a596d75d70ed324d95ccfc9bcd987bfb12ea2ec09566"
+  }
+]

@@ -1,0 +1,542 @@
+[
+  {
+    "case_id": "MASQ_CALC_01",
+    "category": "CALC",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_CALC_02",
+    "category": "CALC",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_CALC_03",
+    "category": "CALC",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 34.8,
+    "mean_R": 0.8608,
+    "mean_S_adj": 0.8543,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_CALC_04",
+    "category": "CALC",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 51.0,
+    "mean_R": 0.796,
+    "mean_S_adj": 0.79,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_CALC_05",
+    "category": "CALC",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.2,
+    "mean_R": 0.9992,
+    "mean_S_adj": 0.9917,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "NOT_CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_VAL_01",
+    "category": "VAL",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 49.4,
+    "mean_R": 0.8024,
+    "mean_S_adj": 0.7964,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_VAL_02",
+    "category": "VAL",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 44.6,
+    "mean_R": 0.8216,
+    "mean_S_adj": 0.8154,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_VAL_03",
+    "category": "VAL",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 121.2,
+    "mean_R": 0.5152,
+    "mean_S_adj": 0.5113,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_VAL_04",
+    "category": "VAL",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 49.4,
+    "mean_R": 0.8024,
+    "mean_S_adj": 0.7964,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_VAL_05",
+    "category": "VAL",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 34.8,
+    "mean_R": 0.8608,
+    "mean_S_adj": 0.8543,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_STATE_01",
+    "category": "STATE",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_STATE_02",
+    "category": "STATE",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_STATE_03",
+    "category": "STATE",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 39.2,
+    "mean_R": 0.8432,
+    "mean_S_adj": 0.8369,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_STATE_04",
+    "category": "STATE",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_STATE_05",
+    "category": "STATE",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 51.0,
+    "mean_R": 0.796,
+    "mean_S_adj": 0.79,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_TX_01",
+    "category": "TX",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 199.0,
+    "mean_R": 0.204,
+    "mean_S_adj": 0.2025,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_TX_02",
+    "category": "TX",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_TX_03",
+    "category": "TX",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_TX_04",
+    "category": "TX",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 51.0,
+    "mean_R": 0.796,
+    "mean_S_adj": 0.79,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_TX_05",
+    "category": "TX",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 199.0,
+    "mean_R": 0.204,
+    "mean_S_adj": 0.2025,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_FLOW_01",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 199.0,
+    "mean_R": 0.204,
+    "mean_S_adj": 0.2025,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_FLOW_02",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 199.0,
+    "mean_R": 0.204,
+    "mean_S_adj": 0.2025,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_FLOW_03",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "ground_truth": "DEFECTIVE",
+    "primary_verdict": "NOT_CERTIFIED",
+    "outcome": "TP",
+    "mean_mismatches": 250.0,
+    "mean_R": 0.0,
+    "mean_S_adj": 0.0,
+    "repetition_verdicts": [
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED",
+      "NOT_CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_FLOW_04",
+    "category": "FLOW",
+    "intended_type": "defective",
+    "ground_truth": "SUBTLE_DEFECT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "FC",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_EQ_01",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "ground_truth": "EQUIVALENT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "TN",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_EQ_02",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "ground_truth": "EQUIVALENT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "TN",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_EQ_03",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "ground_truth": "EQUIVALENT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "TN",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_EQ_04",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "ground_truth": "EQUIVALENT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "TN",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_EQ_05",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "ground_truth": "EQUIVALENT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "TN",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  },
+  {
+    "case_id": "MASQ_EQ_06",
+    "category": "EQUIV",
+    "intended_type": "equivalent",
+    "ground_truth": "EQUIVALENT",
+    "primary_verdict": "CERTIFIED",
+    "outcome": "TN",
+    "mean_mismatches": 0.0,
+    "mean_R": 1.0,
+    "mean_S_adj": 0.9925,
+    "repetition_verdicts": [
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED",
+      "CERTIFIED"
+    ]
+  }
+]

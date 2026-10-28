@@ -1,0 +1,30 @@
+{
+  "certificate_id": "CERT-MASQ-MASQ_STATE_05-REP2",
+  "benchmark": "Masquerade_CBTRN02C",
+  "case_id": "MASQ_STATE_05",
+  "category": "STATE",
+  "repetition": 2,
+  "seed": 12346,
+  "ground_truth": "DEFECTIVE",
+  "candidate_sha256": "91c29f73c8df018e96d4272b5c1dca688e12a33caad8c5b8416ca2ca2ef472ac",
+  "evaluation": {
+    "verdict": "NOT_CERTIFIED",
+    "verdict_status": "MISMATCH",
+    "reason": "Mismatch Gate G6: 44 behavioral mismatches detected",
+    "behavioral_score_R": 0.824,
+    "evidence_quality_Q": 0.9925,
+    "adjusted_score_S": 0.81782,
+    "mismatches": 44,
+    "total_evaluated": 250,
+    "elapsed_seconds": 0.0026,
+    "factors": {
+      "oracle_coverage": 1.0,
+      "input_coverage": 1.0,
+      "execution_reliability": 1.0,
+      "oracle_confidence": 0.95,
+      "input_set_integrity": 1.0,
+      "source_hash_integrity": 1.0
+    }
+  },
+  "timestamp": "2026-10-28T08:10:43Z"
+}
